@@ -10,23 +10,75 @@ public protocol TokenStore: Sendable {
 
 /// The login keychain, one generic-password item per account. Tokens never touch the store files.
 public struct KeychainTokenStore: TokenStore {
-    let service: String
+    let items: KeychainItems
 
     public init(service: String = "dev.yoom.simplify.google") {
-        self.service = service
+        items = KeychainItems(service: service)
     }
 
     public func load(_ accountID: String) -> GoogleTokens? {
+        items.load(accountID).flatMap { try? JSONDecoder().decode(GoogleTokens.self, from: $0) }
+    }
+
+    public func save(_ tokens: GoogleTokens, for accountID: String) throws {
+        try items.save(JSONEncoder().encode(tokens), for: accountID)
+    }
+
+    public func delete(_ accountID: String) {
+        items.delete(accountID)
+    }
+}
+
+/// Where each CalDAV account's app-specific password lives.
+public protocol CalDAVCredentialStore: Sendable {
+    /// Nil when there is no saved password; throws when the keychain cannot be read just now (locked).
+    func load(_ accountID: String) throws -> CalDAVCredentials?
+    func save(_ credentials: CalDAVCredentials, for accountID: String) throws
+    func delete(_ accountID: String)
+}
+
+/// The login keychain, as for Google tokens, under its own service name.
+public struct KeychainCredentialStore: CalDAVCredentialStore {
+    let items: KeychainItems
+
+    public init(service: String = "dev.yoom.simplify.icloud") {
+        items = KeychainItems(service: service)
+    }
+
+    public func load(_ accountID: String) throws -> CalDAVCredentials? {
+        try items.read(accountID).flatMap { try? JSONDecoder().decode(CalDAVCredentials.self, from: $0) }
+    }
+
+    public func save(_ credentials: CalDAVCredentials, for accountID: String) throws {
+        try items.save(JSONEncoder().encode(credentials), for: accountID)
+    }
+
+    public func delete(_ accountID: String) {
+        items.delete(accountID)
+    }
+}
+
+/// Generic-password items of one service, keyed by account id.
+struct KeychainItems: Sendable {
+    let service: String
+
+    func load(_ accountID: String) -> Data? {
+        try? read(accountID)
+    }
+
+    /// Nil when there is no item; throws on any other failure (a locked keychain, a refused prompt).
+    func read(_ accountID: String) throws -> Data? {
         var query = baseQuery(accountID)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
-        return try? JSONDecoder().decode(GoogleTokens.self, from: data)
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+        return item as? Data
     }
 
-    public func save(_ tokens: GoogleTokens, for accountID: String) throws {
-        let data = try JSONEncoder().encode(tokens)
+    func save(_ data: Data, for accountID: String) throws {
         let status = SecItemUpdate(baseQuery(accountID) as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
             var add = baseQuery(accountID)
@@ -38,7 +90,7 @@ public struct KeychainTokenStore: TokenStore {
         }
     }
 
-    public func delete(_ accountID: String) {
+    func delete(_ accountID: String) {
         SecItemDelete(baseQuery(accountID) as CFDictionary)
     }
 

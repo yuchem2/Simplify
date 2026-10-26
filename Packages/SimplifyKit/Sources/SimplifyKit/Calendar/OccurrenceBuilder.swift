@@ -61,7 +61,7 @@ public enum OccurrenceBuilder {
     }
 
     /// Occurrences for each of `days`: bands (all-day or a day or longer) on every day they cover,
-    /// then timed events on the day they start.
+    /// then timed events on the day they start, then completed reminders.
     public static func byDay(_ occurrences: [EventOccurrence], days: [Date], calendar: Calendar) -> [Date: [Slot]] {
         var result: [Date: [Slot]] = [:]
         for day in days {
@@ -81,7 +81,8 @@ public enum OccurrenceBuilder {
             // Earlier, then longer bands first. Rows can still shift between days when bands overlap;
             // per-week lanes would fix that (left for when the week grid arrives).
             bands.sort { ($0.occurrence.start, -$0.occurrence.end.timeIntervalSince1970) < ($1.occurrence.start, -$1.occurrence.end.timeIntervalSince1970) }
-            result[day] = bands + timed
+            let slots = bands + timed
+            result[day] = slots.filter { !$0.occurrence.isCompleted } + slots.filter(\.occurrence.isCompleted)
         }
         return result
     }
@@ -111,6 +112,7 @@ public enum OccurrenceBuilder {
 
     private static func occurrence(_ event: EventSnapshot, start: Date, end: Date) -> EventOccurrence {
         EventOccurrence(id: event.id + "@" + String(Int(start.timeIntervalSince1970)), eventID: event.id, sourceID: event.sourceID,
-                        title: event.title, location: event.location, isAllDay: event.isAllDay, start: start, end: end)
+                        title: event.title, location: event.location, isAllDay: event.isAllDay, start: start, end: end,
+                        isCompleted: event.isCompleted)
     }
 }

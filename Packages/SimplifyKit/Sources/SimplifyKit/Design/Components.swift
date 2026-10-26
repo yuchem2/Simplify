@@ -149,6 +149,39 @@ public struct Mark: View {
     }
 }
 
+/// The mark of a reminder: a ring in its list's colour, filled and ticked once completed. Round
+/// where event marks are square, so reminders read apart from events at a glance.
+public struct ReminderMark: View {
+    var color: Color?
+    var size: CGFloat
+    var isCompleted: Bool
+
+    public init(_ color: Color?, size: CGFloat = 10, isCompleted: Bool = false) {
+        self.color = color
+        self.size = size
+        self.isCompleted = isCompleted
+    }
+
+    public var body: some View {
+        let tint = color ?? .ink
+        ZStack {
+            if isCompleted {
+                Circle().fill(tint)
+                Path { path in
+                    path.move(to: CGPoint(x: size * 0.28, y: size * 0.52))
+                    path.addLine(to: CGPoint(x: size * 0.44, y: size * 0.68))
+                    path.addLine(to: CGPoint(x: size * 0.72, y: size * 0.34))
+                }
+                .stroke(.onInk, style: StrokeStyle(lineWidth: max(1, size * 0.14), lineCap: .round, lineJoin: .round))
+            } else {
+                Circle().strokeBorder(tint, lineWidth: size <= 9 ? 1.4 : 1.6)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
 /// A panel section name followed by a rule that runs to the trailing edge.
 public struct SectionRule<Trailing: View>: View {
     var title: String

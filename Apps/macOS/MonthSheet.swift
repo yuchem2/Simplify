@@ -182,7 +182,8 @@ private struct DayCell: View {
 }
 
 /// One event inside a day cell: a band for all-day and multi-day events, a coloured mark and
-/// title for timed ones, red text for public holidays.
+/// title for timed ones, red text for public holidays. Reminders always take one row with a round
+/// mark, struck through once completed.
 private struct EventRow: View {
     let slot: OccurrenceBuilder.Slot
     let source: CalendarController.Source?
@@ -191,10 +192,15 @@ private struct EventRow: View {
 
     var body: some View {
         let palette = source?.palette ?? .grey
-        let title = Text(slot.occurrence.title).font(.system(size: textSize.points)).lineLimit(1)
+        let done = slot.occurrence.isCompleted
+        let title = Text(slot.occurrence.title)
+            .font(.system(size: textSize.points))
+            .strikethrough(done)
+            .foregroundStyle(EventTime.titleColor(slot.occurrence, source: source))
+            .lineLimit(1)
         if source?.isHoliday == true {
-            title.foregroundStyle(.holiday)
-        } else if slot.occurrence.isBand {
+            title
+        } else if slot.occurrence.isBand, source?.isReminderList != true {
             title
                 .opacity(showsTitle ? 1 : 0)
                 .padding(.leading, slot.continuesFromPrevious ? 6 : 9)
@@ -217,10 +223,25 @@ private struct EventRow: View {
         } else {
             // Timed rows start a little left of the date line to give the title more room.
             HStack(spacing: 4) {
-                Mark(palette.ink, size: textSize.markSize)
+                EventMark(occurrence: slot.occurrence, source: source, size: textSize.markSize)
                 title
             }
             .padding(.leading, -6)
+        }
+    }
+}
+
+/// The mark in front of an event's title: a square in its calendar's colour, or a ring for a reminder.
+struct EventMark: View {
+    let occurrence: EventOccurrence
+    let source: CalendarController.Source?
+    let size: CGFloat
+
+    var body: some View {
+        if source?.isReminderList == true {
+            ReminderMark(source?.palette.ink, size: size, isCompleted: occurrence.isCompleted)
+        } else {
+            Mark(source?.palette.ink, size: size)
         }
     }
 }

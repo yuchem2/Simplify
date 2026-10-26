@@ -8,7 +8,7 @@ import SimplifyKit
 /// screen-recording access. Run with `open --env SIMPLIFY_SNAPSHOT=1 Simplify.app`; files land in
 /// `~/Library/Containers/dev.yoom.simplify/Data/tmp/snapshot-*.png`.
 /// `SIMPLIFY_SNAPSHOT=sample` fills an in-memory cache with example events first and also renders
-/// the week panel and the settings modal; nothing is written to the real stores.
+/// the week panel, the settings modal and the iCloud connect form; nothing is written to the real stores.
 @MainActor
 enum Snapshot {
     static func runIfRequested(model: AppModel, calendars: CalendarController) {
@@ -17,11 +17,17 @@ enum Snapshot {
         render(MainView(model: model, calendars: shown), name: "light", appearance: .aqua, scheme: .light)
         render(MainView(model: model, calendars: shown), name: "dark", appearance: .darkAqua, scheme: .dark)
         if mode == "sample" {
+            // Completed reminders are shown struck through for the rest of the pictures.
+            shown.showsCompletedReminders = true
             model.panelScope = .week
             render(MainView(model: model, calendars: shown), name: "week", appearance: .aqua, scheme: .light)
             model.panelScope = .day
             model.isSettingsOpen = true
             render(MainView(model: model, calendars: shown), name: "settings", appearance: .aqua, scheme: .light)
+            render(ZStack { MainView(model: model, calendars: shown); SettingsModal(model: model, calendars: shown, intro: .icloud) },
+                   name: "icloud", appearance: .aqua, scheme: .light)
+            render(ZStack { MainView(model: model, calendars: shown); SettingsModal(model: model, calendars: shown, intro: .icloud) },
+                   name: "icloud-dark", appearance: .darkAqua, scheme: .dark)
         }
         NSApp.terminate(nil)
     }
@@ -36,7 +42,7 @@ enum Snapshot {
         }
     }
 
-    /// Two accounts' worth of events around today, in an in-memory cache.
+    /// Google, iCloud and reminders accounts' worth of events around today, in an in-memory cache.
     private static func sampleController(calendar: Calendar, days: [Date]) -> CalendarController {
         let container = try! SimplifyStore.makeCacheContainer(inMemory: true)
         let context = container.mainContext
@@ -44,7 +50,11 @@ enum Snapshot {
         me.lastSyncedAt = .now
         let team = CalendarAccount(id: "google:team", provider: .google, email: "team@example.com")
         team.status = .needsReauth
-        [me, team].forEach(context.insert)
+        let icloud = CalendarAccount(id: "icloud:/1/principal/", provider: .icloud, email: "me@icloud.com")
+        icloud.lastSyncedAt = .now
+        let reminders = CalendarAccount(id: "reminders:local", provider: .reminders, email: "미리알림")
+        reminders.lastSyncedAt = .now
+        [me, team, icloud, reminders].forEach(context.insert)
 
         func source(_ account: String, _ id: String, _ name: String, _ palette: Palette, holiday: Bool = false) -> CalendarSource {
             let s = CalendarSource(accountID: account, remoteID: id, name: name)
@@ -59,6 +69,8 @@ enum Snapshot {
         let fitness = source("google:me", "fitness", "운동", .green)
         let holidays = source("google:me", "ko#holiday", "대한민국의 휴일", .red, holiday: true)
         let teamCal = source("google:team", "team", "팀 일정", .purple)
+        let family = source("icloud:/1/principal/", "family", "가족", .teal)
+        let todo = source("reminders:local", "todo", "할 일", .yellow)
 
         let today = calendar.startOfDay(for: .now)
         func at(_ dayOffset: Int, _ hour: Int, _ minute: Int = 0) -> Date {
@@ -98,9 +110,20 @@ enum Snapshot {
         for (i, title) in ["조찬 모임", "주간 보고", "점심 미팅", "코드 리뷰", "운영 회의", "저녁 약속"].enumerated() {
             timed(i.isMultiple(of: 2) ? work : personal, "busy\(i)", title, at(1, 8 + i * 2))
         }
+        allDay(family, "trip", "부모님 방문", 8, 10)
+        timed(family, "dinner", "가족 저녁", at(-2, 18, 30))
+        allDay(todo, "tax", "연말정산 서류 내기", 2, 3)
+        timed(todo, "pills", "영양제 주문", at(0, 17), minutes: 0)
+        var done = EventSnapshot(id: todo.id + ":done", sourceID: todo.id, remoteID: "done", title: "택배 반품", isAllDay: true)
+        done.startDay = key(0)
+        done.isCompleted = true
+        context.insert(EventRecord(done))
         try! context.save()
 
-        let controller = CalendarController(container: container, calendar: calendar, tokens: KeychainTokenStore(service: "dev.yoom.simplify.snapshot"))
+        UserDefaults.standard.removePersistentDomain(forName: "dev.yoom.simplify.snapshot")
+        let controller = CalendarController(container: container, calendar: calendar, tokens: KeychainTokenStore(service: "dev.yoom.simplify.snapshot"),
+                                            credentials: KeychainCredentialStore(service: "dev.yoom.simplify.snapshot"),
+                                            defaults: UserDefaults(suiteName: "dev.yoom.simplify.snapshot")!)
         controller.show(days: days, calendar: calendar)
         return controller
     }

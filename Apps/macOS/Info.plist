@@ -24,6 +24,8 @@
 	<string>$(GOOGLE_CLIENT_ID)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>마감일이 있는 미리알림을 달력에 보여 주려고 해요.</string>
 	<key>SimplifyAppGroup</key>
 	<string>$(APP_GROUP_ID)</string>
 </dict>

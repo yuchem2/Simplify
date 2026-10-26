@@ -75,7 +75,7 @@ struct SyncTests {
         let (container, engine, api) = try setup(google)
         try await engine.upsertAccount(id: account, provider: .google, email: "me@example.com")
 
-        try await engine.syncGoogleAccount(account, api: api, calendar: cal)
+        try await engine.sync(account, provider: api, calendar: cal)
         var titles = CalendarCache.occurrences(in: october, context: container.mainContext, calendar: cal).map(\.title)
         #expect(titles == ["한글날", "디자인 리뷰", "치과"])
 
@@ -84,7 +84,7 @@ struct SyncTests {
         #expect(sources.map(\.palette) == [.blue, .red])
         #expect(sources[1].isHoliday && sources[1].isReadOnly)
 
-        try await engine.syncGoogleAccount(account, api: api, calendar: cal)
+        try await engine.sync(account, provider: api, calendar: cal)
         titles = CalendarCache.occurrences(in: october, context: container.mainContext, calendar: cal).map(\.title)
         #expect(titles == ["한글날", "디자인 리뷰(변경)"])
         #expect(sources[0].syncToken == "s2")
@@ -98,13 +98,13 @@ struct SyncTests {
         ]
         let (container, engine, api) = try setup(google)
         try await engine.upsertAccount(id: account, provider: .google, email: "me@example.com")
-        try await engine.syncGoogleAccount(account, api: api, calendar: cal)
+        try await engine.sync(account, provider: api, calendar: cal)
         let source = try container.mainContext.fetch(FetchDescriptor<CalendarSource>()).first!
         source.syncToken = "stale"
         container.mainContext.insert(EventRecord(EventSnapshot(id: source.id + ":old", sourceID: source.id, remoteID: "old", title: "오래된 일정", isAllDay: false)))
         try container.mainContext.save()
 
-        try await engine.syncGoogleAccount(account, api: api, calendar: cal)
+        try await engine.sync(account, provider: api, calendar: cal)
         let fresh = ModelContext(container)
         #expect(try fresh.fetch(FetchDescriptor<EventRecord>()).map(\.title) == ["새로 받은 일정"])
         #expect(try fresh.fetch(FetchDescriptor<CalendarSource>()).first?.syncToken == "fresh")
@@ -116,7 +116,7 @@ struct SyncTests {
         google.events["ko.south_korea#holiday@group.v.calendar.google.com"] = ["": (200, #"{"items":[{"id":"h","summary":"한글날","start":{"date":"2026-10-09"},"end":{"date":"2026-10-10"}}],"nextSyncToken":"h"}"#)]
         let (container, engine, api) = try setup(google)
         try await engine.upsertAccount(id: account, provider: .google, email: "me@example.com")
-        try await engine.syncGoogleAccount(account, api: api, calendar: cal)
+        try await engine.sync(account, provider: api, calendar: cal)
         try container.mainContext.fetch(FetchDescriptor<CalendarSource>()).first { $0.isHoliday }!.isVisible = false
         #expect(CalendarCache.occurrences(in: october, context: container.mainContext, calendar: cal).map(\.title) == ["리뷰"])
     }
@@ -126,7 +126,7 @@ struct SyncTests {
         google.events["c"] = ["": (200, #"{"items":[{"id":"x","summary":"일정","start":{"date":"2026-10-15"},"end":{"date":"2026-10-16"}}],"nextSyncToken":"t"}"#)]
         let (container, engine, api) = try setup(google)
         try await engine.upsertAccount(id: account, provider: .google, email: "me@example.com")
-        try await engine.syncGoogleAccount(account, api: api, calendar: cal)
+        try await engine.sync(account, provider: api, calendar: cal)
         try await engine.removeAccount(id: account)
         #expect(try container.mainContext.fetchCount(FetchDescriptor<EventRecord>()) == 0)
         #expect(try container.mainContext.fetchCount(FetchDescriptor<CalendarSource>()) == 0)
@@ -143,7 +143,7 @@ struct SyncTests {
         let engine = CalendarSyncEngine(modelContainer: container)
         try await engine.upsertAccount(id: account, provider: .google, email: "me@example.com")
         await #expect(throws: CalendarSyncError.needsReauth) {
-            try await engine.syncGoogleAccount(account, api: api, calendar: cal)
+            try await engine.sync(account, provider: api, calendar: cal)
         }
         #expect(try container.mainContext.fetch(FetchDescriptor<CalendarAccount>()).first?.status == .needsReauth)
     }
@@ -178,7 +178,7 @@ struct SyncTests {
         let (container, engine, api) = try setup(google)
         try await engine.upsertAccount(id: account, provider: .google, email: "me@example.com")
         await #expect(throws: CalendarSyncError.http(status: 404, reason: "notFound")) {
-            try await engine.syncGoogleAccount(account, api: api, calendar: cal)
+            try await engine.sync(account, provider: api, calendar: cal)
         }
         let fresh = ModelContext(container)
         #expect(try fresh.fetch(FetchDescriptor<EventRecord>()).map(\.title) == ["살아남은 일정"])
@@ -205,15 +205,15 @@ struct SyncTests {
         """#
         let (container, engine, api) = try setup(google)
         try await engine.upsertAccount(id: account, provider: .google, email: "me@example.com")
-        try await engine.syncGoogleAccount(account, api: api, calendar: cal)
+        try await engine.sync(account, provider: api, calendar: cal)
         #expect(try ModelContext(container).fetchCount(FetchDescriptor<EventRecord>(predicate: #Predicate { $0.isExpandedInstance })) == 1)
 
         // The series is edited into a weekly rule: this round notices, the next refetches everything.
         let edited = google.events["c"]?["t1"]
         google.events["c"]?[""] = edited
-        try await engine.syncGoogleAccount(account, api: api, calendar: cal)
+        try await engine.sync(account, provider: api, calendar: cal)
         #expect(try ModelContext(container).fetch(FetchDescriptor<CalendarSource>()).first?.syncToken == nil)
-        try await engine.syncGoogleAccount(account, api: api, calendar: cal)
+        try await engine.sync(account, provider: api, calendar: cal)
         #expect(try ModelContext(container).fetchCount(FetchDescriptor<EventRecord>(predicate: #Predicate { $0.isExpandedInstance })) == 0)
         // The full refetch settles: it does not keep asking for another one.
         #expect(try ModelContext(container).fetch(FetchDescriptor<CalendarSource>()).first?.syncToken != nil)

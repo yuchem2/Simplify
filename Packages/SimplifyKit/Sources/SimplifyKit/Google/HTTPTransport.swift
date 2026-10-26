@@ -29,6 +29,8 @@ public enum CalendarSyncError: Error, Equatable, Sendable {
     case missingCalendarPermission
     /// The Google Calendar API is not enabled for the app's Cloud project.
     case apiDisabled
+    /// Access to the Mac's reminders was turned off in System Settings.
+    case remindersAccessDenied
     case offline
     /// `reason` is the provider's machine-readable error reason, when it sent one.
     case http(status: Int, reason: String? = nil)
@@ -40,11 +42,17 @@ public enum CalendarSyncError: Error, Equatable, Sendable {
         case .needsReauth: "로그인이 만료됐어요. 다시 연결해 주세요."
         case .missingCalendarPermission: "캘린더 권한이 허용되지 않았어요. 다시 연결하면서 캘린더 항목에 체크해 주세요."
         case .apiDisabled: "Google Cloud 프로젝트에서 Google Calendar API가 꺼져 있어요."
+        case .remindersAccessDenied: "미리알림 접근이 꺼져 있어요. 시스템 설정 › 개인정보 보호 및 보안 › 미리알림에서 Simplify를 켜 주세요."
         case .offline: "인터넷에 연결되어 있지 않아요."
         case .syncTokenExpired: "일정을 처음부터 다시 받는 중이에요."
-        case .http(let status, let reason): "Google이 요청을 거절했어요 (\(status)\(reason.map { " · " + $0 } ?? ""))."
-        case .invalidResponse: "Google 응답을 읽지 못했어요."
+        case .http(let status, let reason): "서버가 요청을 거절했어요 (\(status)\(reason.map { " · " + $0 } ?? ""))."
+        case .invalidResponse: "서버 응답을 읽지 못했어요."
         }
+    }
+
+    /// Only connecting the account again fixes it; the account is marked and syncing it stops.
+    public var needsReconnect: Bool {
+        self == .needsReauth || self == .missingCalendarPermission || self == .remindersAccessDenied
     }
 }
 

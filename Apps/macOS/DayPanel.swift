@@ -118,10 +118,11 @@ private struct DayEvents: View {
                             .frame(width: 58, alignment: .leading)
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 8) {
-                                Mark(source?.palette.ink, size: 10)
+                                EventMark(occurrence: slot.occurrence, source: source, size: 10)
                                 Text(slot.occurrence.title)
                                     .font(.system(size: 14))
-                                    .foregroundStyle(source?.isHoliday == true ? Color.holiday : Color.ink)
+                                    .strikethrough(slot.occurrence.isCompleted)
+                                    .foregroundStyle(EventTime.titleColor(slot.occurrence, source: source))
                             }
                             if let source {
                                 Text(source.name)
@@ -171,11 +172,12 @@ private struct WeekEvents: View {
                         ForEach(slots, id: \.occurrence.id) { slot in
                             let source = calendars.sources[slot.occurrence.sourceID]
                             HStack(spacing: 8) {
-                                Mark(source?.palette.ink, size: 10)
+                                EventMark(occurrence: slot.occurrence, source: source, size: 10)
                                 Text(slot.occurrence.title)
                                     .font(.system(size: 14))
+                                    .strikethrough(slot.occurrence.isCompleted)
                                     .lineLimit(1)
-                                    .foregroundStyle(source?.isHoliday == true ? Color.holiday : Color.ink)
+                                    .foregroundStyle(EventTime.titleColor(slot.occurrence, source: source))
                                 Spacer(minLength: 4)
                                 Text(EventTime.label(slot, on: day, calendar: model.calendar))
                                     .font(.system(size: 11))
@@ -191,6 +193,12 @@ private struct WeekEvents: View {
 }
 
 enum EventTime {
+    /// Red for public holidays, soft for completed reminders.
+    static func titleColor(_ occurrence: EventOccurrence, source: CalendarController.Source?) -> Color {
+        if occurrence.isCompleted { return .inkSoft }
+        return source?.isHoliday == true ? .holiday : .ink
+    }
+
     /// `오전 9:30` or `종일`; a band over several days reads `~ 30일` on its first day and
     /// `2일째`, `3일째` … after that.
     static func label(_ slot: OccurrenceBuilder.Slot, on day: Date, calendar: Calendar) -> String {

@@ -2,7 +2,7 @@ import Foundation
 
 /// One stored event as plain values: a single event, a repeating series (its master), or one
 /// changed or cancelled occurrence of a series. Providers fill it in; the views never see it.
-public struct EventSnapshot: Hashable, Sendable {
+public struct EventSnapshot: Codable, Hashable, Sendable {
     public var id: String
     public var sourceID: String
     /// The provider's event id; a series and its changed occurrences share a master id.
@@ -31,6 +31,11 @@ public struct EventSnapshot: Hashable, Sendable {
     /// One occurrence of a series fetched from the provider because the engine cannot expand its
     /// rule (as opposed to an exception the person made).
     public var isExpandedInstance = false
+    /// The CalDAV resource (`…/home/ABC.ics`) the event came in; a series and its changed
+    /// occurrences share one. Nil for other providers.
+    public var resourceHref: String?
+    /// A reminder that was ticked off. Events are never completed.
+    public var isCompleted = false
 
     public init(id: String, sourceID: String, remoteID: String, title: String, isAllDay: Bool) {
         self.id = id
@@ -52,6 +57,7 @@ public struct EventOccurrence: Identifiable, Hashable, Sendable {
     public let start: Date
     /// Exclusive.
     public let end: Date
+    public var isCompleted = false
 
     /// All-day events and anything lasting a day or more run across cells as a band.
     public var isBand: Bool { isAllDay || end.timeIntervalSince(start) >= 24 * 3600 }

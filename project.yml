@@ -43,11 +43,14 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         SimplifyAppGroup: $(APP_GROUP_ID)
         GoogleClientID: $(GOOGLE_CLIENT_ID)
+        NSRemindersFullAccessUsageDescription: 마감일이 있는 미리알림을 달력에 보여 주려고 해요.
     entitlements:
       path: Apps/macOS/Simplify.entitlements
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
+        # EventKit (the Mac's reminders) inside the sandbox and the hardened runtime.
+        com.apple.security.personal-information.calendars: true
         com.apple.security.application-groups:
           - $(APP_GROUP_ID)
     settings:

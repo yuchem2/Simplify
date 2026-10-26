@@ -6,13 +6,15 @@ import SwiftData
 
 public enum CalendarProviderKind: String, Codable, Sendable {
     case google, icloud
+    /// The Mac's own reminders (EventKit); one account per Mac.
+    case reminders
 }
 
 @Model
 public final class CalendarAccount {
     public enum Status: String, Sendable { case ok, needsReauth }
 
-    /// `google:<sub>`, stable across email changes.
+    /// `google:<sub>`, `icloud:<principal path>` or `reminders:local`, stable across email changes.
     @Attribute(.unique) public var id: String
     public var providerRaw: String
     public var email: String
@@ -82,6 +84,8 @@ public final class EventRecord {
     public var originalStartDay: String?
     public var isCancelled: Bool = false
     public var isExpandedInstance: Bool = false
+    public var resourceHref: String?
+    public var isCompleted: Bool = false
 
     public init(_ snapshot: EventSnapshot) {
         id = snapshot.id
@@ -109,6 +113,8 @@ public final class EventRecord {
         originalStartDay = s.originalStartDay
         isCancelled = s.isCancelled
         isExpandedInstance = s.isExpandedInstance
+        resourceHref = s.resourceHref
+        isCompleted = s.isCompleted
     }
 
     public var snapshot: EventSnapshot {
@@ -127,6 +133,8 @@ public final class EventRecord {
         s.originalStartDay = originalStartDay
         s.isCancelled = isCancelled
         s.isExpandedInstance = isExpandedInstance
+        s.resourceHref = resourceHref
+        s.isCompleted = isCompleted
         return s
     }
 }

@@ -17,10 +17,10 @@ extension Palette {
         }
     }
 
-    /// The palette colour closest in hue to a provider's calendar colour (`#4986e7`).
+    /// The palette colour closest in hue to a provider's calendar colour (`#4986e7`, or CalDAV's `#4986e7ff`).
     /// Near-grey colours become `.grey`; unreadable input falls back to `.blue`.
     public static func nearest(toHex hex: String?) -> Palette {
-        guard let hex, let rgb = UInt32(hex.trimmingCharacters(in: CharacterSet(charactersIn: "#")), radix: 16) else { return .blue }
+        guard let hex, let rgb = UInt32(hex.trimmingCharacters(in: CharacterSet(charactersIn: "#")).prefix(6), radix: 16) else { return .blue }
         let r = Double((rgb >> 16) & 0xff) / 255, g = Double((rgb >> 8) & 0xff) / 255, b = Double(rgb & 0xff) / 255
         let maxV = max(r, g, b), delta = maxV - min(r, g, b)
         if maxV == 0 || delta / maxV < 0.18 { return .grey }
