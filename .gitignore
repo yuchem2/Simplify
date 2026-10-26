@@ -10,3 +10,6 @@ DerivedData/
 xcuserdata/
 
 .DS_Store
+
+# Local identifiers (see Config/Secrets.example.xcconfig)
+Config/Secrets.xcconfig

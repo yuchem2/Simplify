@@ -1,0 +1,4 @@
+// Committed defaults. Secrets.xcconfig (git-ignored) fills in the real values when present,
+// so a fresh clone still builds; Google sign-in stays off until it exists.
+GOOGLE_CLIENT_ID =
+#include? "Secrets.xcconfig"

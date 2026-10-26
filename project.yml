@@ -27,6 +27,10 @@ targets:
     type: application
     platform: macOS
     sources: [Apps/macOS]
+    # GOOGLE_CLIENT_ID comes from Config/Secrets.xcconfig (git-ignored) through Base.xcconfig.
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig
     dependencies:
       - package: SimplifyKit
       - target: SimplifyWidgets
@@ -38,6 +42,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.productivity
         SimplifyAppGroup: $(APP_GROUP_ID)
+        GoogleClientID: $(GOOGLE_CLIENT_ID)
     entitlements:
       path: Apps/macOS/Simplify.entitlements
       properties:

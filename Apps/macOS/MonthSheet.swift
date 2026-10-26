@@ -1,13 +1,14 @@
 import SwiftUI
 import SimplifyKit
 
-/// The month as a ruled grid on a moulded sheet, Monday first.
+/// The month as a ruled grid on a moulded sheet, Sunday first.
 struct MonthSheet: View {
     let model: AppModel
+    let calendars: CalendarController
     /// The sheet holds keyboard focus so the arrow keys move the chosen day.
     @FocusState private var focused: Bool
 
-    private static let weekdays = ["월", "화", "수", "목", "금", "토", "일"]
+    private static let weekdays = ["일", "월", "화", "수", "목", "금", "토"]
     /// Smallest day cell; with six rows this sets the sheet's (and the window's) minimum size.
     static let minCellSize = CGSize(width: 100, height: 80)
     /// Where a date number starts inside its cell; the weekday labels share the same edge.
@@ -33,7 +34,11 @@ struct MonthSheet: View {
                     ForEach(grid.weeks, id: \.first) { week in
                         HStack(spacing: 0) {
                             ForEach(week, id: \.self) { day in
-                                DayCell(day: day, model: model, inMonth: grid.isInMonth(day)) {
+                                DayCell(day: day, model: model, inMonth: grid.isInMonth(day),
+                                        slots: calendars.slots[day] ?? [], sources: calendars.sources,
+                                        isHoliday: calendars.holidayDays.contains(day), height: height, textSize: model.cellTextSize) {
+                                    // Clicking the chosen day again opens a folded panel.
+                                    if model.isSelected(day), model.isPanelHidden { model.isPanelHidden = false }
                                     model.select(day)
                                     focused = true
                                 }
@@ -54,7 +59,16 @@ struct MonthSheet: View {
         .focusEffectDisabled()
         .focused($focused)
         .onAppear { focused = true }
+        // Arrow keys work again as soon as the settings modal closes.
+        .onChange(of: model.isSettingsOpen) { _, open in if !open { focused = true } }
+        .onKeyPress(.return) {
+            // With the panel folded, Return opens it on the chosen day.
+            guard !model.isSettingsOpen, model.isPanelHidden else { return .ignored }
+            model.isPanelHidden = false
+            return .handled
+        }
         .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
+            guard !model.isSettingsOpen else { return .ignored }
             // Arrow events carry the numeric-pad and function flags, and Caps Lock may be on,
             // so only real modifiers count. ⌘← / ⌘→ belong to the 이동 menu.
             guard press.modifiers.isDisjoint(with: [.command, .option, .control, .shift]) else { return .ignored }
@@ -94,13 +108,18 @@ private struct DayCell: View {
     let day: Date
     let model: AppModel
     let inMonth: Bool
+    let slots: [OccurrenceBuilder.Slot]
+    let sources: [String: CalendarController.Source]
+    let isHoliday: Bool
+    let height: CGFloat
+    let textSize: AppModel.CellTextSize
     let onSelect: () -> Void
 
     var body: some View {
         let isToday = model.isToday(day)
         let number = model.calendar.component(.day, from: day)
         Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 // Numbers start on the same line as the weekday labels; today's disc grows
                 // around its number without moving it.
                 Text("\(number)")
@@ -111,7 +130,17 @@ private struct DayCell: View {
                     .background { if isToday { Capsule().fill(.ink) } }
                     // The disc's left edge sits 4 pt before the date line, well inside the selection.
                     .padding(.leading, isToday ? -4 : 0)
-                // Events and the ToDo count fill in here from stage 2 on.
+                let (shown, hidden) = visibleSlots
+                ForEach(shown, id: \.occurrence.id) { slot in
+                    EventRow(slot: slot, source: sources[slot.occurrence.sourceID], textSize: textSize,
+                             // A band repeats its title at the start of each row of the grid.
+                             showsTitle: !slot.continuesFromPrevious || model.calendar.component(.weekday, from: day) == model.calendar.firstWeekday)
+                }
+                if hidden > 0 {
+                    Text("+\(hidden)개 더")
+                        .font(.system(size: textSize.points, weight: .medium))
+                        .foregroundStyle(.inkSoft)
+                }
             }
             .padding(MonthSheet.dateInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -122,16 +151,92 @@ private struct DayCell: View {
                 }
             }
             .background(inMonth ? Color.clear : Color.shadeSoft)
+            .clipped()
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Period(containing: day, scope: .day, calendar: model.calendar).title + (isToday ? ", 오늘" : ""))
+        .accessibilityLabel(accessibilityText(isToday: isToday))
         .accessibilityAddTraits(model.isSelected(day) ? .isSelected : [])
+    }
+
+    /// As many rows as the cell fits; when some are left over, the last row says how many.
+    private var visibleSlots: ([OccurrenceBuilder.Slot], Int) {
+        let space = height - MonthSheet.dateInset.top - MonthSheet.dateInset.bottom - 24 - 2
+        let fits = max(1, Int(space / textSize.rowHeight))
+        guard slots.count > fits else { return (slots, 0) }
+        return (Array(slots.prefix(fits - 1)), slots.count - (fits - 1))
     }
 
     private func numberColor(isToday: Bool) -> Color {
         if isToday { return .onInk }
         if !inMonth { return .inkFaint }
-        return model.isRedDay(day) ? .holiday : .ink
+        return model.isRedDay(day) || isHoliday ? .holiday : .ink
+    }
+
+    private func accessibilityText(isToday: Bool) -> String {
+        var text = Period(containing: day, scope: .day, calendar: model.calendar).title
+        if isToday { text += ", 오늘" }
+        if !slots.isEmpty { text += ", 일정 \(slots.count)개" }
+        return text
+    }
+}
+
+/// One event inside a day cell: a band for all-day and multi-day events, a coloured mark and
+/// title for timed ones, red text for public holidays.
+private struct EventRow: View {
+    let slot: OccurrenceBuilder.Slot
+    let source: CalendarController.Source?
+    let textSize: AppModel.CellTextSize
+    let showsTitle: Bool
+
+    var body: some View {
+        let palette = source?.palette ?? .grey
+        let title = Text(slot.occurrence.title).font(.system(size: textSize.points)).lineLimit(1)
+        if source?.isHoliday == true {
+            title.foregroundStyle(.holiday)
+        } else if slot.occurrence.isBand {
+            title
+                .opacity(showsTitle ? 1 : 0)
+                .padding(.leading, slot.continuesFromPrevious ? 6 : 9)
+                .padding(.trailing, 4)
+                .frame(maxWidth: .infinity, minHeight: textSize.rowHeight - 2, alignment: .leading)
+                .background(palette.tint)
+                .overlay(alignment: .leading) {
+                    if !slot.continuesFromPrevious {
+                        Rectangle().fill(palette.ink).frame(width: 6)
+                            .overlay(alignment: .trailing) { Rectangle().fill(.ink).frame(width: Metrics.line) }
+                    }
+                }
+                .overlay {
+                    // Outline only the band's own ends, so it reads as one band across cells.
+                    BandOutline(open: (slot.continuesFromPrevious, slot.continuesToNext)).stroke(.ink, lineWidth: Metrics.line)
+                }
+                // Run to the cell edges where the band continues.
+                .padding(.leading, slot.continuesFromPrevious ? -MonthSheet.dateInset.leading : -8)
+                .padding(.trailing, slot.continuesToNext ? -MonthSheet.dateInset.trailing : 0)
+        } else {
+            // Timed rows start a little left of the date line to give the title more room.
+            HStack(spacing: 4) {
+                Mark(palette.ink, size: textSize.markSize)
+                title
+            }
+            .padding(.leading, -6)
+        }
+    }
+}
+
+/// A rectangle outline missing its left and/or right side.
+private struct BandOutline: Shape {
+    var open: (leading: Bool, trailing: Bool)
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let r = rect.insetBy(dx: 0.5, dy: 0.5)
+        path.move(to: CGPoint(x: r.minX, y: r.minY))
+        path.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+        if open.trailing { path.move(to: CGPoint(x: r.maxX, y: r.maxY)) } else { path.addLine(to: CGPoint(x: r.maxX, y: r.maxY)) }
+        path.addLine(to: CGPoint(x: r.minX, y: r.maxY))
+        if !open.leading { path.addLine(to: CGPoint(x: r.minX, y: r.minY)) }
+        return path
     }
 }

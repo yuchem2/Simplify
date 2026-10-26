@@ -4,7 +4,8 @@ import SwiftUI
 
 public extension View {
     /// Paper with a heavy outline, an optional inner moulding line, and the drawn shadow.
-    func mouldedFrame(moulding: Bool = true) -> some View {
+    /// Over a dimmed window pass a darker `shadow`, since the usual shade is lighter than the dim.
+    func mouldedFrame(moulding: Bool = true, shadow: Color = Tokens.shadowDrawn) -> some View {
         background(.paper)
             .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.lineOuter))
             .overlay {
@@ -12,12 +13,12 @@ public extension View {
                     Rectangle().inset(by: Metrics.mouldingInset).strokeBorder(.ink, lineWidth: Metrics.line)
                 }
             }
-            .drawnShadow()
+            .drawnShadow(shadow)
     }
 
     /// A flat shade offset down and right, with no blur.
-    func drawnShadow() -> some View {
-        background(Rectangle().fill(Tokens.shadowDrawn).offset(x: 5, y: 5))
+    func drawnShadow(_ color: Color = Tokens.shadowDrawn) -> some View {
+        background(Rectangle().fill(color).offset(x: 5, y: 5))
     }
 }
 
@@ -60,9 +61,10 @@ public struct SegmentedTabs<Value: Hashable>: View {
     }
 }
 
-/// Buttons drawn as outlined boxes; `.primary` is filled with ink, `.text` is an underlined word.
+/// Buttons drawn as outlined boxes; `.primary` is filled with ink (one per screen), `.toggled` is a
+/// plain button shown switched on, `.text` is an underlined word.
 public struct DrawnButtonStyle: ButtonStyle {
-    public enum Kind: Sendable { case plain, primary, text }
+    public enum Kind: Sendable { case plain, primary, toggled, text }
     var kind: Kind
     @Environment(\.isEnabled) private var isEnabled
 
@@ -76,7 +78,9 @@ public struct DrawnButtonStyle: ButtonStyle {
                 .underline()
                 .foregroundStyle(isEnabled ? Color.ink : Color.inkFaint)
                 .opacity(configuration.isPressed ? 0.6 : 1)
-        case .plain, .primary:
+                // A taller target around the small word without changing the layout.
+                .contentShape(Rectangle().inset(by: -4))
+        case .plain, .primary, .toggled:
             configuration.label
                 .font(.system(size: 13, weight: kind == .primary ? .semibold : .regular))
                 .foregroundStyle(foreground)
@@ -95,6 +99,7 @@ public struct DrawnButtonStyle: ButtonStyle {
 
     private func background(pressed: Bool) -> Color {
         if kind == .primary && isEnabled { return .ink }
+        if kind == .toggled { return pressed ? .shade : .shadeSoft }
         return pressed ? .shadeSoft : .paper
     }
 }
@@ -137,7 +142,8 @@ public struct Mark: View {
     public var body: some View {
         Rectangle()
             .fill(color ?? .clear)
-            .overlay(Rectangle().strokeBorder(.ink, lineWidth: 1.2))
+            // A thinner edge on small marks leaves more of the colour showing.
+            .overlay(Rectangle().strokeBorder(.ink, lineWidth: size <= 9 ? Metrics.line : 1.2))
             .frame(width: size, height: size)
             .accessibilityHidden(true)
     }

@@ -1,16 +1,16 @@
 import Foundation
 
-/// How long a diary page lasts: one day, one Monday–Sunday week, or one month.
+/// How long a diary page lasts: one day, one Sunday–Saturday week, or one month.
 public enum PeriodScope: String, Codable, CaseIterable, Sendable {
     case day, week, month
 }
 
 /// A day, week or month that memos and ToDos belong to.
 ///
-/// `key` is the stable storage id: `2026-10-26`, `2026-W44` (ISO week), `2026-10`.
+/// `key` is the stable storage id: `2026-10-26`, `2026-W44` (the week's number in its year), `2026-10`.
 public struct Period: Hashable, Sendable {
     public let scope: PeriodScope
-    /// The first instant of the period: start of day, Monday 00:00, or the 1st 00:00.
+    /// The first instant of the period: start of day, Sunday 00:00, or the 1st 00:00.
     public let start: Date
     public let calendar: Calendar
 
@@ -87,11 +87,14 @@ public struct Period: Hashable, Sendable {
 }
 
 public extension Calendar {
-    /// ISO 8601 rules (weeks start on Monday) in the user's current time zone, with Korean names.
-    /// The zone is fixed at creation so stored dates and keys stay consistent; when the system
-    /// zone changes, build a new calendar and carry dates across by year, month and day.
+    /// The Gregorian calendar with weeks from Sunday to Saturday, as Korean wall calendars print
+    /// them; week 1 is the week holding 1 January. In the user's current time zone, with Korean
+    /// names. The zone is fixed at creation so stored dates and keys stay consistent; when the
+    /// system zone changes, build a new calendar and carry dates across by year, month and day.
     static var simplify: Calendar {
-        var calendar = Calendar(identifier: .iso8601)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.firstWeekday = 1
+        calendar.minimumDaysInFirstWeek = 1
         calendar.locale = Locale(identifier: "ko_KR")
         calendar.timeZone = .current
         return calendar
