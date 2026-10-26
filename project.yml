@@ -1,0 +1,87 @@
+name: Simplify
+
+options:
+  bundleIdPrefix: dev.yoom
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+
+packages:
+  SimplifyKit:
+    path: Packages/SimplifyKit
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    # Personal Team (Xcode › Settings › Accounts)
+    DEVELOPMENT_TEAM: RCKK92UBYM
+    ENABLE_HARDENED_RUNTIME: YES
+    # One App Group for app and widgets; SimplifyKit.AppGroup reads it from Info.plist.
+    APP_GROUP_ID: $(TeamIdentifierPrefix)dev.yoom.simplify
+
+targets:
+  Simplify:
+    type: application
+    platform: macOS
+    sources: [Apps/macOS]
+    dependencies:
+      - package: SimplifyKit
+      - target: SimplifyWidgets
+    info:
+      path: Apps/macOS/Info.plist
+      properties:
+        CFBundleDisplayName: Simplify
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.productivity
+        SimplifyAppGroup: $(APP_GROUP_ID)
+    entitlements:
+      path: Apps/macOS/Simplify.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.application-groups:
+          - $(APP_GROUP_ID)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.yoom.simplify
+
+  SimplifyWidgets:
+    type: app-extension
+    platform: macOS
+    sources: [Widgets]
+    dependencies:
+      - package: SimplifyKit
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: Simplify
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        SimplifyAppGroup: $(APP_GROUP_ID)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Widgets/SimplifyWidgets.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups:
+          - $(APP_GROUP_ID)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.yoom.simplify.widgets
+
+schemes:
+  Simplify:
+    build:
+      targets:
+        Simplify: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - package: SimplifyKit/SimplifyKitTests
