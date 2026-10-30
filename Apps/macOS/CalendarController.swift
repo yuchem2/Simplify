@@ -27,6 +27,9 @@ final class CalendarController {
     struct Source: Identifiable, Hashable {
         let id: String
         let accountID: String
+        /// The provider's calendar id and zone, for writing to it.
+        let remoteID: String
+        let timeZone: String?
         let name: String
         let palette: Palette
         let isVisible: Bool
@@ -71,6 +74,24 @@ final class CalendarController {
     private(set) var holidayDays: Set<Date> = []
     /// The last sync error of each account, in words, until a sync of that account succeeds.
     private(set) var problems: [String: String] = [:]
+    /// Changes saved while offline, or refused by the provider, that have not reached it yet.
+    private(set) var unsentWrites: [PendingWrite] = [] {
+        didSet {
+            unsentByKey = [:]
+            for write in unsentWrites {
+                let key: String? = if case .create(let id) = write.kind { write.calendar.sourceID + ":" + id }
+                    else { write.event.map { write.calendar.sourceID + ":" + ($0.recurringEventID ?? $0.remoteID) } }
+                // A refused write says more than the waiting ones behind it.
+                if let key, unsentByKey[key].map({ !$0.isFailed }) ?? true { unsentByKey[key] = write }
+            }
+        }
+    }
+    /// The unsent change of each event, by `sourceID:series id`.
+    private var unsentByKey: [String: PendingWrite] = [:]
+    /// Something sent or waiting is laid over the cache.
+    private var hasOverlay = false
+    /// Counts reloads, so an overlay worked out for an older one is dropped.
+    private var reloadGeneration = 0
 
     private let container: ModelContainer
     /// Made off the main actor so its context does its work off the main thread too.
@@ -78,11 +99,18 @@ final class CalendarController {
     private let tokens: TokenStore
     private let credentials: CalDAVCredentialStore
     private let reminders = RemindersProvider()
+    /// Every event change goes through here, so offline changes wait and go out in order.
+    private let writer: EventWriter
     private let oauth: GoogleOAuth?
     private var calendar: Calendar
     private var shownDays: [Date] = []
-    /// The visible calendars' events, decoded once per reload; a month change only re-expands them.
-    private var snapshots: [EventSnapshot] = []
+    /// The visible calendars' events with unsent changes on top; a month change only re-expands them.
+    private var snapshots: [EventSnapshot] = [] {
+        didSet { snapshotsByID = Dictionary(snapshots.map { ($0.id, $0) }) { first, _ in first } }
+    }
+    private var snapshotsByID: [String: EventSnapshot] = [:]
+    /// The same, as the cache has them.
+    private var cachedSnapshots: [EventSnapshot] = []
     private var isSyncing = false
     private var syncAllPending = false
     private var remindersSyncPending = false
@@ -101,8 +129,10 @@ final class CalendarController {
     private let defaults: UserDefaults
 
     init(container: ModelContainer, calendar: Calendar, tokens: TokenStore = KeychainTokenStore(),
-         credentials: CalDAVCredentialStore = KeychainCredentialStore(), defaults: UserDefaults = .standard) {
+         credentials: CalDAVCredentialStore = KeychainCredentialStore(), defaults: UserDefaults = .standard,
+         writer: EventWriter = EventWriter()) {
         self.defaults = defaults
+        self.writer = writer
         showsCompletedReminders = defaults.bool(forKey: "showsCompletedReminders")
         self.container = container
         self.calendar = calendar
@@ -135,7 +165,7 @@ final class CalendarController {
         let accountModels = (try? context.fetch(FetchDescriptor<CalendarAccount>(sortBy: [SortDescriptor(\.createdAt)]))) ?? []
         let reminderAccounts = Set(accountModels.filter { $0.provider == .reminders }.map(\.id))
         sources = Dictionary(uniqueKeysWithValues: sourceModels.map {
-            ($0.id, Source(id: $0.id, accountID: $0.accountID, name: $0.name, palette: $0.palette,
+            ($0.id, Source(id: $0.id, accountID: $0.accountID, remoteID: $0.remoteID, timeZone: $0.timeZone, name: $0.name, palette: $0.palette,
                            isVisible: $0.isVisible, isReadOnly: $0.isReadOnly, isHoliday: $0.isHoliday,
                            isReminderList: reminderAccounts.contains($0.accountID)))
         })
@@ -143,8 +173,28 @@ final class CalendarController {
             Account(id: model.id, provider: model.provider, email: model.email, status: model.status, lastSyncedAt: model.lastSyncedAt,
                     calendarCount: sourceModels.filter { $0.accountID == model.id }.count)
         }
-        snapshots = CalendarCache.visibleSnapshots(context: context)
+        cachedSnapshots = CalendarCache.visibleSnapshots(context: context)
         if !isSyncing { status = settledStatus() }
+        // Without anything to lay on top there is no reason to draw twice.
+        if !hasOverlay { snapshots = cachedSnapshots }
+        rebuildSlots()
+        reloadGeneration += 1
+        let generation = reloadGeneration
+        Task { await applyUnsentWrites(generation) }
+    }
+
+    /// Lays the changes that have not come back from the provider over the cache.
+    private func applyUnsentWrites(_ generation: Int) async {
+        let cache = cachedSnapshots
+        let pending = await writer.pending
+        let shown = await writer.overlay(cache, calendar: calendar)
+        // A newer reload has started meanwhile; it brings its own.
+        guard generation == reloadGeneration else { return }
+        hasOverlay = !pending.isEmpty
+        unsentWrites = pending.filter { if case .sent = $0.status { false } else { true } }
+        let visible = shown.filter { sources[$0.sourceID]?.isVisible == true }
+        guard visible != snapshots else { return }
+        snapshots = visible
         rebuildSlots()
     }
 
@@ -217,6 +267,8 @@ final class CalendarController {
             guard !ready.isEmpty else { reload(); return }
             isSyncing = true
             status = .syncing
+            // Changes kept while offline go out first, so this round brings them back.
+            if networkReachable { await sendUnsentWrites() }
             for account in ready {
                 await sync(account.id)
             }
@@ -273,7 +325,10 @@ final class CalendarController {
                 try? await engineTask.value.markNeedsReauth(accountID)
                 throw CalendarSyncError.needsReauth
             }
+            let started = Date.now
             try await engineTask.value.sync(accountID, provider: provider, calendar: calendar)
+            // What was written before this sync is in the cache now.
+            await writer.didSync(accountID, startedAt: started)
             problems[accountID] = nil
             if usesNetwork { lastTryWasOffline = false }
         } catch CalendarSyncError.offline {
@@ -406,6 +461,130 @@ final class CalendarController {
             problems[accountID] = nil
             try? await engineTask.value.removeAccount(id: accountID)
             reload()
+        }
+    }
+
+    // MARK: - Writing events
+
+    /// How much of a repeating event a change or a delete reaches.
+    enum WriteScope: Hashable { case thisOccurrence, thisAndFollowing, allOccurrences }
+
+    /// Calendars a new or changed event can go to: Google and iCloud calendars that are not
+    /// read-only, of accounts that are still signed in.
+    var writableSources: [(Account, [Source])] {
+        sourcesByAccount
+            .filter { account, _ in account.provider != .reminders && account.status != .needsReauth }
+            .map { account, sources in (account, sources.filter { !$0.isReadOnly && !$0.isHoliday }) }
+            .filter { !$0.1.isEmpty }
+    }
+
+    func isWritable(_ sourceID: String) -> Bool {
+        writableSources.contains { $0.1.contains { $0.id == sourceID } }
+    }
+
+    /// The stored event an occurrence on screen came from.
+    func event(id: String) -> EventSnapshot? {
+        snapshotsByID[id]
+    }
+
+    var isOffline: Bool { !networkReachable }
+
+    /// The change to this event that has not reached its calendar yet, if there is one.
+    func unsentWrite(for occurrence: EventOccurrence) -> PendingWrite? {
+        guard !unsentByKey.isEmpty, let event = event(id: occurrence.eventID) else { return nil }
+        return unsentByKey[event.sourceID + ":" + (event.recurringEventID ?? event.remoteID)]
+    }
+
+    func isUnsent(_ occurrence: EventOccurrence) -> Bool {
+        unsentWrite(for: occurrence) != nil
+    }
+
+    /// The calendar a new event starts in: the one saved to last, while it can still be written.
+    var defaultSourceForNewEvent: String? {
+        if let last = defaults.string(forKey: "lastEventSourceID"), isWritable(last) { return last }
+        return writableSources.first?.1.first?.id
+    }
+
+    func rememberSource(_ sourceID: String) {
+        defaults.set(sourceID, forKey: "lastEventSourceID")
+    }
+
+    /// Syncs the account of `sourceID` now, after whatever is queued.
+    func resync(sourceID: String) async {
+        guard let accountID = sources[sourceID]?.accountID else { return }
+        await serially { [self] in
+            await sync(accountID)
+            reload()
+        }
+    }
+
+    /// Saves the editor's event. Online it goes to the provider (`.saved`); bring it onto the calendar
+    /// with `resync`. Offline it waits in the queue (`.queued`) and shows from there at once.
+    func save(_ editor: EventEditorModel, scope: WriteScope) async throws -> EventWriter.Outcome {
+        guard let source = sources[editor.fields.sourceID] else { throw CalendarSyncError.readOnly }
+        let draft = editor.draft()
+        let outcome: EventWriter.Outcome
+        if let event = editor.event, let occurrence = editor.occurrence {
+            let scope = Self.editScope(scope, occurrence: occurrence, event: event, calendar: calendar)
+            outcome = try await writer.update(event, to: draft, scope: scope, in: reference(source), accountID: source.accountID,
+                                              provider: provider(for: source.accountID), calendar: calendar)
+        } else {
+            outcome = try await writer.create(draft, in: reference(source), accountID: source.accountID,
+                                              provider: provider(for: source.accountID), calendar: calendar)
+        }
+        reload()
+        return outcome
+    }
+
+    @discardableResult
+    func delete(_ occurrence: EventOccurrence, scope: WriteScope) async throws -> EventWriter.Outcome {
+        guard let source = sources[occurrence.sourceID], let event = event(id: occurrence.eventID) else { throw CalendarSyncError.readOnly }
+        let outcome = try await writer.delete(event, scope: Self.editScope(scope, occurrence: occurrence, event: event, calendar: calendar),
+                                              in: reference(source), accountID: source.accountID,
+                                              provider: provider(for: source.accountID), calendar: calendar)
+        reload()
+        return outcome
+    }
+
+    /// Gives a refused change another go on the next round.
+    func retryWrite(_ id: UUID) {
+        Task {
+            await writer.retry(id)
+            reload()
+            await syncAll()
+        }
+    }
+
+    /// Drops a change that will not be sent (and later changes to the same event).
+    func discardWrite(_ id: UUID) {
+        Task {
+            await writer.discard(id)
+            reload()
+        }
+    }
+
+    private func reference(_ source: Source) -> RemoteCalendar.Reference {
+        RemoteCalendar.Reference(sourceID: source.id, remoteID: source.remoteID, timeZone: source.timeZone)
+    }
+
+    /// Sends the queue and leaves the accounts it reached for the sync that follows.
+    private func sendUnsentWrites() async {
+        _ = await writer.flush(calendar: calendar) { [weak self] accountID in
+            guard let self else { throw CalendarSyncError.offline }
+            return try await MainActor.run { try self.provider(for: accountID) }
+        }
+    }
+
+    /// The occurrence as the provider knows it: a changed occurrence by where it was meant to start.
+    private static func editScope(_ scope: WriteScope, occurrence: EventOccurrence, event: EventSnapshot, calendar: Calendar) -> EditScope {
+        var original = occurrence.start
+        if event.recurringEventID != nil {
+            original = event.originalStartDay.flatMap { DayKey.date($0, calendar: calendar) } ?? event.originalStart ?? original
+        }
+        switch scope {
+        case .thisOccurrence: return .thisOccurrence(originalStart: original)
+        case .thisAndFollowing: return .thisAndFollowing(originalStart: original)
+        case .allOccurrences: return .allOccurrences
         }
     }
 

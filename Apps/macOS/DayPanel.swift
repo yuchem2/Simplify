@@ -46,7 +46,7 @@ struct DayPanel: View {
                                 if period.scope == .week {
                                     WeekEvents(period: period, model: model, calendars: calendars)
                                 } else {
-                                    DayEvents(slots: calendars.slots[period.start] ?? [], day: period.start, calendars: calendars, calendar: model.calendar, empty: section.empty)
+                                    DayEvents(slots: calendars.slots[period.start] ?? [], day: period.start, model: model, calendars: calendars, calendar: model.calendar, empty: section.empty)
                                 }
                             } else if section.kind == .memo {
                                 Text(section.empty)
@@ -100,6 +100,7 @@ struct DayPanel: View {
 private struct DayEvents: View {
     let slots: [OccurrenceBuilder.Slot]
     let day: Date
+    let model: AppModel
     let calendars: CalendarController
     let calendar: Calendar
     let empty: String
@@ -133,6 +134,7 @@ private struct DayEvents: View {
                         }
                     }
                     .padding(.vertical, 3)
+                    .pickedEvent(slot.occurrence, day: day, place: .panel, model: model, calendars: calendars)
                     .accessibilityElement(children: .combine)
                 }
             }
@@ -183,6 +185,7 @@ private struct WeekEvents: View {
                                     .font(.system(size: 11))
                                     .foregroundStyle(.inkSoft)
                             }
+                            .pickedEvent(slot.occurrence, day: day, place: .week, model: model, calendars: calendars)
                             .accessibilityElement(children: .combine)
                         }
                     }
@@ -217,5 +220,18 @@ enum EventTime {
         format.timeZone = calendar.timeZone
         format.dateFormat = "a h:mm" // 오전 9:30
         return format.string(from: occurrence.start)
+    }
+}
+
+private extension View {
+    /// A panel row that opens its event; the picked one gets an ink outline.
+    func pickedEvent(_ occurrence: EventOccurrence, day: Date, place: EventAnchor.Place, model: AppModel, calendars: CalendarController) -> some View {
+        let anchor = EventAnchor.row(occurrence.id, day: day, in: place)
+        return padding(.horizontal, 4)
+            .overlay { if model.selectedEventID == occurrence.id { Rectangle().strokeBorder(.ink, lineWidth: Metrics.line) } }
+            .unsentOutline(calendars.isUnsent(occurrence))
+            .padding(.horizontal, -4)
+            .eventAnchor(anchor)
+            .opensEvent(occurrence, day: day, anchor: anchor, model: model, calendars: calendars)
     }
 }

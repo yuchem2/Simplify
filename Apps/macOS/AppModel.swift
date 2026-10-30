@@ -13,6 +13,12 @@ final class AppModel {
     var panelScope: PeriodScope = .day
     /// The settings modal is up; the month underneath ignores keys and clicks.
     var isSettingsOpen = false
+    /// The event popover (an event's details, or the editor) and what it points at.
+    var popover: EventPopoverState?
+    /// The event picked with a click or Tab, by occurrence id; Return opens it, ⌫ deletes it.
+    var selectedEventID: String?
+    /// Settings or the event popover is up; the month's menus and arrow keys wait.
+    var isModalOpen: Bool { isSettingsOpen || popover != nil }
     /// The day panel is folded away so the month gets the whole window. Remembered across launches.
     var isPanelHidden = UserDefaults.standard.bool(forKey: "isPanelHidden") {
         didSet { UserDefaults.standard.set(isPanelHidden, forKey: "isPanelHidden") }
@@ -72,7 +78,9 @@ final class AppModel {
 
     /// Choosing a day outside the shown month turns to that month.
     func select(_ day: Date) {
-        selectedDay = calendar.startOfDay(for: day)
+        let day = calendar.startOfDay(for: day)
+        if day != selectedDay { selectedEventID = nil }
+        selectedDay = day
         if !month.contains(selectedDay) {
             month = Period(containing: selectedDay, scope: .month, calendar: calendar)
         }

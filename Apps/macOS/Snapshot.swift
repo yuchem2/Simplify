@@ -28,8 +28,53 @@ enum Snapshot {
                    name: "icloud", appearance: .aqua, scheme: .light)
             render(ZStack { MainView(model: model, calendars: shown); SettingsModal(model: model, calendars: shown, intro: .icloud) },
                    name: "icloud-dark", appearance: .darkAqua, scheme: .dark)
+            model.isSettingsOpen = false
+            renderEventPopovers(model: model, calendars: shown)
         }
         NSApp.terminate(nil)
+    }
+
+    /// The event popover: details, the editor, a new event, and the questions it asks.
+    private static func renderEventPopovers(model: AppModel, calendars: CalendarController) {
+        let today = model.today
+        func occurrence(_ title: String, on day: Date = today) -> EventOccurrence? {
+            calendars.slots[day]?.first { $0.occurrence.title == title }?.occurrence
+        }
+        func light(_ name: String) { render(MainView(model: model, calendars: calendars), name: name, appearance: .aqua, scheme: .light) }
+        // A weekly event in this week, whatever weekday today is.
+        let week = Period(containing: today, scope: .week, calendar: model.calendar).days
+        guard let standupDay = week.first(where: { occurrence("주간 스탠드업", on: $0) != nil }),
+              let standup = occurrence("주간 스탠드업", on: standupDay), let review = occurrence("디자인 리뷰") else { return }
+        model.openEvent(standup, day: standupDay, anchor: EventAnchor.row(standup.id, day: standupDay, in: .month), calendars: calendars)
+        light("event-detail")
+        model.popover?.question = .delete
+        light("event-delete-scope")
+        model.edit(standup, calendars: calendars)
+        light("event-edit")
+        render(MainView(model: model, calendars: calendars), name: "event-edit-dark", appearance: .darkAqua, scheme: .dark)
+        if case .editor(let editor)? = model.popover?.content {
+            editor.setStart(editor.fields.start.addingTimeInterval(1800))
+            model.popover?.question = .saveScope
+            light("event-save-scope")
+            model.popover?.question = nil
+            editor.phase = .failed(CalendarSyncError.http(status: 503).message)
+            light("event-failed")
+        }
+        model.popover = nil
+        model.openEvent(review, day: today, anchor: EventAnchor.row(review.id, day: today, in: .panel), calendars: calendars)
+        model.popover?.question = .delete
+        light("event-delete")
+        model.popover = nil
+        let holidayDay = model.calendar.date(byAdding: .day, value: -17, to: today)!
+        if let hangul = occurrence("한글날", on: holidayDay) {
+            model.openEvent(hangul, day: holidayDay, anchor: EventAnchor.row(hangul.id, day: holidayDay, in: .month), calendars: calendars)
+            light("event-readonly")
+            model.popover = nil
+        }
+        model.select(today)
+        model.newEvent(on: model.calendar.date(byAdding: .day, value: 2, to: today)!, calendars: calendars)
+        light("event-new")
+        model.popover = nil
     }
 
     private static func render(_ view: some View, name: String, appearance: NSAppearance.Name, scheme: ColorScheme) {
@@ -123,7 +168,8 @@ enum Snapshot {
         UserDefaults.standard.removePersistentDomain(forName: "dev.yoom.simplify.snapshot")
         let controller = CalendarController(container: container, calendar: calendar, tokens: KeychainTokenStore(service: "dev.yoom.simplify.snapshot"),
                                             credentials: KeychainCredentialStore(service: "dev.yoom.simplify.snapshot"),
-                                            defaults: UserDefaults(suiteName: "dev.yoom.simplify.snapshot")!)
+                                            defaults: UserDefaults(suiteName: "dev.yoom.simplify.snapshot")!,
+                                            writer: EventWriter(fileURL: FileManager.default.temporaryDirectory.appending(path: "snapshot-pending.json")))
         controller.show(days: days, calendar: calendar)
         return controller
     }

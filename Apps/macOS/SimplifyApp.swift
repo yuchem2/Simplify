@@ -38,11 +38,17 @@ struct SimplifyApp: App {
             CommandGroup(replacing: .appSettings) {
                 Button("설정…") { model.isSettingsOpen = true }
                     .keyboardShortcut(",", modifiers: .command)
+                    .disabled(model.popover != nil)
+            }
+            CommandGroup(replacing: .newItem) {
+                Button("새 일정") { model.newEvent(on: model.selectedDay, calendars: calendars) }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(model.isModalOpen || calendars.writableSources.isEmpty)
             }
             CommandGroup(after: .toolbar) {
                 Button(model.isPanelHidden ? "패널 보기" : "패널 숨기기") { model.isPanelHidden.toggle() }
                     .keyboardShortcut("\\", modifiers: .command)
-                    .disabled(model.isSettingsOpen)
+                    .disabled(model.isModalOpen)
             }
             CommandMenu("이동") {
                 Group {
@@ -53,8 +59,8 @@ struct SimplifyApp: App {
                     Button("다음 달") { model.turnMonth(by: 1) }
                         .keyboardShortcut(.rightArrow, modifiers: .command)
                 }
-                // The month under the settings modal stays put.
-                .disabled(model.isSettingsOpen)
+                // The month under the settings modal or an event popover stays put.
+                .disabled(model.isModalOpen)
             }
         }
     }

@@ -34,13 +34,18 @@ struct MonthSheet: View {
                     ForEach(grid.weeks, id: \.first) { week in
                         HStack(spacing: 0) {
                             ForEach(week, id: \.self) { day in
-                                DayCell(day: day, model: model, inMonth: grid.isInMonth(day),
+                                DayCell(day: day, model: model, calendars: calendars, inMonth: grid.isInMonth(day),
                                         slots: calendars.slots[day] ?? [], sources: calendars.sources,
                                         isHoliday: calendars.holidayDays.contains(day), height: height, textSize: model.cellTextSize) {
-                                    // Clicking the chosen day again opens a folded panel.
-                                    if model.isSelected(day), model.isPanelHidden { model.isPanelHidden = false }
-                                    model.select(day)
-                                    focused = true
+                                    // After the click's other handlers: an event click or a double-click opens the
+                                    // event popover in the same click, and then the panel and focus stay as they are.
+                                    Task { @MainActor in
+                                        guard !model.isModalOpen else { return }
+                                        // Clicking the chosen day again opens a folded panel.
+                                        if model.isSelected(day), model.isPanelHidden { model.isPanelHidden = false }
+                                        model.select(day)
+                                        focused = true
+                                    }
                                 }
                                 .frame(width: width, height: height)
                             }
@@ -59,16 +64,26 @@ struct MonthSheet: View {
         .focusEffectDisabled()
         .focused($focused)
         .onAppear { focused = true }
-        // Arrow keys work again as soon as the settings modal closes.
-        .onChange(of: model.isSettingsOpen) { _, open in if !open { focused = true } }
+        // Arrow keys work again as soon as the settings modal or the event popover closes.
+        .onChange(of: model.isModalOpen) { _, open in if !open { focused = true } }
         .onKeyPress(.return) {
+            guard !model.isModalOpen else { return .ignored }
+            if model.openSelectedEvent(calendars: calendars) { return .handled }
             // With the panel folded, Return opens it on the chosen day.
-            guard !model.isSettingsOpen, model.isPanelHidden else { return .ignored }
+            guard model.isPanelHidden else { return .ignored }
             model.isPanelHidden = false
             return .handled
         }
+        .onKeyPress(.delete) {
+            guard !model.isModalOpen else { return .ignored }
+            return model.deleteSelectedEvent(calendars: calendars) ? .handled : .ignored
+        }
+        .onKeyPress(keys: [.tab]) { press in
+            guard !model.isModalOpen else { return .ignored }
+            return model.moveEventSelection(by: press.modifiers.contains(.shift) ? -1 : 1, calendars: calendars) ? .handled : .ignored
+        }
         .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
-            guard !model.isSettingsOpen else { return .ignored }
+            guard !model.isModalOpen else { return .ignored }
             // Arrow events carry the numeric-pad and function flags, and Caps Lock may be on,
             // so only real modifiers count. ⌘← / ⌘→ belong to the 이동 menu.
             guard press.modifiers.isDisjoint(with: [.command, .option, .control, .shift]) else { return .ignored }
@@ -107,6 +122,7 @@ private struct GridLines: Shape {
 private struct DayCell: View {
     let day: Date
     let model: AppModel
+    let calendars: CalendarController
     let inMonth: Bool
     let slots: [OccurrenceBuilder.Slot]
     let sources: [String: CalendarController.Source]
@@ -118,7 +134,8 @@ private struct DayCell: View {
     var body: some View {
         let isToday = model.isToday(day)
         let number = model.calendar.component(.day, from: day)
-        Button(action: onSelect) {
+        // Not a Button: anchors of the event rows inside a button label never reach the popover.
+        ZStack(alignment: .topLeading) {
             VStack(alignment: .leading, spacing: 2) {
                 // Numbers start on the same line as the weekday labels; today's disc grows
                 // around its number without moving it.
@@ -132,9 +149,14 @@ private struct DayCell: View {
                     .padding(.leading, isToday ? -4 : 0)
                 let (shown, hidden) = visibleSlots
                 ForEach(shown, id: \.occurrence.id) { slot in
+                    let anchor = EventAnchor.row(slot.occurrence.id, day: day, in: .month)
                     EventRow(slot: slot, source: sources[slot.occurrence.sourceID], textSize: textSize,
                              // A band repeats its title at the start of each row of the grid.
-                             showsTitle: !slot.continuesFromPrevious || model.calendar.component(.weekday, from: day) == model.calendar.firstWeekday)
+                             showsTitle: !slot.continuesFromPrevious || model.calendar.component(.weekday, from: day) == model.calendar.firstWeekday,
+                             isSelected: model.selectedEventID == slot.occurrence.id)
+                        .unsentOutline(calendars.isUnsent(slot.occurrence))
+                        .eventAnchor(anchor)
+                        .opensEvent(slot.occurrence, day: day, anchor: anchor, model: model, calendars: calendars)
                 }
                 if hidden > 0 {
                     Text("+\(hidden)개 더")
@@ -154,7 +176,13 @@ private struct DayCell: View {
             .clipped()
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // A double-click on the empty part of a day starts a new event there.
+        .onTapGesture(count: 2) { model.newEvent(on: day, calendars: calendars) }
+        .simultaneousGesture(TapGesture().onEnded(onSelect))
+        .eventAnchor(EventAnchor.cell(day))
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { onSelect() }
         .accessibilityLabel(accessibilityText(isToday: isToday))
         .accessibilityAddTraits(model.isSelected(day) ? .isSelected : [])
     }
@@ -189,6 +217,8 @@ private struct EventRow: View {
     let source: CalendarController.Source?
     let textSize: AppModel.CellTextSize
     let showsTitle: Bool
+    /// Picked with a click or Tab: drawn in ink.
+    var isSelected = false
 
     var body: some View {
         let palette = source?.palette ?? .grey
@@ -196,17 +226,17 @@ private struct EventRow: View {
         let title = Text(slot.occurrence.title)
             .font(.system(size: textSize.points))
             .strikethrough(done)
-            .foregroundStyle(EventTime.titleColor(slot.occurrence, source: source))
+            .foregroundStyle(isSelected ? Color.onInk : EventTime.titleColor(slot.occurrence, source: source))
             .lineLimit(1)
         if source?.isHoliday == true {
-            title
+            title.background { if isSelected { Rectangle().fill(.ink).padding(.horizontal, -2) } }
         } else if slot.occurrence.isBand, source?.isReminderList != true {
             title
                 .opacity(showsTitle ? 1 : 0)
                 .padding(.leading, slot.continuesFromPrevious ? 6 : 9)
                 .padding(.trailing, 4)
                 .frame(maxWidth: .infinity, minHeight: textSize.rowHeight - 2, alignment: .leading)
-                .background(palette.tint)
+                .background(isSelected ? Color.ink : palette.tint)
                 .overlay(alignment: .leading) {
                     if !slot.continuesFromPrevious {
                         Rectangle().fill(palette.ink).frame(width: 6)
@@ -226,6 +256,7 @@ private struct EventRow: View {
                 EventMark(occurrence: slot.occurrence, source: source, size: textSize.markSize)
                 title
             }
+            .background { if isSelected { Rectangle().fill(.ink).padding(.horizontal, -2) } }
             .padding(.leading, -6)
         }
     }

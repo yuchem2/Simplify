@@ -28,6 +28,9 @@ struct MainView: View {
             }
             .allowsHitTesting(!model.isSettingsOpen)
             .accessibilityHidden(model.isSettingsOpen)
+            .overlayPreferenceValue(EventAnchorKey.self) { anchors in
+                EventPopoverLayer(model: model, calendars: calendars, anchors: anchors)
+            }
 
             if model.isSettingsOpen {
                 SettingsModal(model: model, calendars: calendars)
@@ -51,6 +54,7 @@ struct MainView: View {
         }
         #if DEBUG
         .task { Snapshot.runIfRequested(model: model, calendars: calendars) }
+        .task { WriteCheck.runIfRequested(model: model, calendars: calendars) }
         #endif
     }
 }
@@ -85,11 +89,15 @@ struct MainToolbar: View {
             SegmentedTabs([(CalendarView.month, "월"), (.week, "주")], selection: $view, disabled: [.week])
                 .help("주 보기는 준비 중이에요")
             Spacer()
-            SyncStatusView(calendars: calendars) { model.isSettingsOpen = true }
-            Button {} label: { Label("새 일정", systemImage: "plus") }
+            if calendars.unsentWrites.isEmpty {
+                SyncStatusView(calendars: calendars) { model.isSettingsOpen = true }
+            } else {
+                UnsentWritesButton(calendars: calendars)
+            }
+            Button { model.newEvent(on: model.selectedDay, calendars: calendars) } label: { Label("새 일정", systemImage: "plus") }
                 .buttonStyle(DrawnButtonStyle(.primary))
-                .disabled(true)
-                .help("일정 만들기는 준비 중이에요")
+                .disabled(calendars.writableSources.isEmpty)
+                .help(calendars.writableSources.isEmpty ? "설정에서 Google이나 iCloud를 연결해 주세요" : "새 일정 (⌘N)")
             Button { model.isPanelHidden.toggle() } label: { Image(systemName: "sidebar.right").font(.system(size: 13)) }
                 // Never ink-filled: the primary fill belongs to 새 일정 alone.
                 .buttonStyle(DrawnButtonStyle(model.isPanelHidden ? .plain : .toggled))
