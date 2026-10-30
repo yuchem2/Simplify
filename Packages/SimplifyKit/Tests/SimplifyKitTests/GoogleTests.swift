@@ -5,19 +5,27 @@ import Testing
 /// Answers requests from a script and records them.
 final class FakeHTTP: HTTPTransport, @unchecked Sendable {
     private let lock = NSLock()
-    private var handler: (URLRequest) throws -> (Int, String)
+    private var handler: (URLRequest) throws -> (Int, String, [String: String])
     private(set) var requests: [URLRequest] = []
 
     init(_ handler: @escaping (URLRequest) throws -> (Int, String)) {
+        self.handler = { request in
+            let (status, body) = try handler(request)
+            return (status, body, [:])
+        }
+    }
+
+    /// Answers with response headers too (an ETag).
+    init(headers handler: @escaping (URLRequest) throws -> (Int, String, [String: String])) {
         self.handler = handler
     }
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (status, body) = try lock.withLock {
+        let (status, body, headers) = try lock.withLock {
             requests.append(request)
             return try handler(request)
         }
-        return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
+        return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: headers)!)
     }
 }
 

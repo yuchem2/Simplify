@@ -24,7 +24,7 @@ public struct DAVCalendar: Sendable, Equatable {
     public var timeZone: String?
 }
 
-/// The parts of CalDAV (RFC 4791, sync from RFC 6578) the app reads.
+/// The parts of CalDAV (RFC 4791, sync from RFC 6578) the app reads and writes.
 public struct CalDAVClient: Sendable {
     public static let iCloud = URL(string: "https://caldav.icloud.com/")!
 
@@ -139,17 +139,65 @@ public struct CalDAVClient: Sendable {
         return results
     }
 
+    /// One resource's iCalendar text and ETag. A resource gone since it was read is a conflict.
+    public func resource(_ url: URL) async throws -> (ics: String, etag: String?) {
+        let (data, response) = try await request("GET", url)
+        switch response.statusCode {
+        case 200: return (String(decoding: data, as: UTF8.self), response.value(forHTTPHeaderField: "ETag"))
+        case 404, 410: throw CalendarSyncError.conflict
+        default: throw Self.writeFailure(response.statusCode)
+        }
+    }
+
+    /// Writes a resource: a new one (`isNew`), or over the version with `etag`. Either way a
+    /// resource made or changed by someone else in between is a conflict. A server that gave
+    /// no ETag gets the write without a precondition.
+    public func put(_ url: URL, ics: String, etag: String?, isNew: Bool = false) async throws {
+        var headers = ["Content-Type": "text/calendar; charset=utf-8"]
+        if isNew { headers["If-None-Match"] = "*" } else if let etag { headers["If-Match"] = etag }
+        let (_, response) = try await request("PUT", url, headers: headers, body: Data(ics.utf8))
+        guard [200, 201, 204].contains(response.statusCode) else { throw Self.writeFailure(response.statusCode) }
+    }
+
+    /// Deletes a resource; one already gone counts as deleted.
+    public func delete(_ url: URL, etag: String?) async throws {
+        let (_, response) = try await request("DELETE", url, headers: etag.map { ["If-Match": $0] } ?? [:])
+        guard [200, 204, 404, 410].contains(response.statusCode) else { throw Self.writeFailure(response.statusCode) }
+    }
+
+    /// `/123/calendars/work/A B.ics` on the collection's server.
+    public static func url(ofResource href: String, in collection: URL) -> URL? {
+        var components = URLComponents(url: collection, resolvingAgainstBaseURL: false)
+        components?.path = href
+        components?.query = nil
+        return components?.url
+    }
+
     // MARK: - Requests
 
     private func send(_ method: String, _ url: URL, depth: String?, body: String) async throws -> Data {
+        var headers = ["Content-Type": "application/xml; charset=utf-8"]
+        if let depth { headers["Depth"] = depth }
+        let (data, response) = try await request(method, url, headers: headers, body: Data(("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" + body).utf8))
+        switch response.statusCode {
+        case 207, 200:
+            return data
+        case let status where [400, 403, 409].contains(status) && String(decoding: data, as: UTF8.self).contains("valid-sync-token"):
+            throw CalendarSyncError.syncTokenExpired
+        default:
+            throw CalendarSyncError.http(status: response.statusCode)
+        }
+    }
+
+    /// Sends one request, waiting out busy servers; any other answer comes back for the caller.
+    private func request(_ method: String, _ url: URL, headers: [String: String] = [:], body: Data? = nil) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 30
-        request.setValue("application/xml; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        if let depth { request.setValue(depth, forHTTPHeaderField: "Depth") }
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         let login = Data("\(credentials.username):\(credentials.password)".utf8).base64EncodedString()
         request.setValue("Basic \(login)", forHTTPHeaderField: "Authorization")
-        request.httpBody = Data(("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" + body).utf8)
+        request.httpBody = body
 
         for attempt in 0..<4 {
             let (data, response): (Data, HTTPURLResponse)
@@ -159,21 +207,25 @@ public struct CalDAVClient: Sendable {
                 throw CalendarSyncError.offline
             }
             switch response.statusCode {
-            case 207, 200:
-                return data
             case 401:
                 throw CalendarSyncError.needsReauth
-            case let status where [400, 403, 409].contains(status) && String(decoding: data, as: UTF8.self).contains("valid-sync-token"):
-                throw CalendarSyncError.syncTokenExpired
             case 429, 500...599:
                 // Busy or a hiccup: wait 1, 2, 4 seconds, then give up.
                 guard attempt < 3 else { throw CalendarSyncError.http(status: response.statusCode) }
                 try await Task.sleep(for: .seconds(1 << attempt))
             default:
-                throw CalendarSyncError.http(status: response.statusCode)
+                return (data, response)
             }
         }
         throw CalendarSyncError.http(status: 503)
+    }
+
+    private static func writeFailure(_ status: Int) -> CalendarSyncError {
+        switch status {
+        case 412: .conflict
+        case 403: .readOnly
+        default: .http(status: status)
+        }
     }
 
     /// The collection's own entry in a sync report, written as a path or a full URL.

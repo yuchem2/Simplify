@@ -49,6 +49,20 @@ public actor RemindersProvider: CalendarProvider {
         return Self.changes(for: snapshots, syncToken: syncToken)
     }
 
+    // Reminders stay read-only: the calendar only shows them.
+
+    public func createEvent(_ draft: EventDraft, id: String, in remote: RemoteCalendar.Reference, calendar: Calendar) async throws {
+        throw CalendarSyncError.readOnly
+    }
+
+    public func updateEvent(_ event: EventSnapshot, to draft: EventDraft, scope: EditScope, in remote: RemoteCalendar.Reference, calendar: Calendar) async throws {
+        throw CalendarSyncError.readOnly
+    }
+
+    public func deleteEvent(_ event: EventSnapshot, scope: EditScope, in remote: RemoteCalendar.Reference, calendar: Calendar) async throws {
+        throw CalendarSyncError.readOnly
+    }
+
     /// Everything as a full fetch, or nothing when it matches what was stored last time.
     static func changes(for snapshots: [EventSnapshot], syncToken: String?) -> CalendarChanges {
         let encoder = JSONEncoder()

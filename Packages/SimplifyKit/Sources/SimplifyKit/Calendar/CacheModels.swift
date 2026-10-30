@@ -70,6 +70,7 @@ public final class EventRecord {
     public var remoteID: String
     public var title: String
     public var location: String?
+    public var notes: String?
     public var isAllDay: Bool
     public var start: Date?
     public var end: Date?
@@ -99,6 +100,7 @@ public final class EventRecord {
     public func update(from s: EventSnapshot) {
         title = s.title
         location = s.location
+        notes = s.notes
         isAllDay = s.isAllDay
         start = s.start
         end = s.end
@@ -120,6 +122,7 @@ public final class EventRecord {
     public var snapshot: EventSnapshot {
         var s = EventSnapshot(id: id, sourceID: sourceID, remoteID: remoteID, title: title, isAllDay: isAllDay)
         s.location = location
+        s.notes = notes
         s.start = start
         s.end = end
         s.startDay = startDay

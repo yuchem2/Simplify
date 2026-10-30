@@ -10,6 +10,16 @@ public protocol CalendarProvider: Sendable {
     /// What changed in one calendar since `syncToken`, or everything when it is nil.
     /// `calendar` is the person's calendar, for reading dates that carry no zone.
     func changes(in remote: RemoteCalendar.Reference, syncToken: String?, calendar: Calendar) async throws -> CalendarChanges
+
+    /// Writes a new event. `id` is chosen by the caller (`EventDraft.newID()`), so a queued
+    /// event can be edited again before it reaches the provider and a retry never makes two.
+    func createEvent(_ draft: EventDraft, id: String, in remote: RemoteCalendar.Reference, calendar: Calendar) async throws
+
+    /// Changes `event` (a single event, a series, or one changed occurrence of a series) as `draft`
+    /// says, over `scope`. Nothing is written to the cache; the account is synced again afterwards.
+    func updateEvent(_ event: EventSnapshot, to draft: EventDraft, scope: EditScope, in remote: RemoteCalendar.Reference, calendar: Calendar) async throws
+
+    func deleteEvent(_ event: EventSnapshot, scope: EditScope, in remote: RemoteCalendar.Reference, calendar: Calendar) async throws
 }
 
 public struct RemoteCalendar: Sendable, Hashable {
@@ -31,10 +41,16 @@ public struct RemoteCalendar: Sendable, Hashable {
     }
 
     /// What `changes(in:)` needs to know about a stored calendar.
-    public struct Reference: Sendable {
+    public struct Reference: Sendable, Codable, Hashable {
         public var sourceID: String
         public var remoteID: String
         public var timeZone: String?
+
+        public init(sourceID: String, remoteID: String, timeZone: String?) {
+            self.sourceID = sourceID
+            self.remoteID = remoteID
+            self.timeZone = timeZone
+        }
     }
 }
 

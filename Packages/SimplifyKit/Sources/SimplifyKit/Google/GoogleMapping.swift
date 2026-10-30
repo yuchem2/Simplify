@@ -8,6 +8,7 @@ extension GoogleEvent {
         var event = EventSnapshot(id: sourceID + ":" + id, sourceID: sourceID, remoteID: id,
                                   title: summary?.isEmpty == false ? summary! : "(제목 없음)", isAllDay: isAllDay)
         event.location = location
+        event.notes = description.flatMap { $0.isEmpty ? nil : $0 }
         event.isCancelled = status == "cancelled"
         event.timeZone = start?.timeZone ?? defaultZone
 

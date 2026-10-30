@@ -20,7 +20,7 @@ public struct URLSessionTransport: HTTPTransport {
 }
 
 /// Why syncing a calendar account stopped.
-public enum CalendarSyncError: Error, Equatable, Sendable {
+public enum CalendarSyncError: Error, Equatable, Sendable, Codable {
     /// The refresh token was revoked or expired; the person has to sign in again.
     case needsReauth
     /// The provider no longer accepts the saved sync token; fetch everything again.
@@ -35,6 +35,10 @@ public enum CalendarSyncError: Error, Equatable, Sendable {
     /// `reason` is the provider's machine-readable error reason, when it sent one.
     case http(status: Int, reason: String? = nil)
     case invalidResponse
+    /// The event was changed or deleted elsewhere since it was read (HTTP 412, or gone).
+    case conflict
+    /// The calendar does not take changes (a reminders list, a calendar shared read-only).
+    case readOnly
 
     /// What to tell the person, in the app's voice.
     public var message: String {
@@ -47,6 +51,8 @@ public enum CalendarSyncError: Error, Equatable, Sendable {
         case .syncTokenExpired: "일정을 처음부터 다시 받는 중이에요."
         case .http(let status, let reason): "서버가 요청을 거절했어요 (\(status)\(reason.map { " · " + $0 } ?? ""))."
         case .invalidResponse: "서버 응답을 읽지 못했어요."
+        case .conflict: "다른 곳에서 먼저 바뀐 일정이에요. 새로 받은 뒤 다시 고쳐 주세요."
+        case .readOnly: "읽기 전용 캘린더라 고칠 수 없어요."
         }
     }
 

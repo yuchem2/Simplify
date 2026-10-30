@@ -6,6 +6,8 @@ public enum ICalendar {
         var name: String
         var params: [String: String]
         var value: String
+        /// The line as it was read (unfolded), written back unchanged when the property is kept.
+        var raw: String? = nil
     }
 
     struct Component {
@@ -24,11 +26,7 @@ public enum ICalendar {
     ///   - calendar: The person's calendar, for times that name no zone when the calendar has none.
     ///   - defaultZone: The calendar collection's zone, for floating times.
     public static func events(in text: String, sourceID: String, href: String, calendar: Calendar, defaultZone: String? = nil) -> [EventSnapshot] {
-        var floating = Floating(calendar: calendar, zone: nil)
-        if let defaultZone, let zone = TimeZone(identifier: defaultZone) {
-            floating.calendar.timeZone = zone
-            floating.zone = defaultZone
-        }
+        let floating = floating(calendar: calendar, defaultZone: defaultZone)
         return parse(text)
             .flatMap { $0.name == "VCALENDAR" ? $0.children : [$0] }
             .filter { $0.name == "VEVENT" }
@@ -42,6 +40,15 @@ public enum ICalendar {
         var zone: String?
     }
 
+    static func floating(calendar: Calendar, defaultZone: String?) -> Floating {
+        var floating = Floating(calendar: calendar, zone: nil)
+        if let defaultZone, let zone = TimeZone(identifier: defaultZone) {
+            floating.calendar.timeZone = zone
+            floating.zone = defaultZone
+        }
+        return floating
+    }
+
     private static func event(from component: Component, sourceID: String, href: String, floating: Floating) -> EventSnapshot? {
         guard let uid = component.first("UID")?.value, !uid.isEmpty,
               let startProperty = component.first("DTSTART"), let start = moment(startProperty, floating: floating) else { return nil }
@@ -50,6 +57,7 @@ public enum ICalendar {
                                   title: summary.isEmpty ? "(제목 없음)" : summary, isAllDay: start.isDay)
         event.resourceHref = href
         event.location = component.first("LOCATION").map { unescape($0.value) }.flatMap { $0.isEmpty ? nil : $0 }
+        event.notes = component.first("DESCRIPTION").map { unescape($0.value) }.flatMap { $0.isEmpty ? nil : $0 }
         event.isCancelled = component.first("STATUS")?.value.uppercased() == "CANCELLED"
 
         let end = component.first("DTEND").flatMap { moment($0, floating: floating) }
@@ -258,7 +266,7 @@ public enum ICalendar {
             let kv = segment.split(separator: "=", maxSplits: 1).map(String.init)
             if kv.count == 2 { params[kv[0].uppercased()] = kv[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"")) }
         }
-        return Property(name: name.uppercased(), params: params, value: value)
+        return Property(name: name.uppercased(), params: params, value: value, raw: line)
     }
 
     /// `\n`, `\,`, `\;`, `\\` in TEXT values.

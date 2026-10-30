@@ -9,6 +9,8 @@ public struct EventSnapshot: Codable, Hashable, Sendable {
     public var remoteID: String
     public var title: String
     public var location: String?
+    /// Google's `description`, iCalendar's `DESCRIPTION`.
+    public var notes: String?
     public var isAllDay: Bool
     /// Timed events: the instants. All-day events: unused.
     public var start: Date?
