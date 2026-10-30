@@ -32,10 +32,11 @@ struct MonthSheet: View {
                 let height = geo.size.height / CGFloat(grid.weeks.count)
                 VStack(spacing: 0) {
                     ForEach(grid.weeks, id: \.first) { week in
+                        let lanes = calendars.lanes[week[0]]
                         HStack(spacing: 0) {
                             ForEach(week, id: \.self) { day in
                                 DayCell(day: day, model: model, calendars: calendars, inMonth: grid.isInMonth(day),
-                                        slots: calendars.slots[day] ?? [], sources: calendars.sources,
+                                        slots: calendars.slots[day] ?? [], lanes: lanes, sources: calendars.sources,
                                         isHoliday: calendars.holidayDays.contains(day), height: height, textSize: model.cellTextSize) {
                                     // After the click's other handlers: an event click or a double-click opens the
                                     // event popover in the same click, and then the panel and focus stay as they are.
@@ -60,41 +61,7 @@ struct MonthSheet: View {
         .padding(.top, 18)
         .padding(.bottom, 20)
         .mouldedFrame()
-        .focusable()
-        .focusEffectDisabled()
-        .focused($focused)
-        .onAppear { focused = true }
-        // Arrow keys work again as soon as the settings modal or the event popover closes.
-        .onChange(of: model.isModalOpen) { _, open in if !open { focused = true } }
-        .onKeyPress(.return) {
-            guard !model.isModalOpen else { return .ignored }
-            if model.openSelectedEvent(calendars: calendars) { return .handled }
-            // With the panel folded, Return opens it on the chosen day.
-            guard model.isPanelHidden else { return .ignored }
-            model.isPanelHidden = false
-            return .handled
-        }
-        .onKeyPress(.delete) {
-            guard !model.isModalOpen else { return .ignored }
-            return model.deleteSelectedEvent(calendars: calendars) ? .handled : .ignored
-        }
-        .onKeyPress(keys: [.tab]) { press in
-            guard !model.isModalOpen else { return .ignored }
-            return model.moveEventSelection(by: press.modifiers.contains(.shift) ? -1 : 1, calendars: calendars) ? .handled : .ignored
-        }
-        .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
-            guard !model.isModalOpen else { return .ignored }
-            // Arrow events carry the numeric-pad and function flags, and Caps Lock may be on,
-            // so only real modifiers count. ⌘← / ⌘→ belong to the 이동 menu.
-            guard press.modifiers.isDisjoint(with: [.command, .option, .control, .shift]) else { return .ignored }
-            switch press.key {
-            case .leftArrow: model.moveSelection(byDays: -1)
-            case .rightArrow: model.moveSelection(byDays: 1)
-            case .upArrow: model.moveSelection(byDays: -7)
-            default: model.moveSelection(byDays: 7)
-            }
-            return .handled
-        }
+        .calendarKeys(model: model, calendars: calendars, focused: $focused)
     }
 }
 
@@ -125,6 +92,8 @@ private struct DayCell: View {
     let calendars: CalendarController
     let inMonth: Bool
     let slots: [OccurrenceBuilder.Slot]
+    /// The week's band rows, so a band stays on one row across the week.
+    let lanes: BandLanes?
     let sources: [String: CalendarController.Source]
     let isHoliday: Bool
     let height: CGFloat
@@ -147,16 +116,21 @@ private struct DayCell: View {
                     .background { if isToday { Capsule().fill(.ink) } }
                     // The disc's left edge sits 4 pt before the date line, well inside the selection.
                     .padding(.leading, isToday ? -4 : 0)
-                let (shown, hidden) = visibleSlots
-                ForEach(shown, id: \.occurrence.id) { slot in
-                    let anchor = EventAnchor.row(slot.occurrence.id, day: day, in: .month)
-                    EventRow(slot: slot, source: sources[slot.occurrence.sourceID], textSize: textSize,
-                             // A band repeats its title at the start of each row of the grid.
-                             showsTitle: !slot.continuesFromPrevious || model.calendar.component(.weekday, from: day) == model.calendar.firstWeekday,
-                             isSelected: model.selectedEventID == slot.occurrence.id)
-                        .unsentOutline(calendars.isUnsent(slot.occurrence))
-                        .eventAnchor(anchor)
-                        .opensEvent(slot.occurrence, day: day, anchor: anchor, model: model, calendars: calendars)
+                let (shown, hidden) = visibleRows
+                ForEach(Array(shown.enumerated()), id: \.offset) { _, slot in
+                    if let slot {
+                        let anchor = EventAnchor.row(slot.occurrence.id, day: day, in: .month)
+                        EventRow(slot: slot, source: sources[slot.occurrence.sourceID], textSize: textSize,
+                                 // A band repeats its title at the start of each row of the grid.
+                                 showsTitle: !slot.continuesFromPrevious || model.calendar.component(.weekday, from: day) == model.calendar.firstWeekday,
+                                 isSelected: model.selectedEventID == slot.occurrence.id)
+                            .unsentOutline(calendars.isUnsent(slot.occurrence))
+                            .eventAnchor(anchor)
+                            .opensEvent(slot.occurrence, day: day, anchor: anchor, model: model, calendars: calendars)
+                    } else {
+                        // A row kept for a band that runs on other days of the week.
+                        Color.clear.frame(height: textSize.rowHeight - 2)
+                    }
                 }
                 if hidden > 0 {
                     Text("+\(hidden)개 더")
@@ -187,12 +161,14 @@ private struct DayCell: View {
         .accessibilityAddTraits(model.isSelected(day) ? .isSelected : [])
     }
 
-    /// As many rows as the cell fits; when some are left over, the last row says how many.
-    private var visibleSlots: ([OccurrenceBuilder.Slot], Int) {
+    /// As many rows as the cell fits, empty band rows included; when some are left over, the last
+    /// row says how many events (not empty rows) did not fit.
+    private var visibleRows: ([OccurrenceBuilder.Slot?], Int) {
+        let rows = lanes?.rows(slots) ?? slots.map(Optional.some)
         let space = height - MonthSheet.dateInset.top - MonthSheet.dateInset.bottom - 24 - 2
         let fits = max(1, Int(space / textSize.rowHeight))
-        guard slots.count > fits else { return (slots, 0) }
-        return (Array(slots.prefix(fits - 1)), slots.count - (fits - 1))
+        guard rows.count > fits else { return (rows, 0) }
+        return (Array(rows.prefix(fits - 1)), rows.dropFirst(fits - 1).count { $0 != nil })
     }
 
     private func numberColor(isToday: Bool) -> Color {
@@ -278,7 +254,7 @@ struct EventMark: View {
 }
 
 /// A rectangle outline missing its left and/or right side.
-private struct BandOutline: Shape {
+struct BandOutline: Shape {
     var open: (leading: Bool, trailing: Bool)
 
     func path(in rect: CGRect) -> Path {

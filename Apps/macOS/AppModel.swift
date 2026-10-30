@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import SimplifyKit
 
-/// What the window is looking at: the month on screen, the chosen day, and the panel's scope.
+/// What the window is looking at: the month or week on screen, the chosen day, and the panel's scope.
 @MainActor
 @Observable
 final class AppModel {
@@ -11,6 +11,10 @@ final class AppModel {
     private(set) var selectedDay: Date
     private(set) var month: Period
     var panelScope: PeriodScope = .day
+    /// The month sheet or the week grid. Remembered across launches.
+    var calendarView = CalendarView(rawValue: UserDefaults.standard.string(forKey: "calendarView") ?? "") ?? .month {
+        didSet { UserDefaults.standard.set(calendarView.rawValue, forKey: "calendarView") }
+    }
     /// The settings modal is up; the month underneath ignores keys and clicks.
     var isSettingsOpen = false
     /// The event popover (an event's details, or the editor) and what it points at.
@@ -27,6 +31,8 @@ final class AppModel {
     var cellTextSize = CellTextSize(rawValue: UserDefaults.standard.string(forKey: "cellTextSize") ?? "") ?? .medium {
         didSet { UserDefaults.standard.set(cellTextSize.rawValue, forKey: "cellTextSize") }
     }
+
+    enum CalendarView: String, Hashable { case month, week }
 
     enum CellTextSize: String, CaseIterable {
         case small, medium, large
@@ -72,6 +78,11 @@ final class AppModel {
         Period(containing: selectedDay, scope: panelScope, calendar: calendar)
     }
 
+    /// The week grid always shows the chosen day's week.
+    var shownWeek: Period {
+        Period(containing: selectedDay, scope: .week, calendar: calendar)
+    }
+
     var grid: MonthGrid {
         MonthGrid(month: month.start, calendar: calendar)
     }
@@ -93,6 +104,14 @@ final class AppModel {
     /// Turns the month and keeps the same day number, clamped to the new month's length.
     func turnMonth(by months: Int) {
         select(calendar.date(byAdding: .month, value: months, to: selectedDay)!)
+    }
+
+    /// One step of the view on screen: a month, or a week keeping the same weekday.
+    func turnPage(by steps: Int) {
+        switch calendarView {
+        case .month: turnMonth(by: steps)
+        case .week: moveSelection(byDays: 7 * steps)
+        }
     }
 
     func goToToday() {

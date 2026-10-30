@@ -44,7 +44,8 @@ struct EventAnchorKey: PreferenceKey {
 }
 
 enum EventAnchor {
-    enum Place: String { case month, panel, week }
+    /// `week` is the panel's week list; `weekGrid` the week view.
+    enum Place: String { case month, panel, week, weekGrid }
 
     static func cell(_ day: Date) -> String {
         "cell:\(Int(day.timeIntervalSinceReferenceDate))"
@@ -116,21 +117,21 @@ extension AppModel {
         popover = EventPopoverState(content: .editor(editor), anchor: EventAnchor.cell(selectedDay))
     }
 
-    /// Return on the month: the picked event's details.
+    /// Return on the month or week: the picked event's details.
     func openSelectedEvent(calendars: CalendarController) -> Bool {
         guard let occurrence = selectedOccurrence(calendars) else { return false }
-        popover = EventPopoverState(content: .detail(occurrence), anchor: EventAnchor.row(occurrence.id, day: selectedDay, in: .month))
+        popover = EventPopoverState(content: .detail(occurrence), anchor: EventAnchor.row(occurrence.id, day: selectedDay, in: calendarPlace))
         return true
     }
 
-    /// ⌫ on the month: asks before deleting the picked event. Read-only events stay as they are.
+    /// ⌫ on the month or week: asks before deleting the picked event. Read-only events stay as they are.
     func deleteSelectedEvent(calendars: CalendarController) -> Bool {
         guard let occurrence = selectedOccurrence(calendars), calendars.isWritable(occurrence.sourceID) else { return false }
-        popover = EventPopoverState(content: .detail(occurrence), anchor: EventAnchor.row(occurrence.id, day: selectedDay, in: .month), question: .delete)
+        popover = EventPopoverState(content: .detail(occurrence), anchor: EventAnchor.row(occurrence.id, day: selectedDay, in: calendarPlace), question: .delete)
         return true
     }
 
-    /// Tab / ⇧Tab on the month: the chosen day's next or previous event.
+    /// Tab / ⇧Tab on the month or week: the chosen day's next or previous event.
     func moveEventSelection(by step: Int, calendars: CalendarController) -> Bool {
         let slots = calendars.slots[selectedDay] ?? []
         guard !slots.isEmpty else { return false }
@@ -139,6 +140,9 @@ extension AppModel {
         selectedEventID = slots[next].occurrence.id
         return true
     }
+
+    /// Where the keys' popover points: the month sheet or the week grid on screen.
+    private var calendarPlace: EventAnchor.Place { calendarView == .week ? .weekGrid : .month }
 
     private func selectedOccurrence(_ calendars: CalendarController) -> EventOccurrence? {
         (calendars.slots[selectedDay] ?? []).first { $0.occurrence.id == selectedEventID }?.occurrence

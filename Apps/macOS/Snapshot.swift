@@ -8,7 +8,7 @@ import SimplifyKit
 /// screen-recording access. Run with `open --env SIMPLIFY_SNAPSHOT=1 Simplify.app`; files land in
 /// `~/Library/Containers/dev.yoom.simplify/Data/tmp/snapshot-*.png`.
 /// `SIMPLIFY_SNAPSHOT=sample` fills an in-memory cache with example events first and also renders
-/// the week panel, the settings modal and the iCloud connect form; nothing is written to the real stores.
+/// the week panel, the week grid, the settings modal and the iCloud connect form; nothing is written to the real stores.
 @MainActor
 enum Snapshot {
     static func runIfRequested(model: AppModel, calendars: CalendarController) {
@@ -22,6 +22,11 @@ enum Snapshot {
             model.panelScope = .week
             render(MainView(model: model, calendars: shown), name: "week", appearance: .aqua, scheme: .light)
             model.panelScope = .day
+            let view = model.calendarView
+            model.calendarView = .week
+            render(MainView(model: model, calendars: shown), name: "weekview", appearance: .aqua, scheme: .light)
+            render(MainView(model: model, calendars: shown), name: "weekview-dark", appearance: .darkAqua, scheme: .dark)
+            model.calendarView = view
             model.isSettingsOpen = true
             render(MainView(model: model, calendars: shown), name: "settings", appearance: .aqua, scheme: .light)
             render(ZStack { MainView(model: model, calendars: shown); SettingsModal(model: model, calendars: shown, intro: .icloud) },
@@ -75,6 +80,17 @@ enum Snapshot {
         model.newEvent(on: model.calendar.date(byAdding: .day, value: 2, to: today)!, calendars: calendars)
         light("event-new")
         model.popover = nil
+        // The same popovers over the week grid: a block's details, and a new event at its day's head.
+        let view = model.calendarView
+        model.calendarView = .week
+        model.openEvent(review, day: today, anchor: EventAnchor.row(review.id, day: today, in: .weekGrid), calendars: calendars)
+        light("weekview-event")
+        model.popover = nil
+        model.selectedEventID = nil
+        model.newEvent(on: today, calendars: calendars)
+        light("weekview-new")
+        model.popover = nil
+        model.calendarView = view
     }
 
     private static func render(_ view: some View, name: String, appearance: NSAppearance.Name, scheme: ColorScheme) {
@@ -156,6 +172,9 @@ enum Snapshot {
             timed(i.isMultiple(of: 2) ? work : personal, "busy\(i)", title, at(1, 8 + i * 2))
         }
         allDay(family, "trip", "부모님 방문", 8, 10)
+        // Overlapping bands, to show each keeping its row through the week.
+        allDay(work, "deadline", "마감 주간", -5, -2)
+        allDay(work, "sprint", "디자인 스프린트", -4, 0)
         timed(family, "dinner", "가족 저녁", at(-2, 18, 30))
         allDay(todo, "tax", "연말정산 서류 내기", 2, 3)
         timed(todo, "pills", "영양제 주문", at(0, 17), minutes: 0)

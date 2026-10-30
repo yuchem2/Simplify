@@ -69,8 +69,11 @@ final class CalendarController {
             rebuildSlots()
         }
     }
-    /// Occurrences for the days on screen, by day.
+    /// Occurrences overlapping the days on screen, and the same by day.
+    private(set) var occurrences: [EventOccurrence] = []
     private(set) var slots: [Date: [OccurrenceBuilder.Slot]] = [:]
+    /// Band rows for each week on screen, by the week's first day.
+    private(set) var lanes: [Date: BandLanes] = [:]
     private(set) var holidayDays: Set<Date> = []
     /// The last sync error of each account, in words, until a sync of that account succeeds.
     private(set) var problems: [String: String] = [:]
@@ -202,8 +205,13 @@ final class CalendarController {
         guard let first = shownDays.first, let last = shownDays.last else { return }
         let range = DateInterval(start: first, end: calendar.date(byAdding: .day, value: 1, to: last)!)
         let shown = showsCompletedReminders ? snapshots : snapshots.filter { !$0.isCompleted }
-        let occurrences = OccurrenceBuilder.occurrences(from: shown, in: range, calendar: calendar)
+        occurrences = OccurrenceBuilder.occurrences(from: shown, in: range, calendar: calendar)
         slots = OccurrenceBuilder.byDay(occurrences, days: shownDays, calendar: calendar)
+        // The days on screen are whole weeks of the month grid.
+        lanes = Dictionary(uniqueKeysWithValues: stride(from: 0, to: shownDays.count, by: 7).map { index in
+            let week = Array(shownDays[index..<min(index + 7, shownDays.count)])
+            return (week[0], BandLanes(occurrences, days: week, calendar: calendar))
+        })
         holidayDays = Set(slots.compactMap { day, daySlots in
             daySlots.contains { sources[$0.occurrence.sourceID]?.isHoliday == true } ? day : nil
         })

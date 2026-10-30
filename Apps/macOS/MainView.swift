@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 import SimplifyKit
 
-/// The window: toolbar on the wall, the month sheet, and the day panel beside it, with the
+/// The window: toolbar on the wall, the month sheet or week grid, and the day panel beside it, with the
 /// settings modal over everything when it is open.
 struct MainView: View {
     let model: AppModel
@@ -14,7 +14,10 @@ struct MainView: View {
             VStack(spacing: 0) {
                 MainToolbar(model: model, calendars: calendars)
                 HStack(alignment: .top, spacing: 24) {
-                    MonthSheet(model: model, calendars: calendars)
+                    switch model.calendarView {
+                    case .month: MonthSheet(model: model, calendars: calendars)
+                    case .week: WeekGrid(model: model, calendars: calendars)
+                    }
                     if !model.isPanelHidden {
                         DayPanel(model: model, calendars: calendars)
                             .frame(width: 360)
@@ -60,34 +63,35 @@ struct MainView: View {
 }
 
 struct MainToolbar: View {
-    let model: AppModel
+    @Bindable var model: AppModel
     let calendars: CalendarController
-    /// Only the month view exists for now; the week grid arrives with event editing (stage 4).
-    @State private var view: CalendarView = .month
-
-    enum CalendarView: Hashable { case month, week }
 
     var body: some View {
+        let isWeek = model.calendarView == .week
+        let title = isWeek ? model.shownWeek.title : model.month.title
+        let unit = isWeek ? "주" : "달"
         HStack(spacing: 14) {
-            // Sized for the widest title ("2026년 12월") so ‹ › stay put while turning months.
+            // Sized for the widest title of the view so ‹ › stay put while turning pages: the longest
+            // month name, or the longest week name with a range of two-digit dates.
             ZStack(alignment: .leading) {
-                Text("2026년 12월").hidden()
-                Text(model.month.title)
+                TitleLine(title: isWeek ? "12월 5주차" : "2026년 12월", range: isWeek ? "10.25 – 10.31" : nil).hidden()
+                TitleLine(title: title, range: isWeek ? model.shownWeek.rangeText : nil)
             }
-            .font(.display(30))
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(model.month.title)
+            .accessibilityLabel(isWeek ? "\(title), \(model.shownWeek.rangeText)" : title)
             .accessibilityAddTraits(.isHeader)
             HStack(spacing: -Metrics.line) {
-                Button { model.turnMonth(by: -1) } label: { Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold)) }
-                    .accessibilityLabel("이전 달")
+                Button { model.turnPage(by: -1) } label: { Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold)) }
+                    .accessibilityLabel("이전 \(unit)")
+                    .help("이전 \(unit) (⌘←)")
                 Button("오늘") { model.goToToday() }
-                Button { model.turnMonth(by: 1) } label: { Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)) }
-                    .accessibilityLabel("다음 달")
+                    .help("오늘 (⌘T)")
+                Button { model.turnPage(by: 1) } label: { Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)) }
+                    .accessibilityLabel("다음 \(unit)")
+                    .help("다음 \(unit) (⌘→)")
             }
             .buttonStyle(DrawnButtonStyle())
-            SegmentedTabs([(CalendarView.month, "월"), (.week, "주")], selection: $view, disabled: [.week])
-                .help("주 보기는 준비 중이에요")
+            SegmentedTabs([(AppModel.CalendarView.month, "월"), (.week, "주")], selection: $model.calendarView)
             Spacer()
             if calendars.unsentWrites.isEmpty {
                 SyncStatusView(calendars: calendars) { model.isSettingsOpen = true }
@@ -108,5 +112,20 @@ struct MainToolbar: View {
         .padding(.leading, 20)
         .padding(.trailing, 24)
         .frame(height: 64)
+    }
+}
+
+/// The toolbar heading: the month or week name, and a week's dates after it.
+private struct TitleLine: View {
+    let title: String
+    let range: String?
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(title).font(.display(30))
+            if let range {
+                Text(range).font(.system(size: 11, weight: .medium)).foregroundStyle(.inkSoft)
+            }
+        }
     }
 }

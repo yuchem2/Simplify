@@ -78,8 +78,7 @@ public enum OccurrenceBuilder {
                     timed.append(Slot(occurrence: occurrence, continuesFromPrevious: false, continuesToNext: false))
                 }
             }
-            // Earlier, then longer bands first. Rows can still shift between days when bands overlap;
-            // per-week lanes would fix that (left for when the week grid arrives).
+            // Earlier, then longer bands first. Views keep a band on one row through the week with `BandLanes`.
             bands.sort { ($0.occurrence.start, -$0.occurrence.end.timeIntervalSince1970) < ($1.occurrence.start, -$1.occurrence.end.timeIntervalSince1970) }
             let slots = bands + timed
             result[day] = slots.filter { !$0.occurrence.isCompleted } + slots.filter(\.occurrence.isCompleted)

@@ -54,12 +54,13 @@ struct SimplifyApp: App {
                 Group {
                     Button("오늘") { model.goToToday() }
                         .keyboardShortcut("t", modifiers: .command)
-                    Button("이전 달") { model.turnMonth(by: -1) }
+                    let unit = model.calendarView == .week ? "주" : "달"
+                    Button("이전 \(unit)") { model.turnPage(by: -1) }
                         .keyboardShortcut(.leftArrow, modifiers: .command)
-                    Button("다음 달") { model.turnMonth(by: 1) }
+                    Button("다음 \(unit)") { model.turnPage(by: 1) }
                         .keyboardShortcut(.rightArrow, modifiers: .command)
                 }
-                // The month under the settings modal or an event popover stays put.
+                // The calendar under the settings modal or an event popover stays put.
                 .disabled(model.isModalOpen)
             }
         }
