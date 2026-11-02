@@ -286,6 +286,8 @@ enum Snapshot {
         }
         timed(work, "standup", "주간 스탠드업", at(-21, 9, 30), minutes: 30, rule: "RRULE:FREQ=WEEKLY;BYDAY=MO")
         timed(work, "review", "디자인 리뷰", at(0, 14))
+        // Long enough to wrap in the day panel, where the mark has to stay on the first line.
+        timed(work, "offsite", "2027년 상반기 제품 로드맵과 팀별 목표를 맞추는 전사 워크숍 사전 회의", at(0, 16))
         timed(fitness, "pilates", "필라테스", at(0, 19, 30), rule: "RRULE:FREQ=WEEKLY;BYDAY=MO,TH")
         timed(personal, "book", "독서 모임", at(0, 21))
         timed(personal, "dentist", "치과", at(1, 18))

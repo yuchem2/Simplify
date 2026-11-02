@@ -157,12 +157,15 @@ private struct DayEvents: View {
                             .foregroundStyle(.inkSoft)
                             .frame(width: 58, alignment: .leading)
                         VStack(alignment: .leading, spacing: 1) {
-                            HStack(spacing: 8) {
+                            // The mark stays on the first line when a long title wraps.
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
                                 EventMark(occurrence: slot.occurrence, source: source, size: 10)
+                                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
                                 Text(slot.occurrence.title)
                                     .font(.system(size: 14))
                                     .strikethrough(slot.occurrence.isCompleted)
                                     .foregroundStyle(EventTime.titleColor(slot.occurrence, source: source))
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                             if let source {
                                 Text(source.name)
