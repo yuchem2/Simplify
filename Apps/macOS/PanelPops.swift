@@ -17,11 +17,9 @@ struct PanelPopLayer: View {
                         .onTapGesture { close() }
                         .accessibilityHidden(true)
                     content(pop)
-                        .padding(6)
+                        .padding(Metrics.spaceS)
                         .frame(width: 316, alignment: .topLeading)
-                        .background(.paper)
-                        .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.lineOuter))
-                        .drawnShadow()
+                        .floatingFrame()
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
                         .padding(.top, top(for: pop, in: geo))
                         .onExitCommand { close() }
@@ -40,9 +38,9 @@ struct PanelPopLayer: View {
         }
         guard let line = memos.todos.popAnchor else { return fallback }
         let frame = geo.frame(in: .global)
-        let below = line.maxY - frame.minY + 6
-        if below + height <= geo.size.height - 12 { return below }
-        return max(12, line.minY - frame.minY - height - 6)
+        let below = line.maxY - frame.minY + Metrics.spaceS
+        if below + height <= geo.size.height - Metrics.spaceL { return below }
+        return max(Metrics.spaceL, line.minY - frame.minY - height - Metrics.spaceS)
     }
 
     @ViewBuilder
@@ -83,18 +81,15 @@ struct PanelPopLayer: View {
 private struct PopGroup: View {
     let title: String
     var body: some View {
-        Text(title)
-            .font(.system(size: 11, weight: .semibold))
-            .tracking(0.7)
-            .foregroundStyle(.inkSoft)
-            .padding(.horizontal, 8)
-            .padding(.top, 6)
-            .padding(.bottom, 2)
-            .accessibilityAddTraits(.isHeader)
+        SectionRule(title)
+            .padding(.horizontal, Metrics.spaceM)
+            .padding(.top, Metrics.spaceS)
+            .padding(.bottom, Metrics.spaceXs)
     }
 }
 
-/// A row in a pick list: the title and a small line under it.
+/// A row in a pick list: the title and a small line under it. Picked or under the keyboard
+/// cursor, it is filled with ink.
 private struct PickRow<Leading: View>: View {
     let title: String
     let detail: String
@@ -102,19 +97,18 @@ private struct PickRow<Leading: View>: View {
     @ViewBuilder var leading: Leading
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            leading.padding(.top, 3)
+        HStack(alignment: .top, spacing: Metrics.spaceM) {
+            leading.padding(.top, Metrics.spaceXxs)
             VStack(alignment: .leading, spacing: 0) {
-                Text(title).font(.system(size: 14)).lineLimit(2)
-                Text(detail).font(.system(size: 11)).foregroundStyle(.inkSoft)
+                Text(title).textStyle(.item).lineLimit(2)
+                Text(detail).textStyle(.cell).foregroundStyle(isOn ? Color.onInk : Color.inkSoft)
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background { if isOn { Rectangle().fill(.shadeSoft) } }
-        .overlay { if isOn { Rectangle().strokeBorder(.ink, lineWidth: Metrics.line) } }
-        .contentShape(Rectangle())
+        .foregroundStyle(isOn ? Color.onInk : Color.ink)
+        .padding(.horizontal, Metrics.spaceM)
+        .padding(.vertical, Metrics.spaceXs)
+        .selectableRow(chosen: isOn, inset: 0)
     }
 }
 
@@ -148,12 +142,12 @@ private struct PopFoot<Content: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             Rectangle().fill(.ink).frame(height: Metrics.line)
-            HStack(spacing: 8) { content }
-                .padding(.horizontal, 4)
-                .padding(.top, 8)
-                .padding(.bottom, 2)
+            HStack(spacing: Metrics.spaceM) { content }
+                .padding(.horizontal, Metrics.spaceXs)
+                .padding(.top, Metrics.spaceM)
+                .padding(.bottom, Metrics.spaceXxs)
         }
-        .padding(.top, 6)
+        .padding(.top, Metrics.spaceS)
     }
 }
 
@@ -217,7 +211,7 @@ private struct ImportPop: View {
     }
 
     private func empty(_ text: String) -> some View {
-        Text(text).font(.system(size: 12)).foregroundStyle(.inkFaint).padding(.horizontal, 8).padding(.vertical, 4)
+        Text(text).textStyle(.small).foregroundStyle(.inkSoft).padding(.horizontal, Metrics.spaceM).padding(.vertical, Metrics.spaceXs)
     }
 
     private func lineKey(_ found: (period: Period, line: MemoTodoLine)) -> String {
@@ -229,9 +223,9 @@ private struct ImportPop: View {
         return Button {
             if isOn { picked.remove(key) } else { picked.insert(key) }
         } label: {
-            PickRow(title: title, detail: detail, isOn: isOn) { TodoBox(isOn: isOn, size: 14) }
+            PickRow(title: title, detail: detail, isOn: isOn) { CheckBox(isOn: isOn, size: 14, onInk: isOn) }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(FocusOnlyStyle())
         .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 
@@ -276,21 +270,20 @@ private struct SearchPop: View {
     var body: some View {
         let found = memos.todos.search(query)
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").font(.system(size: 12))
+            // The box look goes on the whole line, so the magnifier sits inside the field.
+            HStack(spacing: Metrics.spaceS) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.inkSoft)
                 if isRenderingSnapshot {
-                    Text("할 일 찾기").font(.system(size: 14)).foregroundStyle(.inkFaint)
+                    Text("할 일 찾기").foregroundStyle(.inkFaint)
                     Spacer()
                 } else {
                     field(found)
                 }
             }
-            .padding(.horizontal, 4)
-            .padding(.top, 3)
-            .padding(.bottom, 5)
-            .overlay(alignment: .bottom) { Rectangle().fill(.ink).frame(height: Metrics.line) }
-            .padding(.horizontal, 2)
-            .padding(.bottom, 4)
+            .drawnField(.box, focused: focused)
+            .padding(.horizontal, Metrics.spaceXxs)
+            .padding(.top, Metrics.spaceXxs)
+            .padding(.bottom, Metrics.spaceS)
             list(found)
         }
         .onAppear { focused = true }
@@ -299,7 +292,6 @@ private struct SearchPop: View {
     private func field(_ found: [TodoItem]) -> some View {
                 TextField("할 일 찾기", text: $query)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 14))
                     .focused($focused)
                     .onSubmit { pick(found) }
                     .onKeyPress(.upArrow) { highlighted = max(0, highlighted - 1); return .handled }
@@ -318,7 +310,7 @@ private struct SearchPop: View {
                 VStack(alignment: .leading, spacing: 0) {
                     if found.isEmpty {
                         Text(query.isEmpty ? "할 일이 아직 없어요." : "찾는 할 일이 없어요. ⌘↵로 새로 만들어요.")
-                            .font(.system(size: 12)).foregroundStyle(.inkFaint).padding(8)
+                            .textStyle(.small).foregroundStyle(.inkSoft).padding(Metrics.spaceM)
                     }
                     ForEach(Array(found.enumerated()), id: \.element.id) { index, item in
                         Button { highlighted = index; pick(found) } label: {
@@ -326,12 +318,12 @@ private struct SearchPop: View {
                                 Mark(item.isDone ? Color.ink : nil, size: 10)
                             }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(FocusOnlyStyle())
                     }
                 }
             }
             PopFoot {
-                Text("↵ 잇기 · ⌘↵ 새 할 일로 만들기").font(.system(size: 11)).foregroundStyle(.inkSoft)
+                Text("↵ 잇기 · ⌘↵ 새 할 일로 만들기").textStyle(.cell).foregroundStyle(.inkSoft)
                 Spacer()
             }
         }
@@ -365,16 +357,20 @@ private struct TargetPop: View {
     let other: () -> Void
     @State private var highlighted = 0
     @FocusState private var focused: Bool
+    @Environment(\.isRenderingSnapshot) private var isRenderingSnapshot
+
+    /// The keys move an ink cursor; it shows only while the list has them.
+    private var showsCursor: Bool { focused || isRenderingSnapshot }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             PopGroup(title: "할 일로 만들기")
             ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
-                Button { pick(choice) } label: { item(choice.name, detail: choice.detail, isOn: index == highlighted) }
+                Button { pick(choice) } label: { item(choice.name, detail: choice.detail, isOn: showsCursor && index == highlighted) }
                     .buttonStyle(.plain)
             }
-            Rectangle().fill(.ink).frame(height: Metrics.line).padding(.horizontal, 8).padding(.vertical, 5)
-            Button(action: other) { item("다른 날짜…", detail: "", isOn: highlighted == choices.count) }
+            Rectangle().fill(.ink).frame(height: Metrics.line).padding(.horizontal, Metrics.spaceM).padding(.vertical, Metrics.spaceXs)
+            Button(action: other) { item("다른 날짜…", detail: "", isOn: showsCursor && highlighted == choices.count) }
                 .buttonStyle(.plain)
         }
         .focusable()
@@ -391,15 +387,14 @@ private struct TargetPop: View {
 
     private func item(_ name: String, detail: String, isOn: Bool) -> some View {
         HStack {
-            Text(name).font(.system(size: 13))
+            Text(name).textStyle(.body)
             Spacer()
-            Text(detail).font(.system(size: 11)).foregroundStyle(isOn ? Color.onInk : Color.inkSoft)
+            Text(detail).textStyle(.cell).foregroundStyle(isOn ? Color.onInk : Color.inkSoft)
         }
         .foregroundStyle(isOn ? Color.onInk : Color.ink)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(isOn ? Color.ink : Color.clear)
-        .contentShape(Rectangle())
+        .padding(.horizontal, Metrics.spaceM)
+        .padding(.vertical, Metrics.spaceXs)
+        .selectableRow(chosen: isOn, inset: 0)
     }
 }
 
@@ -422,7 +417,7 @@ private struct DayPop: View {
                 .labelsHidden()
                 .environment(\.calendar, calendar)
                 .environment(\.locale, Locale(identifier: "ko_KR"))
-                .padding(.horizontal, 4)
+                .padding(.horizontal, Metrics.spaceXs)
             PopFoot {
                 Button("그 주로") { finish(Period(containing: day, scope: .week, calendar: calendar)) }.buttonStyle(DrawnButtonStyle())
                 Button("그 달로") { finish(Period(containing: day, scope: .month, calendar: calendar)) }.buttonStyle(DrawnButtonStyle())

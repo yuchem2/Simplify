@@ -1,7 +1,8 @@
 import SwiftUI
 import SimplifyKit
 
-/// The month as a ruled grid on a moulded sheet, Sunday first.
+/// The month as a ledger on the window's paper, Sunday first: an ink rule under each week and no
+/// column lines; weekends sit a step off the paper.
 struct MonthSheet: View {
     let model: AppModel
     let calendars: CalendarController
@@ -11,23 +12,29 @@ struct MonthSheet: View {
 
     private static let weekdays = ["일", "월", "화", "수", "목", "금", "토"]
     /// Smallest day cell; with six rows this sets the sheet's (and the window's) minimum size.
-    static let minCellSize = CGSize(width: 100, height: 80)
+    /// Narrow enough that the month and the panel fit side by side on an 11-inch iPad's width (834 pt).
+    static let minCellSize = CGSize(width: 64, height: 72)
+    /// Left and right of the grid, inside the paper.
+    static let sheetPadding = Metrics.spaceXxl
+    /// Below this a cell leaves out start times, so titles still show.
+    static let timedCellWidth: CGFloat = 96
     /// Where a date number starts inside its cell; the weekday labels share the same edge.
-    static let dateInset = EdgeInsets(top: 8, leading: 14, bottom: 4, trailing: 7)
+    static let dateInset = EdgeInsets(top: Metrics.spaceXs, leading: Metrics.spaceM, bottom: Metrics.spaceXs, trailing: Metrics.spaceM)
 
     var body: some View {
         let grid = model.grid
-        VStack(spacing: 6) {
+        VStack(spacing: 0) {
             HStack(spacing: 0) {
                 ForEach(Self.weekdays, id: \.self) { name in
                     Text(name)
-                        .font(.system(size: 11, weight: .semibold))
-                        .tracking(0.7)
+                        .textStyle(.meta)
+                        .fontWeight(.semibold)
                         .foregroundStyle(name == "일" ? Color.holiday : Color.inkSoft)
                         .padding(.leading, Self.dateInset.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+            .frame(height: 24)
             GeometryReader { geo in
                 let width = geo.size.width / 7
                 let height = geo.size.height / CGFloat(grid.weeks.count)
@@ -40,7 +47,9 @@ struct MonthSheet: View {
                                         slots: calendars.slots[day] ?? [], lanes: lanes, sources: calendars.sources,
                                         isHoliday: calendars.holidayDays.contains(day), hasMemo: memos.has(Period(containing: day, scope: .day, calendar: model.calendar)),
                                         todoCount: memos.todos.remaining(on: day, calendar: model.calendar),
-                                        height: height, textSize: model.cellTextSize) {
+                                        height: height, textSize: model.cellTextSize,
+                                        // A narrow cell has room for the title or the time, not both: the title wins.
+                                        showsTimes: model.showsCellTimes && width >= Self.timedCellWidth) {
                                     // After the click's other handlers: an event click or a double-click opens the
                                     // event popover in the same click, and then the panel and focus stay as they are.
                                     Task { @MainActor in
@@ -56,32 +65,25 @@ struct MonthSheet: View {
                         }
                     }
                 }
-                .overlay { GridLines(columns: 7, rows: grid.weeks.count).stroke(.ink, lineWidth: Metrics.line) }
+                .overlay { WeekRules(rows: grid.weeks.count).stroke(.ink, lineWidth: Metrics.line) }
+                .overlay(alignment: .top) { Rectangle().fill(.ink).frame(height: Metrics.lineSpine) }
             }
             .frame(minWidth: Self.minCellSize.width * 7, minHeight: Self.minCellSize.height * 6)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 18)
-        .padding(.bottom, 20)
-        .mouldedFrame()
+        .padding(.horizontal, Self.sheetPadding)
+        .padding(.bottom, Metrics.spaceXxl)
         .calendarKeys(model: model, calendars: calendars, focused: $focused)
     }
 }
 
-/// Every row and column edge of an evenly divided rectangle.
-private struct GridLines: Shape {
-    var columns: Int
+/// The rule under each week (the heavy rule above the first is drawn apart).
+private struct WeekRules: Shape {
     var rows: Int
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        for c in 0...columns {
-            let x = rect.minX + rect.width * CGFloat(c) / CGFloat(columns)
-            path.move(to: CGPoint(x: x, y: rect.minY))
-            path.addLine(to: CGPoint(x: x, y: rect.maxY))
-        }
-        for r in 0...rows {
-            let y = rect.minY + rect.height * CGFloat(r) / CGFloat(rows)
+        for r in 1...rows {
+            let y = rect.minY + rect.height * CGFloat(r) / CGFloat(rows) - Metrics.line / 2
             path.move(to: CGPoint(x: rect.minX, y: y))
             path.addLine(to: CGPoint(x: rect.maxX, y: y))
         }
@@ -104,7 +106,9 @@ private struct DayCell: View {
     let todoCount: Int
     let height: CGFloat
     let textSize: AppModel.CellTextSize
+    let showsTimes: Bool
     let onSelect: () -> Void
+    @State private var hovering = false
 
     var body: some View {
         let isToday = model.isToday(day)
@@ -112,17 +116,14 @@ private struct DayCell: View {
         // Not a Button: anchors of the event rows inside a button label never reach the popover.
         ZStack(alignment: .topLeading) {
             VStack(alignment: .leading, spacing: 2) {
-                // Numbers start on the same line as the weekday labels; today's disc grows
-                // around its number without moving it. A pencil after it: the day has a memo.
-                HStack(spacing: 4) {
+                // Numbers start on the same line as the weekday labels; today's is bold under the
+                // cell's ink bar. A pencil after it: the day has a memo.
+                HStack(spacing: Metrics.spaceXs) {
                     Text("\(number)")
-                        .font(.display(16))
-                        .foregroundStyle(numberColor(isToday: isToday))
-                        .padding(.horizontal, isToday ? 4 : 0)
-                        .frame(minWidth: isToday ? 24 : nil, minHeight: 24)
-                        .background { if isToday { Capsule().fill(.ink) } }
-                        // The disc's left edge sits 4 pt before the date line, well inside the selection.
-                        .padding(.leading, isToday ? -4 : 0)
+                        .textStyle(.date)
+                        .fontWeight(isToday ? .bold : .semibold)
+                        .foregroundStyle(numberColor)
+                        .frame(minHeight: 24)
                     if hasMemo { MemoMark() }
                     if todoCount > 0 {
                         Spacer(minLength: 0)
@@ -134,10 +135,13 @@ private struct DayCell: View {
                     if let slot {
                         let anchor = EventAnchor.row(slot.occurrence.id, day: day, in: .month)
                         EventRow(slot: slot, source: sources[slot.occurrence.sourceID], textSize: textSize,
+                                 time: showsTimes ? cellTime(slot) : nil,
                                  // A band repeats its title at the start of each row of the grid.
                                  showsTitle: !slot.continuesFromPrevious || model.calendar.component(.weekday, from: day) == model.calendar.firstWeekday,
                                  isSelected: model.selectedEventID == slot.occurrence.id)
                             .unsentOutline(calendars.isUnsent(slot.occurrence))
+                            // Days of the next or last month step back with their date.
+                            .opacity(inMonth ? 1 : Metrics.opacityOutOfMonth)
                             .eventAnchor(anchor)
                             .opensEvent(slot.occurrence, day: day, anchor: anchor, model: model, calendars: calendars)
                     } else {
@@ -148,20 +152,31 @@ private struct DayCell: View {
                 if hidden > 0 {
                     Text("+\(hidden)개 더")
                         .font(.system(size: textSize.points, weight: .medium))
+                        .lineLimit(1)
+                        .padding(.leading, textSize.markSize + Metrics.spaceXs)
                         .foregroundStyle(.inkSoft)
                 }
             }
             .padding(MonthSheet.dateInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            // The selection moulding sits behind the date so today's disc stays whole.
+            // The chosen day: ink sides that meet the week rules above and below. The pointer: a
+            // hairline box in shade.
             .background {
                 if model.isSelected(day) {
-                    Rectangle().inset(by: 4).strokeBorder(.ink, lineWidth: Metrics.line)
+                    ChosenSides().stroke(.ink, lineWidth: Metrics.line)
+                } else if hovering {
+                    Rectangle().inset(by: Metrics.spaceXs).strokeBorder(.shade, lineWidth: Metrics.line)
                 }
             }
-            .background(inMonth ? Color.clear : Color.shadeSoft)
+            // Today: a 3 pt ink bar just under the rule above the cell, so it still shows below the
+            // heavy rule over the first week.
+            .overlay(alignment: .top) {
+                if isToday { Rectangle().fill(.ink).frame(height: 3).padding(.top, Metrics.lineSpine) }
+            }
+            .background(isWeekend ? Color.raised : Color.clear)
             .clipped()
             .contentShape(Rectangle())
+            .onHover { hovering = $0 }
         }
         // A double-click on the empty part of a day starts a new event there.
         .onTapGesture(count: 2) { model.newEvent(on: day, calendars: calendars) }
@@ -184,8 +199,19 @@ private struct DayCell: View {
         return (Array(rows.prefix(fits - 1)), rows.dropFirst(fits - 1).count { $0 != nil })
     }
 
-    private func numberColor(isToday: Bool) -> Color {
-        if isToday { return .onInk }
+    /// `09:30` for a timed event; nothing for a reminder due on a day without a time.
+    private func cellTime(_ slot: OccurrenceBuilder.Slot) -> String? {
+        let start = slot.occurrence.start
+        if sources[slot.occurrence.sourceID]?.isReminderList == true, start == model.calendar.startOfDay(for: start) { return nil }
+        return DateText.shortClock(start, calendar: model.calendar)
+    }
+
+    private var isWeekend: Bool {
+        let weekday = model.calendar.component(.weekday, from: day)
+        return weekday == 1 || weekday == 7
+    }
+
+    private var numberColor: Color {
         if !inMonth { return .inkFaint }
         return model.isRedDay(day) || isHoliday ? .holiday : .ink
     }
@@ -200,13 +226,28 @@ private struct DayCell: View {
     }
 }
 
-/// One event inside a day cell: a band for all-day and multi-day events, a coloured mark and
-/// title for timed ones, red text for public holidays. Reminders always take one row with a round
+/// The left, bottom and right edges of a rectangle, for the chosen day.
+private struct ChosenSides: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let r = rect.insetBy(dx: 0.5, dy: 0.5)
+        path.move(to: CGPoint(x: r.minX, y: r.minY))
+        path.addLine(to: CGPoint(x: r.minX, y: r.maxY))
+        path.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
+        path.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+        return path
+    }
+}
+
+/// One event inside a day cell: a band for all-day and multi-day events, a coloured mark, start
+/// time and title for timed ones, red text for public holidays. Reminders always take one row with a round
 /// mark, struck through once completed.
 private struct EventRow: View {
     let slot: OccurrenceBuilder.Slot
     let source: CalendarController.Source?
     let textSize: AppModel.CellTextSize
+    /// `09:30` before a timed title, or nil when 설정 turns times off.
+    let time: String?
     let showsTitle: Bool
     /// Picked with a click or Tab: drawn in ink.
     var isSelected = false
@@ -214,11 +255,12 @@ private struct EventRow: View {
     var body: some View {
         let palette = source?.palette ?? .grey
         let done = slot.occurrence.isCompleted
+        let color = isSelected ? Color.onInk : EventTime.titleColor(slot.occurrence, source: source)
         let title = Text(slot.occurrence.title)
             .font(.system(size: textSize.points))
-            .strikethrough(done)
-            .foregroundStyle(isSelected ? Color.onInk : EventTime.titleColor(slot.occurrence, source: source))
+            .foregroundStyle(color)
             .lineLimit(1)
+            .ledgerStrikethrough(done, color: color)
         if source?.isHoliday == true {
             title.background { if isSelected { Rectangle().fill(.ink).padding(.horizontal, -2) } }
         } else if slot.occurrence.isBand, source?.isReminderList != true {
@@ -239,16 +281,22 @@ private struct EventRow: View {
                     BandOutline(open: (slot.continuesFromPrevious, slot.continuesToNext)).stroke(.ink, lineWidth: Metrics.line)
                 }
                 // Run to the cell edges where the band continues.
-                .padding(.leading, slot.continuesFromPrevious ? -MonthSheet.dateInset.leading : -8)
+                .padding(.leading, slot.continuesFromPrevious ? -MonthSheet.dateInset.leading : -Metrics.spaceXs)
                 .padding(.trailing, slot.continuesToNext ? -MonthSheet.dateInset.trailing : 0)
         } else {
-            // Timed rows start a little left of the date line to give the title more room.
-            HStack(spacing: 4) {
+            HStack(spacing: Metrics.spaceXs) {
                 EventMark(occurrence: slot.occurrence, source: source, size: textSize.markSize)
+                if let time {
+                    Text(time)
+                        .font(.system(size: textSize.points).monospacedDigit())
+                        .foregroundStyle(isSelected ? Color.onInk : Color.inkSoft)
+                        .fixedSize()
+                        // The cell is read as before; the time is in the event's own details.
+                        .accessibilityHidden(true)
+                }
                 title
             }
-            .background { if isSelected { Rectangle().fill(.ink).padding(.horizontal, -2) } }
-            .padding(.leading, -6)
+            .background { if isSelected { Rectangle().fill(Tokens.selection).padding(.horizontal, -2) } }
         }
     }
 }
@@ -267,9 +315,9 @@ struct EventMark: View {
             if let toggleReminder, source?.isReadOnly != true {
                 Button { toggleReminder(occurrence) } label: {
                     // A few points of slack around the ring, so a small one is still easy to hit.
-                    ring.padding(3).contentShape(Rectangle()).padding(-3)
+                    ring.padding(Metrics.spaceXs).contentShape(Rectangle()).padding(-Metrics.spaceXs)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(FocusOnlyStyle())
                 .help(occurrence.isCompleted ? "완료 취소" : "완료로 표시")
                 .accessibilityLabel(occurrence.isCompleted ? "\(occurrence.title) 완료 취소" : "\(occurrence.title) 완료로 표시")
             } else {

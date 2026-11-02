@@ -30,15 +30,13 @@ final class EventEditorModel {
 
         /// `매주 (수요일)`, `매월 (28일)` …, named after the day the event starts.
         func label(start: Date, calendar: Calendar) -> String {
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "ko_KR")
-            f.timeZone = calendar.timeZone
+            let day = { (format: String) in DateText.string(start, format, timeZone: calendar.timeZone) }
             switch self {
             case .none: return "안 함"
             case .daily: return "매일"
-            case .weekly: f.dateFormat = "EEEE"; return "매주 (\(f.string(from: start)))"
-            case .monthly: f.dateFormat = "d일"; return "매월 (\(f.string(from: start)))"
-            case .yearly: f.dateFormat = "M월 d일"; return "매년 (\(f.string(from: start)))"
+            case .weekly: return "매주 (\(day("EEEE")))"
+            case .monthly: return "매월 (\(day("d일")))"
+            case .yearly: return "매년 (\(day("M월 d일")))"
             case .custom: return "사용자 지정"
             }
         }
@@ -243,19 +241,18 @@ struct EventEditorView: View {
     let model: AppModel
     let calendars: CalendarController
     @Bindable var editor: EventEditorModel
-    @FocusState private var titleFocused: Bool
+    @FocusState private var focus: Field?
+
+    private enum Field: Hashable { case title, location, notes }
 
     private var locked: Bool { editor.phase == .saving || editor.phase == .refreshing }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: Metrics.spaceL) {
                 TextField("제목", text: $editor.fields.title)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 17, weight: .medium))
-                    .focused($titleFocused)
-                    .padding(.bottom, 6)
-                    .overlay(alignment: .bottom) { Rectangle().fill(.ink).frame(height: Metrics.lineOuter) }
+                    .focused($focus, equals: .title)
+                    .drawnField(.title, focused: focus == .title)
                     .onSubmit { if editor.canSave { save() } }
                 row("종일") {
                     Toggle("종일", isOn: Binding(get: { editor.fields.isAllDay }, set: { editor.setAllDay($0) }))
@@ -280,40 +277,39 @@ struct EventEditorView: View {
                 row("캘린더") { calendarMenu }
                 row("장소") {
                     TextField("장소", text: $editor.fields.location)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13))
-                        .drawnBox()
+                        .focused($focus, equals: .location)
+                        .drawnField(.box, focused: focus == .location)
                 }
                 row("메모", top: true) {
                     TextField("메모", text: $editor.fields.notes, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13))
                         .lineLimit(2...5)
-                        .drawnBox(minHeight: 44)
+                        .focused($focus, equals: .notes)
+                        .padding(.vertical, Metrics.spaceS)
+                        .drawnField(.box, focused: focus == .notes)
                 }
                 status
             }
             .disabled(locked)
-            .padding(.horizontal, 18)
-            .padding(.top, 16)
-            .padding(.bottom, 10)
+            .padding(.horizontal, Metrics.spaceXl)
+            .padding(.top, Metrics.spaceXl)
+            .padding(.bottom, Metrics.spaceL)
 
             Rectangle().fill(.ink).frame(height: Metrics.line)
             footer
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.horizontal, Metrics.spaceXl)
+                .padding(.vertical, Metrics.spaceL)
         }
-        .onAppear { titleFocused = editor.isNew }
+        .onAppear { if editor.isNew { focus = .title } }
     }
 
     private func row<Content: View>(_ label: String, top: Bool = false, @ViewBuilder content: () -> Content) -> some View {
-        HStack(alignment: top ? .top : .center, spacing: 8) {
+        HStack(alignment: top ? .top : .center, spacing: Metrics.spaceM) {
             Text(label)
-                .font(.system(size: 12, weight: .semibold))
+                .textStyle(.section)
                 .foregroundStyle(.inkSoft)
                 .frame(width: 44, alignment: .leading)
-                .padding(.top, top ? 6 : 0)
-            HStack(spacing: 6) { content() }
+                .padding(.top, top ? Metrics.spaceS : 0)
+            HStack(spacing: Metrics.spaceS) { content() }
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -338,7 +334,7 @@ struct EventEditorView: View {
             MenuLabel(text: editor.fields.repeatChoice.label(start: start, calendar: editor.calendar))
         }
         .menuStyle(.button)
-        .buttonStyle(.plain)
+        .buttonStyle(FocusOnlyStyle())
         .menuIndicator(.hidden)
         .fixedSize()
     }
@@ -360,7 +356,7 @@ struct EventEditorView: View {
             MenuLabel(text: source?.name ?? "캘린더", soft: source.flatMap(providerLabel), mark: source?.palette)
         }
         .menuStyle(.button)
-        .buttonStyle(.plain)
+        .buttonStyle(FocusOnlyStyle())
         .menuIndicator(.hidden)
         // A changed event stays in its calendar; moving between calendars is not part of this stage.
         .disabled(!editor.isNew)
@@ -376,34 +372,33 @@ struct EventEditorView: View {
     @ViewBuilder private var status: some View {
         switch editor.phase {
         case .failed(let reason):
-            Notice(icon: "exclamationmark.triangle", bold: "저장하지 못했어요.", text: reason, isError: true)
+            NoticeBar(reason, title: "저장하지 못했어요.", tone: .warning)
         case .conflict:
-            Notice(icon: "exclamationmark.triangle", bold: "다른 곳에서 바뀌었어요.",
-                   text: "이 일정이 다른 기기에서 먼저 바뀌었어요. 새로 불러온 뒤 다시 고쳐 주세요.", isError: true)
+            NoticeBar("이 일정이 다른 기기에서 먼저 바뀌었어요. 새로 불러온 뒤 다시 고쳐 주세요.", title: "다른 곳에서 바뀌었어요.", tone: .warning)
         case .editing, .saving, .refreshing:
             if calendars.isOffline {
-                Notice(icon: "wifi.slash", text: "지금은 인터넷에 연결되어 있지 않아요. 저장하면 이 Mac에 맡겨 두었다가 연결되면 보내요.")
+                NoticeBar("지금은 인터넷에 연결되어 있지 않아요. 저장하면 이 Mac에 맡겨 두었다가 연결되면 보내요.", tone: .info, icon: "wifi.slash")
             }
         }
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Metrics.spaceM) {
             if !editor.isNew {
                 Button("삭제") { model.popover?.question = .delete }
-                    .buttonStyle(DangerButtonStyle())
+                    .buttonStyle(DrawnButtonStyle(.danger))
                     .disabled(locked)
             }
-            Spacer(minLength: 4)
+            Spacer(minLength: Metrics.spaceXs)
             if locked {
-                HStack(spacing: 6) {
+                HStack(spacing: Metrics.spaceS) {
                     ProgressView().controlSize(.small)
                     Text(editor.phase == .saving ? "저장하는 중…" : "달력에 반영하는 중…")
                 }
-                .font(.system(size: 11))
+                .textStyle(.cell)
                 .foregroundStyle(.inkSoft)
             } else if editor.phase != .conflict, let problem = editor.problem, editor.isNew || editor.isDirty {
-                Text(problem).font(.system(size: 11)).foregroundStyle(.inkSoft).lineLimit(1)
+                Text(problem).textStyle(.cell).foregroundStyle(.inkSoft).lineLimit(1)
             }
             if editor.phase == .conflict {
                 Button("닫기") { model.popover = nil }.buttonStyle(DrawnButtonStyle())
@@ -486,13 +481,13 @@ struct EventQuestionView: View {
     @State private var failure: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.display(19)).accessibilityAddTraits(.isHeader)
+        VStack(alignment: .leading, spacing: Metrics.spaceL) {
+            Text(title).textStyle(.subheading).accessibilityAddTraits(.isHeader)
             Text(message)
-                .font(.system(size: 13))
+                .textStyle(.body)
                 .fixedSize(horizontal: false, vertical: true)
             if asksScope {
-                VStack(spacing: 6) {
+                VStack(spacing: Metrics.spaceS) {
                     ForEach(scopes, id: \.scope) { option in
                         ScopeOption(title: option.title, detail: option.detail, isOn: chosenScope == option.scope, isEnabled: option.enabled) {
                             scope = option.scope
@@ -501,9 +496,9 @@ struct EventQuestionView: View {
                 }
             }
             if let failure {
-                Notice(icon: "exclamationmark.triangle", bold: "지우지 못했어요.", text: failure, isError: true)
+                NoticeBar(failure, title: "지우지 못했어요.", tone: .warning)
             }
-            HStack(spacing: 8) {
+            HStack(spacing: Metrics.spaceM) {
                 Spacer()
                 Button(cancelTitle) { model.popover?.question = nil }
                     .buttonStyle(DrawnButtonStyle())
@@ -512,18 +507,19 @@ struct EventQuestionView: View {
                 confirmButton
             }
         }
-        .padding(18)
+        .padding(Metrics.spaceXl)
     }
 
     @ViewBuilder private var confirmButton: some View {
         switch question {
         case .discard:
+            // Red stays with delete; dropping unsaved edits is the plain default action.
             Button("버리기") { model.popover = nil }
-                .buttonStyle(DangerButtonStyle(filled: true))
+                .buttonStyle(DrawnButtonStyle())
                 .keyboardShortcut(.defaultAction)
         case .delete:
             Button(isDeleting ? "지우는 중…" : "삭제") { delete() }
-                .buttonStyle(DangerButtonStyle(filled: true))
+                .buttonStyle(DrawnButtonStyle(.danger))
                 .keyboardShortcut(.defaultAction)
                 .disabled(isDeleting)
         case .saveScope:
@@ -627,38 +623,43 @@ struct EventQuestionView: View {
     }
 }
 
+/// One choice of how far a change reaches. The chosen one is filled with ink, like any choice from many.
 private struct ScopeOption: View {
     let title: String
     let detail: String
     let isOn: Bool
     let isEnabled: Bool
     let action: () -> Void
+    @State private var hovering = false
 
     var body: some View {
+        let text = isOn ? Color.onInk : isEnabled ? Color.ink : Color.inkFaint
         Button(action: action) {
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: Metrics.spaceL) {
                 ZStack {
-                    Circle().strokeBorder(isEnabled ? Color.ink : Color.inkFaint, lineWidth: 1.5)
-                    if isOn { Circle().fill(.ink).padding(4) }
+                    Circle().strokeBorder(text, lineWidth: Metrics.lineBox)
+                    if isOn { Circle().fill(.onInk).padding(Metrics.spaceXs) }
                 }
                 .frame(width: 16, height: 16)
                 .padding(.top, 1)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.system(size: 13, weight: .semibold))
+                VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
+                    Text(title).textStyle(.body).fontWeight(.semibold)
                     Text(isEnabled ? detail : "반복을 바꾸면 고를 수 없어요")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.inkSoft)
+                        .textStyle(.small)
+                        .foregroundStyle(isOn ? Color.onInk : Color.inkSoft)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .foregroundStyle(isEnabled ? Color.ink : Color.inkFaint)
+                .foregroundStyle(text)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .overlay(Rectangle().strokeBorder(.ink, lineWidth: isOn ? 2 : Metrics.line))
+            .padding(.horizontal, Metrics.spaceL)
+            .padding(.vertical, Metrics.spaceM)
+            .background(isOn ? Tokens.selection : hovering && isEnabled ? Color.hover : Color.paper)
+            .overlay(Rectangle().strokeBorder(isEnabled ? Color.ink : Color.inkFaint, lineWidth: Metrics.line))
             .contentShape(Rectangle())
+            .onHover { hovering = $0 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(FocusOnlyStyle())
         .disabled(!isEnabled)
         .accessibilityAddTraits(isOn ? .isSelected : [])
     }
@@ -676,11 +677,12 @@ private struct DayField: View {
     var body: some View {
         Button { isPicking = true } label: {
             Text(EventText.day(day, calendar: calendar))
-                .font(.system(size: 13))
                 .monospacedDigit()
-                .drawnBox()
+                .drawnField(.box, focused: false)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // The box draws itself; the button adds the focus ring.
+        .buttonStyle(FocusOnlyStyle())
         .fixedSize()
         .popover(isPresented: $isPicking, arrowEdge: .bottom) {
             DatePicker("날짜", selection: Binding(get: { day }, set: { onPick($0); isPicking = false }), displayedComponents: .date)
@@ -688,7 +690,7 @@ private struct DayField: View {
                 .labelsHidden()
                 .environment(\.calendar, calendar)
                 .environment(\.locale, Locale(identifier: "ko_KR"))
-                .padding(10)
+                .padding(Metrics.spaceM)
         }
     }
 }
@@ -710,86 +712,33 @@ private struct TimeField: View {
             }
         } label: {
             Text(EventText.time(time, calendar: calendar))
-                .font(.system(size: 13))
                 .monospacedDigit()
-                .drawnBox()
+                .drawnField(.box, focused: false)
+                .contentShape(Rectangle())
         }
         .menuStyle(.button)
-        .buttonStyle(.plain)
+        .buttonStyle(FocusOnlyStyle())
         .menuIndicator(.hidden)
         .fixedSize()
     }
 }
 
-/// What a menu shows when closed: a drawn box with a chevron.
+/// What a menu shows when closed: a drawn box with a chevron. The menu's button adds the focus ring.
 private struct MenuLabel: View {
     let text: String
     var soft: String?
     var mark: Palette?
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: Metrics.spaceS) {
             if let mark { Mark(mark.ink, size: 10) }
             Text("\(text)\(Text(soft.map { " · " + $0 } ?? "").foregroundStyle(.inkSoft))")
-            Spacer(minLength: 4)
+            Spacer(minLength: Metrics.spaceXs)
             Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
         }
-        .font(.system(size: 13))
         .lineLimit(1)
-        .drawnBox()
-    }
-}
-
-/// One line of news under the fields: why saving failed, or that it will wait for the network.
-struct Notice: View {
-    let icon: String
-    var bold: String?
-    let text: String
-    var isError = false
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(isError ? Color.holiday : Color.inkSoft)
-            Text("\(Text(bold.map { $0 + " " } ?? "").fontWeight(.semibold).foregroundStyle(isError ? Color.holiday : Color.ink))\(text)")
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .font(.system(size: 12))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isError ? Tokens.redTint : Color.wall)
-        .overlay(Rectangle().strokeBorder(isError ? Color.holiday : Color.ink, lineWidth: Metrics.line))
-    }
-}
-
-/// 삭제: the drawn button in the holiday red; `filled` for the final yes.
-struct DangerButtonStyle: ButtonStyle {
-    var filled = false
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        let red = isEnabled ? Color.holiday : Color.inkFaint
-        configuration.label
-            .font(.system(size: 13, weight: filled ? .semibold : .regular))
-            .foregroundStyle(filled && isEnabled ? Color.paper : red)
-            .padding(.horizontal, 12)
-            .frame(minWidth: 28, minHeight: 28)
-            .background(filled && isEnabled ? red : configuration.isPressed ? Color.shadeSoft : Color.paper)
-            .opacity(configuration.isPressed && filled ? 0.85 : 1)
-            .overlay(Rectangle().strokeBorder(red, lineWidth: Metrics.line))
-            .contentShape(Rectangle())
-    }
-}
-
-private extension View {
-    /// The editor's input box: a 1 pt ink outline on paper.
-    func drawnBox(minHeight: CGFloat = 28) -> some View {
-        padding(.horizontal, 9)
-            .padding(.vertical, minHeight > 28 ? 6 : 0)
-            .frame(minHeight: minHeight, alignment: minHeight > 28 ? .topLeading : .leading)
-            .background(.paper)
-            .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
-            .contentShape(Rectangle())
+        .drawnField(.box, focused: false)
+        .contentShape(Rectangle())
     }
 }
 

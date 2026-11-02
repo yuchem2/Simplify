@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 import SimplifyKit
 
-/// The chosen day's week on a moulded sheet: day heads, a strip of all-day and multi-day bands,
-/// then the hours of each day from midnight to midnight, scrolled to about now when it opens.
+/// The chosen day's week on the main paper (MainView draws the sheet): day heads, a strip of
+/// all-day and multi-day bands under an ink spine, then the hours of each day from midnight to
+/// midnight, scrolled to about now when it opens.
 struct WeekGrid: View {
     let model: AppModel
     let calendars: CalendarController
@@ -18,28 +20,21 @@ struct WeekGrid: View {
     /// The shortest a block is drawn, so a 10-minute event or a reminder still fits its title.
     static let minBlockHeight: CGFloat = 20
     private static let weekdays = ["일", "월", "화", "수", "목", "금", "토"]
-    /// Today's column: a little of the current-time line's red over the paper.
-    static let todayWash = Tokens.redTint.opacity(0.45)
+    /// Height of the ink bar over today's head, as on today's cell in the month.
+    static let todayBar: CGFloat = 3
 
     var body: some View {
         let days = model.shownWeek.days
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                Color.clear.frame(width: Self.gutter, height: 1)
-                ForEach(days, id: \.self) { day in
-                    DayHead(day: day, model: model, isHoliday: calendars.holidayDays.contains(day),
-                            count: calendars.slots[day]?.count ?? 0,
-                            hasMemo: memos.has(Period(containing: day, scope: .day, calendar: model.calendar)),
-                            todoCount: memos.todos.remaining(on: day, calendar: model.calendar)) {
-                        if model.isSelected(day), model.isPanelHidden { model.isPanelHidden = false }
-                        model.select(day)
-                        focused = true
-                    }
-                }
+            DayHeads(days: days, model: model, calendars: calendars, memos: memos) { day in
+                if model.isSelected(day), model.isPanelHidden { model.isPanelHidden = false }
+                model.select(day)
+                focused = true
             }
-            Rectangle().fill(.ink).frame(height: Metrics.line)
+            Rectangle().fill(.shade).frame(height: Metrics.line)
             BandStrip(days: days, lanes: calendars.lanes[days[0]], model: model, calendars: calendars)
-            Rectangle().fill(.ink).frame(height: Metrics.line)
+            // The one heavy rule of the grid, as under the month's weekday row.
+            Rectangle().fill(.ink).frame(height: Metrics.lineSpine)
             HourGrid(days: days, model: model, calendars: calendars) { day in
                 // After the click's other handlers, as in the month: an event click opens the
                 // popover in the same click, and then the chosen day and focus stay as they are.
@@ -52,11 +47,10 @@ struct WeekGrid: View {
                 }
             }
         }
-        .frame(minWidth: Self.gutter + MonthSheet.minCellSize.width * 7, minHeight: MonthSheet.minCellSize.height * 6)
-        .padding(.horizontal, 20)
-        .padding(.top, 18)
-        .padding(.bottom, 20)
-        .mouldedFrame()
+        // The same footprint as the month, so switching views never resizes the window.
+        .frame(minWidth: MonthSheet.minCellSize.width * 7, minHeight: MonthSheet.minCellSize.height * 6)
+        .padding(.horizontal, Metrics.spaceXxl)
+        .padding(.bottom, Metrics.spaceXxl)
         .calendarKeys(model: model, calendars: calendars, focused: $focused)
     }
 
@@ -64,16 +58,10 @@ struct WeekGrid: View {
         weekdays[calendar.component(.weekday, from: day) - 1]
     }
 
-    private static let timeFormat: DateFormatter = {
-        let format = DateFormatter()
-        format.locale = Locale(identifier: "ko_KR")
-        format.dateFormat = "a h:mm" // 오전 9:30
-        return format
-    }()
-
-    static func time(_ date: Date, calendar: Calendar) -> String {
-        timeFormat.timeZone = calendar.timeZone
-        return timeFormat.string(from: date)
+    /// Sunday and Saturday columns sit one step off the paper, as in the month.
+    static func isWeekend(_ day: Date, calendar: Calendar) -> Bool {
+        let weekday = calendar.component(.weekday, from: day)
+        return weekday == 1 || weekday == 7
     }
 
     /// How far down `day`'s grid `date` sits, by the clock rather than elapsed time, so the hours
@@ -86,7 +74,35 @@ struct WeekGrid: View {
     }
 }
 
-/// A day's number and weekday over its column; today's number sits on an ink disc as in the month.
+/// The row of day heads. It keeps its own width, so a resize redraws the heads alone and each head
+/// is told how much of itself fits instead of trying every arrangement on every step.
+private struct DayHeads: View {
+    let days: [Date]
+    let model: AppModel
+    let calendars: CalendarController
+    let memos: MemoBook
+    let onSelect: (Date) -> Void
+    @State private var columnWidth: CGFloat = .infinity
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Color.clear.frame(width: WeekGrid.gutter, height: 1)
+            ForEach(days, id: \.self) { day in
+                let hasMemo = memos.has(Period(containing: day, scope: .day, calendar: model.calendar))
+                let todoCount = memos.todos.remaining(on: day, calendar: model.calendar)
+                DayHead(day: day, model: model, isHoliday: calendars.holidayDays.contains(day),
+                        count: calendars.slots[day]?.count ?? 0, hasMemo: hasMemo, todoCount: todoCount,
+                        fit: DayHead.Fit(width: columnWidth, day: day, calendar: model.calendar, hasMemo: hasMemo, todoCount: todoCount)) {
+                    onSelect(day)
+                }
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { columnWidth = ($0 - WeekGrid.gutter) / 7 }
+    }
+}
+
+/// A day's number and weekday over its column. Today has a bold number and an ink bar along the
+/// top, as in the month; the chosen day is boxed in ink below that bar.
 private struct DayHead: View {
     let day: Date
     let model: AppModel
@@ -95,46 +111,80 @@ private struct DayHead: View {
     let hasMemo: Bool
     /// Unfinished ToDos on the day, as ✓N at the head's trailing end.
     let todoCount: Int
+    let fit: Fit
     let onSelect: () -> Void
+    @State private var hovering = false
+
+    /// What a head shows in its column: in a narrow window the weekday gives way first, then the
+    /// pencil, so ✓N never spills into the next day.
+    enum Fit {
+        case full, noWeekday, bare
+
+        @MainActor init(width: CGFloat, day: Date, calendar: Calendar, hasMemo: Bool, todoCount: Int) {
+            func textWidth(_ text: String, _ font: NSFont) -> CGFloat { ceil((text as NSString).size(withAttributes: [.font: font]).width) }
+            let meta = NSFont.monospacedDigitSystemFont(ofSize: TextStyle.meta.size, weight: .medium)
+            let date = textWidth("\(calendar.component(.day, from: day))", .monospacedDigitSystemFont(ofSize: TextStyle.date.size, weight: .bold))
+            // Leading padding, then with ToDos the trailing padding and ✓N (glyph, gap, count). The
+            // spacer before ✓N takes the stack's spacing on both of its sides.
+            let base = Metrics.spaceM + date + (todoCount > 0 ? Metrics.spaceM + Metrics.spaceS * 2 + 9 + 2 + textWidth("\(todoCount)", meta) : 0)
+            let memo = hasMemo ? Metrics.spaceS + 11 : 0
+            let weekday = Metrics.spaceS + textWidth(WeekGrid.weekdayName(day, calendar: calendar), meta)
+            self = width >= base + memo + weekday ? .full : width >= base + memo ? .noWeekday : .bare
+        }
+    }
+
+    private func head(isToday: Bool, red: Bool, weekday: Bool, memo: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Metrics.spaceS) {
+            Text("\(model.calendar.component(.day, from: day))")
+                .textStyle(.date)
+                .fontWeight(isToday ? .bold : .semibold)
+                .foregroundStyle(red ? Color.holiday : Color.ink)
+                .fixedSize()
+            if weekday {
+                Text(WeekGrid.weekdayName(day, calendar: model.calendar))
+                    .textStyle(.meta)
+                    .foregroundStyle(.inkSoft)
+                    .fixedSize()
+            }
+            if hasMemo && memo { MemoMark() }
+            if todoCount > 0 {
+                Spacer(minLength: 0)
+                TodoCount(todoCount)
+            }
+        }
+    }
 
     var body: some View {
         let isToday = model.isToday(day)
+        let isSelected = model.isSelected(day)
         let red = model.isRedDay(day) || isHoliday
+        let weekend = WeekGrid.isWeekend(day, calendar: model.calendar)
         Button(action: onSelect) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("\(model.calendar.component(.day, from: day))")
-                    .font(.display(16))
-                    .foregroundStyle(isToday ? Color.onInk : red ? Color.holiday : Color.ink)
-                    .padding(.horizontal, isToday ? 4 : 0)
-                    .frame(minWidth: isToday ? 24 : nil, minHeight: 24)
-                    .background { if isToday { Capsule().fill(.ink) } }
-                    .padding(.leading, isToday ? -4 : 0)
-                Text(WeekGrid.weekdayName(day, calendar: model.calendar))
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(0.7)
-                    .foregroundStyle(red ? Color.holiday : Color.inkSoft)
-                    // Beside ✓N the weekday keeps its width; without it the head is as before.
-                    .fixedSize(horizontal: todoCount > 0, vertical: false)
-                if hasMemo { MemoMark() }
-                if todoCount > 0 {
-                    Spacer(minLength: 0)
-                    TodoCount(todoCount)
-                }
-            }
-            .padding(.leading, 10)
-            .padding(.trailing, todoCount > 0 ? 8 : 0)
-            .padding(.top, 4)
-            .padding(.bottom, 8)
+            head(isToday: isToday, red: red, weekday: fit == .full, memo: fit != .bare)
+            .padding(.leading, Metrics.spaceM)
+            .padding(.trailing, todoCount > 0 ? Metrics.spaceM : 0)
+            .padding(.top, Metrics.spaceS)
+            .padding(.bottom, Metrics.spaceM)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                if model.isSelected(day) {
-                    Rectangle().inset(by: 2).strokeBorder(.ink, lineWidth: Metrics.line)
+            .background(hovering && !isSelected ? Color.hover : weekend ? Color.raised : Color.clear)
+            .overlay {
+                // Sides and bottom only, under today's bar, like the month's chosen cell.
+                if isSelected {
+                    ZStack {
+                        Rectangle().fill(.ink).frame(width: Metrics.line).frame(maxWidth: .infinity, alignment: .leading)
+                        Rectangle().fill(.ink).frame(width: Metrics.line).frame(maxWidth: .infinity, alignment: .trailing)
+                        Rectangle().fill(.ink).frame(height: Metrics.line).frame(maxHeight: .infinity, alignment: .bottom)
+                    }
+                    .padding(.top, WeekGrid.todayBar)
                 }
             }
-            .background(isToday ? WeekGrid.todayWash : Color.clear)
+            .overlay(alignment: .top) {
+                if isToday { Rectangle().fill(.ink).frame(height: WeekGrid.todayBar) }
+            }
             .contentShape(Rectangle())
+            .onHover { hovering = $0 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(FocusOnlyStyle())
         // A new event's popover (⌘N, double-click in the column) points at the day's head.
         .eventAnchor(EventAnchor.cell(day))
         .accessibilityLabel(label(isToday: isToday))
@@ -167,18 +217,18 @@ private struct BandStrip: View {
         let bandRows = overflows ? WeekGrid.maxLanes - 1 : shownRows
         HStack(spacing: 0) {
             Text("종일")
-                .font(.system(size: 11))
+                .textStyle(.meta)
                 .foregroundStyle(.inkSoft)
-                .frame(width: WeekGrid.gutter - 8, height: WeekGrid.laneHeight, alignment: .trailing)
-                .padding(.trailing, 8)
+                .frame(width: WeekGrid.gutter - Metrics.spaceM, height: WeekGrid.laneHeight, alignment: .trailing)
+                .padding(.trailing, Metrics.spaceM)
                 .frame(maxHeight: .infinity, alignment: .top)
             GeometryReader { geo in
                 let width = geo.size.width / CGFloat(days.count)
                 ZStack(alignment: .topLeading) {
                     HStack(spacing: 0) {
                         ForEach(days, id: \.self) { day in
-                            Rectangle().fill(model.isToday(day) ? WeekGrid.todayWash : Color.clear)
-                                .overlay(alignment: .leading) { Rectangle().fill(.ink).frame(width: Metrics.line) }
+                            Rectangle().fill(WeekGrid.isWeekend(day, calendar: model.calendar) ? Color.raised : Color.clear)
+                                .overlay(alignment: .leading) { Rectangle().fill(.shade).frame(width: Metrics.line) }
                         }
                     }
                     ForEach(placements.filter { $0.lane < bandRows }, id: \.occurrence.id) { placement in
@@ -219,10 +269,10 @@ private struct BandStrip: View {
                             let more = placements.count { $0.lane >= bandRows && $0.firstDay <= index && $0.lastDay >= index }
                             if more > 0 {
                                 Text("+\(more)개")
-                                    .font(.system(size: 11, weight: .medium))
+                                    .textStyle(.meta)
                                     .foregroundStyle(.inkSoft)
                                     .frame(height: WeekGrid.laneHeight - 3)
-                                    .offset(x: CGFloat(index) * width + 8, y: 4 + CGFloat(bandRows) * WeekGrid.laneHeight)
+                                    .offset(x: CGFloat(index) * width + Metrics.spaceM, y: 4 + CGFloat(bandRows) * WeekGrid.laneHeight)
                             }
                         }
                     }
@@ -244,27 +294,28 @@ private struct WeekBand: View {
 
     var body: some View {
         let palette = source?.palette ?? .grey
+        let color = isSelected ? Color.onInk : EventTime.titleColor(occurrence, source: source)
         let title = Text(occurrence.title)
-            .font(.system(size: 12))
-            .strikethrough(occurrence.isCompleted)
-            .foregroundStyle(isSelected ? Color.onInk : EventTime.titleColor(occurrence, source: source))
+            .textStyle(.small)
+            .foregroundStyle(color)
             .lineLimit(1)
+            .ledgerStrikethrough(occurrence.isCompleted, color: color)
         Group {
             if source?.isHoliday == true {
-                title.padding(.horizontal, 6).background { if isSelected { Rectangle().fill(.ink) } }
+                title.padding(.horizontal, Metrics.spaceS).background { if isSelected { Rectangle().fill(Tokens.selection) } }
             } else if source?.isReminderList == true {
-                HStack(spacing: 5) {
+                HStack(spacing: Metrics.spaceXs) {
                     EventMark(occurrence: occurrence, source: source, size: 9)
                     title
                 }
-                .padding(.horizontal, 6)
-                .background { if isSelected { Rectangle().fill(.ink) } }
+                .padding(.horizontal, Metrics.spaceS)
+                .background { if isSelected { Rectangle().fill(Tokens.selection) } }
             } else {
                 title
-                    .padding(.leading, continues.0 ? 6 : 12)
-                    .padding(.trailing, 4)
+                    .padding(.leading, continues.0 ? Metrics.spaceS : Metrics.spaceL)
+                    .padding(.trailing, Metrics.spaceXs)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                    .background(isSelected ? Color.ink : palette.tint)
+                    .background(isSelected ? Tokens.selection : palette.tint)
                     .overlay(alignment: .leading) {
                         if !continues.0 {
                             Rectangle().fill(palette.ink).frame(width: 6)
@@ -361,11 +412,11 @@ private struct HourLabels: View {
             Color.clear
             ForEach(1..<24, id: \.self) { hour in
                 Text(hour < 12 ? "오전 \(hour)시" : hour == 12 ? "오후 12시" : "오후 \(hour - 12)시")
-                    .font(.system(size: 11).monospacedDigit())
+                    .textStyle(.meta)
                     .foregroundStyle(.inkSoft)
-                    .padding(.trailing, 8)
-                    .frame(height: 14)
-                    .offset(y: CGFloat(hour) * WeekGrid.hourHeight - 7)
+                    .padding(.trailing, Metrics.spaceM)
+                    .frame(height: TextStyle.meta.lineHeight)
+                    .offset(y: CGFloat(hour) * WeekGrid.hourHeight - TextStyle.meta.lineHeight / 2)
             }
         }
         .frame(width: WeekGrid.gutter)
@@ -373,21 +424,25 @@ private struct HourLabels: View {
     }
 }
 
-/// A day's hours: a light rule every hour, the day's timed events as blocks, and the current time.
+/// A day's hours: a hairline every hour, the day's timed events as blocks, and the current time.
+/// Weekends sit on the raised tone; the pointer over a column gives it the hover tone.
 private struct DayColumn: View {
     let day: Date
     let model: AppModel
     let calendars: CalendarController
+    @State private var hovering = false
 
     var body: some View {
         let isToday = model.isToday(day)
+        let weekend = WeekGrid.isWeekend(day, calendar: model.calendar)
+        let ground: Color = hovering ? .hover : weekend ? .raised : .paper
         let hour = WeekGrid.hourHeight
         let blocks = TimedLayout.blocks(calendars.occurrences, on: day, calendar: model.calendar,
                                         minimumDuration: Double(WeekGrid.minBlockHeight / hour) * 3600)
         GeometryReader { geo in
             let width = geo.size.width - 4
             ZStack(alignment: .topLeading) {
-                Rectangle().fill(isToday ? WeekGrid.todayWash : Color.clear)
+                Rectangle().fill(ground)
                 Path { path in
                     for h in 1..<24 {
                         path.move(to: CGPoint(x: 0, y: CGFloat(h) * hour))
@@ -407,7 +462,7 @@ private struct DayColumn: View {
                     let columnWidth = width / CGFloat(block.columns)
                     let gap: CGFloat = block.column < block.columns - 1 ? 2 : 0
                     let anchor = EventAnchor.row(block.occurrence.id, day: day, in: .weekGrid)
-                    TimeBlock(block: block, source: calendars.sources[block.occurrence.sourceID], isToday: isToday,
+                    TimeBlock(block: block, source: calendars.sources[block.occurrence.sourceID], ground: ground,
                               isSelected: model.selectedEventID == block.occurrence.id,
                               width: columnWidth - gap, height: height, calendar: model.calendar)
                         .frame(width: columnWidth - gap, height: height)
@@ -424,11 +479,12 @@ private struct DayColumn: View {
                 }
             }
         }
-        .overlay(alignment: .leading) { Rectangle().fill(.ink).frame(width: Metrics.line) }
+        .overlay(alignment: .leading) { Rectangle().fill(.shade).frame(width: Metrics.line) }
+        .onHover { hovering = $0 }
     }
 }
 
-/// The current time across a day: solid red with a dot in today's column, faint and dashed in the others.
+/// The current time across a day: a solid ink line with a dot in today's column, a faint dashed hairline in the others.
 private struct NowLine: View {
     let y: CGFloat
     let width: CGFloat
@@ -441,10 +497,10 @@ private struct NowLine: View {
         }
         Group {
             if isToday {
-                line.stroke(Tokens.redInk, lineWidth: 1.5)
-                    .overlay { Circle().fill(Tokens.redInk).frame(width: 8, height: 8).position(x: 0, y: y) }
+                line.stroke(Tokens.now, lineWidth: Metrics.lineBox)
+                    .overlay { Circle().fill(Tokens.now).frame(width: 7, height: 7).position(x: 0, y: y) }
             } else {
-                line.stroke(Tokens.redInk.opacity(0.55), style: StrokeStyle(lineWidth: Metrics.line, dash: [3, 3]))
+                line.stroke(.inkFaint, style: StrokeStyle(lineWidth: Metrics.line, dash: [3, 3]))
             }
         }
         .accessibilityHidden(true)
@@ -456,53 +512,58 @@ private struct NowLine: View {
 private struct TimeBlock: View {
     let block: TimedLayout.Block
     let source: CalendarController.Source?
-    let isToday: Bool
+    /// The column's own tone under a reminder, so its title covers the hour rule cleanly.
+    let ground: Color
     /// Picked with a click or Tab: drawn in ink, as in the month.
     let isSelected: Bool
     let width: CGFloat
     let height: CGFloat
     let calendar: Calendar
+    @State private var hovering = false
 
     var body: some View {
         let occurrence = block.occurrence
         let palette = source?.palette ?? .grey
+        let color = isSelected ? Color.onInk : EventTime.titleColor(occurrence, source: source)
         let title = Text(occurrence.title)
-            .strikethrough(occurrence.isCompleted)
-            .foregroundStyle(isSelected ? Color.onInk : EventTime.titleColor(occurrence, source: source))
-        let time = WeekGrid.time(occurrence.start, calendar: calendar)
+            .foregroundStyle(color)
+            .ledgerStrikethrough(occurrence.isCompleted, color: color)
+        let time = DateText.clock(occurrence.start, calendar: calendar)
         Group {
             if source?.isReminderList == true {
-                HStack(spacing: 5) {
+                HStack(spacing: Metrics.spaceXs) {
                     EventMark(occurrence: occurrence, source: source, size: 9)
-                    title.font(.system(size: 12)).lineLimit(1)
+                    title.textStyle(.small).lineLimit(1)
                 }
-                .padding(.horizontal, 4)
+                .padding(.horizontal, Metrics.spaceXs)
                 .frame(maxWidth: .infinity, maxHeight: WeekGrid.minBlockHeight - 2, alignment: .leading)
                 // Covers the hour rule under the title, in the column's own colour.
-                .background { ZStack { Color.paper; if isToday { WeekGrid.todayWash }; if isSelected { Color.ink } } }
+                .background(isSelected ? Tokens.selection : hovering ? Color.hover : ground)
                 .frame(maxHeight: .infinity, alignment: .top)
             } else {
                 // Side by side in a narrow column, a block tall enough gets a second title line in place of the time.
                 let narrow = width < 70
                 VStack(alignment: .leading, spacing: 0) {
-                    title.font(.system(size: narrow ? 11 : 12, weight: .semibold)).lineLimit(narrow && height >= 32 ? 2 : 1)
+                    title.textStyle(narrow ? .cell : .small).fontWeight(.semibold).lineLimit(narrow && height >= 32 ? 2 : 1)
                     if height >= 32, !narrow {
-                        Text(time).font(.system(size: 11)).foregroundStyle(isSelected ? Color.onInk : Color.inkSoft).lineLimit(1)
+                        Text(time).textStyle(.meta).foregroundStyle(isSelected ? Color.onInk : Color.inkSoft).lineLimit(1)
                     }
                 }
-                .padding(.leading, 9)
-                .padding(.trailing, 4)
-                .padding(.vertical, 2)
+                .padding(.leading, Metrics.spaceM)
+                .padding(.trailing, Metrics.spaceXs)
+                .padding(.vertical, Metrics.spaceXxs)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background(isSelected ? Color.ink : palette.tint)
+                .background(isSelected ? Tokens.selection : palette.tint)
                 .overlay(alignment: .leading) {
                     Rectangle().fill(palette.ink).frame(width: 4)
                         .overlay(alignment: .trailing) { Rectangle().fill(.ink).frame(width: Metrics.line) }
                 }
-                .overlay { Rectangle().strokeBorder(.ink, lineWidth: Metrics.line) }
+                // The block keeps its calendar's tint under the pointer; a heavier edge answers instead.
+                .overlay { Rectangle().strokeBorder(.ink, lineWidth: hovering && !isSelected ? Metrics.lineBox : Metrics.line) }
                 .clipped()
             }
         }
+        .onHover { hovering = $0 }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(time), \(occurrence.title)" + (source.map { ", \($0.name)" } ?? ""))
     }

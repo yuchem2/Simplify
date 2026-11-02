@@ -70,7 +70,7 @@ extension View {
         overlay {
             if isUnsent {
                 Rectangle()
-                    .strokeBorder(.ink, style: StrokeStyle(lineWidth: 1.2, dash: [3, 2]))
+                    .strokeBorder(.ink, style: StrokeStyle(lineWidth: Metrics.lineMark, dash: [3, 2]))
                     .padding(-1.5)
                     .accessibilityLabel("보내기 대기")
             }
@@ -176,8 +176,9 @@ struct EventPopoverLayer: View {
     @State private var size = CGSize(width: EventPopoverLayer.width, height: 220)
 
     static let width: CGFloat = 340
-    private static let gap: CGFloat = 10
-    private static let margin: CGFloat = 12
+    /// From the target to the popover's edge: the arrow and a little air.
+    private static let gap: CGFloat = PopoverArrow.depth + Metrics.spaceXxs
+    private static let margin: CGFloat = Metrics.spaceL
 
     var body: some View {
         if let state = model.popover {
@@ -200,17 +201,29 @@ struct EventPopoverLayer: View {
                         .accessibilityHidden(true)
                     EventPopoverCard(model: model, calendars: calendars, state: state)
                         .frame(width: Self.width)
-                        .mouldedFrame(moulding: false)
+                        .floatingFrame()
                         .overlay(alignment: .topLeading) {
                             PopoverArrow(pointsLeft: place.arrowOnLeft)
-                                .offset(x: place.arrowOnLeft ? -PopoverArrow.depth + Metrics.lineOuter / 2 : Self.width - Metrics.lineOuter / 2,
-                                        y: place.arrowY - PopoverArrow.depth)
+                                .offset(x: arrowX(place), y: place.arrowY - PopoverArrow.depth)
+                        }
+                        // The arrow's own flat shadow, under the card like the card's.
+                        .background(alignment: .topLeading) {
+                            PopoverArrow.Outline(pointsLeft: place.arrowOnLeft)
+                                .fill(Tokens.shadowFloat)
+                                .frame(width: PopoverArrow.size.width, height: PopoverArrow.size.height)
+                                .offset(x: arrowX(place) + Metrics.shadowOffset, y: place.arrowY - PopoverArrow.depth + Metrics.shadowOffset)
+                                .accessibilityHidden(true)
                         }
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
                         .offset(x: place.origin.x, y: place.origin.y)
                 }
             }
         }
+    }
+
+    /// The arrow overlaps the card's ink edge so the edge opens where the arrow joins it.
+    private func arrowX(_ place: Placement) -> CGFloat {
+        place.arrowOnLeft ? -PopoverArrow.depth : Self.width - Metrics.line
     }
 
     private struct Placement {
@@ -234,30 +247,47 @@ struct EventPopoverLayer: View {
     }
 }
 
-/// The little point on the popover's side, drawn like the popover: paper with an ink edge.
+/// The little point on the popover's side, drawn like the popover: paper with a 1 pt ink edge. Its
+/// base lies over the card's edge, so the paper runs through and the two slanted lines meet the
+/// edge where it stops.
 private struct PopoverArrow: View {
     let pointsLeft: Bool
     static let depth: CGFloat = 8
+    /// The depth plus the width of the card's edge it covers.
+    static let size = CGSize(width: depth + Metrics.line, height: depth * 2)
 
     var body: some View {
-        let d = Self.depth
+        let d = Self.depth, half = Metrics.line / 2
+        // Mirrored for an arrow on the right; the base is at `d + line` on the left, at 0 on the right.
+        let x = { (value: CGFloat) in pointsLeft ? value : Self.size.width - value }
         ZStack {
+            Outline(pointsLeft: pointsLeft)
+                .fill(.paper)
             Path { p in
-                p.move(to: CGPoint(x: pointsLeft ? d + 1 : 0, y: 0))
-                p.addLine(to: CGPoint(x: pointsLeft ? 0 : d, y: d))
-                p.addLine(to: CGPoint(x: pointsLeft ? d + 1 : 0, y: d * 2))
+                // Down the middle of the card's edge, out to the tip and back.
+                p.move(to: CGPoint(x: x(d + half), y: 0))
+                p.addLine(to: CGPoint(x: x(half), y: d))
+                p.addLine(to: CGPoint(x: x(d + half), y: d * 2))
+            }
+            .stroke(.ink, style: StrokeStyle(lineWidth: Metrics.line, lineCap: .butt, lineJoin: .miter))
+        }
+        .frame(width: Self.size.width, height: Self.size.height)
+        .accessibilityHidden(true)
+    }
+
+    /// The arrow's area, base included: filled with paper on the card, with the shadow under it.
+    struct Outline: Shape {
+        let pointsLeft: Bool
+
+        func path(in rect: CGRect) -> Path {
+            let x = { (value: CGFloat) in pointsLeft ? value : rect.width - value }
+            return Path { p in
+                p.move(to: CGPoint(x: x(rect.width), y: 0))
+                p.addLine(to: CGPoint(x: x(0), y: rect.height / 2))
+                p.addLine(to: CGPoint(x: x(rect.width), y: rect.height))
                 p.closeSubpath()
             }
-            .fill(.paper)
-            Path { p in
-                p.move(to: CGPoint(x: pointsLeft ? d : 0, y: 0))
-                p.addLine(to: CGPoint(x: pointsLeft ? 0 : d, y: d))
-                p.addLine(to: CGPoint(x: pointsLeft ? d : 0, y: d * 2))
-            }
-            .stroke(.ink, lineWidth: Metrics.lineOuter)
         }
-        .frame(width: d + 1, height: d * 2)
-        .accessibilityHidden(true)
     }
 }
 

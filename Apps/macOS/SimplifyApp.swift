@@ -24,6 +24,8 @@ struct SimplifyApp: App {
         let cache = SimplifyStore.openCache()
         let model = AppModel()
         _model = State(initialValue: model)
+        // Before the first frame, so a chosen theme never flashes the system one; MainView keeps it in step after.
+        model.theme.apply()
         _calendars = State(initialValue: CalendarController(container: cache, calendar: model.calendar))
     }
 
@@ -31,10 +33,11 @@ struct SimplifyApp: App {
         // One window: the app has a single month view and a single sync loop.
         Window("Simplify", id: "main") {
             MainView(model: model, calendars: calendars, memos: memos)
-                // Seven 100 pt day cells beside the 360 pt panel, plus margins.
-                .frame(minWidth: 1180, minHeight: 700)
+                // Seven 64 pt day cells beside the narrow 300 pt panel, plus margins: an 11-inch iPad's width.
+                .frame(minWidth: MainView.minWidth, minHeight: 600)
         }
-        .windowStyle(.hiddenTitleBar)
+        // A real title bar (the window's controls live in it), drawn without its own title or glass.
+        .windowToolbarStyle(.unified(showsTitle: false))
         // Open the window on every launch, even when restoration finds nothing to bring back.
         .defaultLaunchBehavior(.presented)
         .modelContainer(container)
@@ -49,6 +52,15 @@ struct SimplifyApp: App {
                 Button("새 일정") { model.newEvent(on: model.selectedDay, calendars: calendars) }
                     .keyboardShortcut("n", modifiers: .command)
                     .disabled(model.isModalOpen || calendars.writableSources.isEmpty)
+            }
+            CommandGroup(before: .toolbar) {
+                // The title bar's view switch, also from the keyboard (and with the toolbar hidden).
+                ForEach(Array(AppModel.CalendarView.allCases.enumerated()), id: \.element) { index, view in
+                    Button("\(view.label) 보기") { model.calendarView = view }
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                        .disabled(model.isModalOpen)
+                }
+                Divider()
             }
             CommandGroup(after: .toolbar) {
                 Button(model.isPanelHidden ? "패널 보기" : "패널 숨기기") { model.isPanelHidden.toggle() }
@@ -71,7 +83,7 @@ private struct MoveCommands: Commands {
             Group {
                 Button("오늘") { model.goToToday() }
                     .keyboardShortcut("t", modifiers: .command)
-                let unit = model.calendarView == .week ? "주" : "달"
+                let unit = model.calendarView.unit
                 Button("이전 \(unit)") { model.turnPage(by: -1) }
                     .keyboardShortcut(.leftArrow, modifiers: .command)
                 Button("다음 \(unit)") { model.turnPage(by: 1) }

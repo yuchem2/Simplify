@@ -13,10 +13,21 @@ import SimplifyKit
 enum Snapshot {
     static func runIfRequested(model: AppModel, calendars: CalendarController, memos realMemos: MemoBook) {
         guard let mode = ProcessInfo.processInfo.environment["SIMPLIFY_SNAPSHOT"] else { return }
+        if mode == "window" {
+            captureWindow(model: model)
+            return
+        }
+        if mode == "resize" {
+            measureResize(model: model)
+            return
+        }
         let shown = mode == "sample" ? sampleController(calendar: model.calendar, days: model.grid.weeks.flatMap { $0 }) : calendars
         let memos = mode == "sample" ? sampleMemos(calendar: model.calendar, isSaved: true) : realMemos
         render(MainView(model: model, calendars: shown, memos: memos), name: "light", appearance: .aqua, scheme: .light)
         render(MainView(model: model, calendars: shown, memos: memos), name: "dark", appearance: .darkAqua, scheme: .dark)
+        // The smallest window: an 11-inch iPad's width.
+        let smallest = CGSize(width: MainView.minWidth, height: 600)
+        render(MainView(model: model, calendars: shown, memos: memos), name: "narrow", appearance: .aqua, scheme: .light, size: smallest)
         if mode == "sample" {
             // Completed reminders are shown struck through for the rest of the pictures.
             shown.showsCompletedReminders = true
@@ -27,9 +38,20 @@ enum Snapshot {
             model.calendarView = .week
             render(MainView(model: model, calendars: shown, memos: memos), name: "weekview", appearance: .aqua, scheme: .light)
             render(MainView(model: model, calendars: shown, memos: memos), name: "weekview-dark", appearance: .darkAqua, scheme: .dark)
+            render(MainView(model: model, calendars: shown, memos: memos), name: "weekview-narrow", appearance: .aqua, scheme: .light,
+                   size: CGSize(width: MainView.minWidth, height: 600))
+            model.calendarView = .year
+            shown.show(days: model.shownDays, calendar: model.calendar)
+            render(MainView(model: model, calendars: shown, memos: memos), name: "yearview", appearance: .aqua, scheme: .light)
+            render(MainView(model: model, calendars: shown, memos: memos), name: "yearview-dark", appearance: .darkAqua, scheme: .dark)
             model.calendarView = view
+            shown.show(days: model.shownDays, calendar: model.calendar)
             model.isSettingsOpen = true
             render(MainView(model: model, calendars: shown, memos: memos), name: "settings", appearance: .aqua, scheme: .light)
+            render(ZStack { MainView(model: model, calendars: shown, memos: memos); SettingsModal(model: model, calendars: shown, page: .general) },
+                   name: "settings-general", appearance: .aqua, scheme: .light)
+            render(ZStack { MainView(model: model, calendars: shown, memos: memos); SettingsModal(model: model, calendars: shown, page: .calendars) },
+                   name: "settings-calendars-dark", appearance: .darkAqua, scheme: .dark)
             render(ZStack { MainView(model: model, calendars: shown, memos: memos); SettingsModal(model: model, calendars: shown, intro: .icloud) },
                    name: "icloud", appearance: .aqua, scheme: .light)
             render(ZStack { MainView(model: model, calendars: shown, memos: memos); SettingsModal(model: model, calendars: shown, intro: .icloud) },
@@ -38,6 +60,7 @@ enum Snapshot {
             renderEventPopovers(model: model, calendars: shown, memos: memos)
             renderMemos(model: model, calendars: shown)
             renderTodos(model: model, calendars: shown)
+            renderComponents()
         }
         NSApp.terminate(nil)
     }
@@ -216,10 +239,89 @@ enum Snapshot {
         for (name, appearance, scheme) in [("todo-chips", NSAppearance.Name.aqua, ColorScheme.light), ("todo-chips-dark", .darkAqua, .dark)] {
             render(ZStack(alignment: .topLeading) {
                 Color.paper
-                Text(MemoStyle.rendered(chips)).lineHeight(.exact(points: MemoStyle.lineHeight)).padding(.horizontal, 14).padding(.vertical, 10)
+                Text(MemoStyle.rendered(chips)).lineHeight(.exact(points: MemoStyle.lineHeight)).padding(.horizontal, Metrics.spaceM + MemoStyle.textViewInset.width).padding(.vertical, Metrics.spaceS + MemoStyle.textViewInset.height)
                     .frame(width: 316, alignment: .leading).overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line)).padding(20)
             }.frame(width: 360, height: 180), name: name, appearance: appearance, scheme: scheme, size: CGSize(width: 360, height: 180))
         }
+    }
+
+    /// `SIMPLIFY_SNAPSHOT=window`: the real window with its title bar (which ImageRenderer never
+    /// draws), at its size and then at the smallest size, as `snapshot-window*.png`. It shows this
+    /// Mac's own calendars, so the files stay in the app's temporary folder.
+    private static func captureWindow(model: AppModel) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) else { NSApp.terminate(nil); return }
+            @MainActor func capture(_ name: String) {
+                guard let frame = window.contentView?.superview,
+                      let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
+                frame.cacheDisplay(in: frame.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: FileManager.default.temporaryDirectory.appending(path: "snapshot-\(name).png"))
+            }
+            let original = (model.calendarView, window.frame)
+            window.setContentSize(NSSize(width: 1260, height: 800))
+            try? await Task.sleep(for: .seconds(1))
+            capture("window")
+            model.isSettingsOpen = true
+            try? await Task.sleep(for: .seconds(1))
+            capture("window-settings")
+            model.isSettingsOpen = false
+            model.calendarView = .week
+            try? await Task.sleep(for: .seconds(1))
+            capture("window-week")
+            window.setContentSize(window.contentMinSize)
+            try? await Task.sleep(for: .seconds(1))
+            capture("window-week-narrow")
+            model.calendarView = original.0
+            window.setFrame(original.1, display: false)
+            NSApp.terminate(nil)
+        }
+    }
+
+    /// `SIMPLIFY_SNAPSHOT=resize`: times a live window resize in each view, one layout and draw per
+    /// step, and writes the milliseconds to `resize.txt` in the app's temporary folder.
+    private static func measureResize(model: AppModel) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) else { NSApp.terminate(nil); return }
+            var report = ""
+            let original = (model.calendarView, model.isPanelHidden, window.frame)
+            let cases: [(String, AppModel.CalendarView, Bool)] = [
+                ("month+panel", .month, false), ("month", .month, true),
+                ("week+panel", .week, false), ("year+panel", .year, false),
+            ]
+            for (name, view, hidden) in cases {
+                model.calendarView = view
+                model.isPanelHidden = hidden
+                window.setContentSize(NSSize(width: 1500, height: 800))
+                try? await Task.sleep(for: .seconds(1.5))
+                var times: [Double] = []
+                for step in 0..<60 {
+                    // 1200 to 1780 pt and back: wider than either window's minimum, so every step resizes.
+                    let width = 1200 + Double(step < 30 ? step : 59 - step) * 20
+                    let start = CACurrentMediaTime()
+                    window.setContentSize(NSSize(width: width, height: 800))
+                    window.contentView?.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                    times.append((CACurrentMediaTime() - start) * 1000)
+                }
+                let sorted = times.sorted()
+                report += String(format: "%@\tmedian %.1f ms\tp90 %.1f ms\tmax %.1f ms\n", name, sorted[30], sorted[54], sorted[59])
+            }
+            (model.calendarView, model.isPanelHidden) = (original.0, original.1)
+            window.setFrame(original.2, display: false)
+            try? report.write(to: FileManager.default.temporaryDirectory.appending(path: "resize.txt"), atomically: true, encoding: .utf8)
+            NSApp.terminate(nil)
+        }
+    }
+
+    /// The shared controls in every state side by side, since hover and keyboard focus never show
+    /// in a rendered picture of the window.
+    private static func renderComponents() {
+        let gallery = ComponentGallery()
+        let size = CGSize(width: 960, height: 520)
+        render(gallery, name: "components", appearance: .aqua, scheme: .light, size: size)
+        render(gallery, name: "components-dark", appearance: .darkAqua, scheme: .dark, size: size)
     }
 
     private static func render(_ view: some View, name: String, appearance: NSAppearance.Name, scheme: ColorScheme, size: CGSize = CGSize(width: 1260, height: 800)) {
@@ -322,6 +424,93 @@ enum Snapshot {
                                             writer: EventWriter(fileURL: FileManager.default.temporaryDirectory.appending(path: "snapshot-pending.json")))
         controller.show(days: days, calendar: calendar)
         return controller
+    }
+}
+
+/// Every state of the Kit controls on one sheet: rest, hover, focus, chosen, disabled, error.
+/// Text stands in for TextField here: ImageRenderer cannot draw AppKit-backed fields.
+private struct ComponentGallery: View {
+    @State private var tab = 0
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Metrics.spaceXxxl) {
+            VStack(alignment: .leading, spacing: Metrics.spaceXl) {
+                SectionRule("버튼")
+                HStack(spacing: Metrics.spaceL) {
+                    Button("기본") {}.buttonStyle(DrawnButtonStyle())
+                    Button("새 일정") {}.buttonStyle(DrawnButtonStyle(.primary))
+                    Button("켜짐") {}.buttonStyle(DrawnButtonStyle(.toggled))
+                    Button("삭제") {}.buttonStyle(DrawnButtonStyle(.danger))
+                    Button("가져오기") {}.buttonStyle(DrawnButtonStyle(.text))
+                    Button("못 누름") {}.buttonStyle(DrawnButtonStyle()).disabled(true)
+                }
+                HStack(spacing: Metrics.spaceL) {
+                    Text("포커스").textStyle(.body).padding(.horizontal, Metrics.spaceL).frame(height: 28)
+                        .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line)).focusRing(true)
+                    Text("hover").textStyle(.body).padding(.horizontal, Metrics.spaceL).frame(height: 28).background(.hover)
+                        .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
+                    SegmentedTabs([(0, "하루"), (1, "한 주"), (2, "한 달")], selection: $tab)
+                }
+                SectionRule("입력 칸")
+                HStack(spacing: Metrics.spaceL) {
+                    Text("기본").foregroundStyle(.inkFaint).frame(maxWidth: .infinity, alignment: .leading).drawnField(focused: false)
+                    Text("포커스").frame(maxWidth: .infinity, alignment: .leading).drawnField(focused: true)
+                    Text("비활성").frame(maxWidth: .infinity, alignment: .leading).drawnField(focused: false).disabled(true)
+                    Text("오류").frame(maxWidth: .infinity, alignment: .leading).drawnField(focused: false, error: true)
+                }
+                .frame(width: 520)
+                HStack(spacing: Metrics.spaceL) {
+                    Text("줄 안 · 고치는 중").textStyle(.item).frame(maxWidth: .infinity, alignment: .leading).drawnField(.inline, focused: true)
+                    Text("디자인 리뷰").frame(maxWidth: .infinity, alignment: .leading).drawnField(.title, focused: true)
+                }
+                .frame(width: 520)
+                SectionRule("알림 띠 · 태그")
+                NoticeBar("이번 실행에서 쓴 메모는 남지 않아요.", title: "메모를 저장할 수 없어요.").frame(width: 520)
+                HStack(spacing: Metrics.spaceM) {
+                    Tag("오늘")
+                    Tag("읽기 전용", color: .inkSoft)
+                    Tag("다시 연결 필요", color: Tokens.error)
+                }
+            }
+            VStack(alignment: .leading, spacing: Metrics.spaceXl) {
+                SectionRule("목록 줄")
+                VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
+                    Text("고른 줄").textStyle(.item).foregroundStyle(.onInk).frame(maxWidth: .infinity, alignment: .leading).selectableRow(chosen: true)
+                    Text("고치는 줄").textStyle(.item).frame(maxWidth: .infinity, alignment: .leading).selectableRow(chosen: false, active: true)
+                    Text("보통 줄").textStyle(.item).frame(maxWidth: .infinity, alignment: .leading).selectableRow(chosen: false)
+                }
+                SectionRule("체크 상자")
+                HStack(spacing: Metrics.spaceL) {
+                    CheckBox(isOn: false)
+                    CheckBox(isOn: false, isHovered: true)
+                    CheckBox(isOn: true)
+                    CheckBox(isOn: false).focusRing(true)
+                    CheckBox(isOn: true, size: 12)
+                    ReminderMark(Palette.yellow.ink, size: 10)
+                    Mark(Palette.blue.ink, size: 10)
+                }
+                SectionRule("하루 띠")
+                DayStrip(items: [
+                    .init(id: "1", start: 9 * 60 + 30, end: 10 * 60 + 30, palette: .blue),
+                    .init(id: "2", start: 12 * 60, end: 13 * 60, palette: .orange),
+                    .init(id: "3", start: 14 * 60, end: 15 * 60 + 30, palette: .blue),
+                    .init(id: "4", start: 17 * 60, end: 17 * 60 + 15, palette: .yellow, isReminder: true),
+                    .init(id: "5", start: 19 * 60 + 30, end: 20 * 60 + 30, palette: .green),
+                ], now: 13 * 60 + 20)
+                SectionRule("위젯 (7단계)")
+                VStack(spacing: Metrics.spaceS) {
+                    DateOval(day: 8)
+                    Text("10월 · 목요일").textStyle(.meta).foregroundStyle(.inkSoft)
+                }
+                .frame(width: 170, height: 150)
+                .widgetSurface()
+            }
+            .frame(width: 320)
+        }
+        .padding(Metrics.spaceXxxl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(.paper)
+        .foregroundStyle(.ink)
     }
 }
 #endif

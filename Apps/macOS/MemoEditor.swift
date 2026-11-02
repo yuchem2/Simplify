@@ -228,9 +228,12 @@ final class MemoDraft {
 
 /// How memo formatting looks: 15 pt SF on 26 pt lines, palette colours by name.
 enum MemoStyle {
-    static let size: CGFloat = 15
-    static let lineHeight: CGFloat = 26
+    static let size: CGFloat = TextStyle.memo.size
+    static let lineHeight: CGFloat = TextStyle.memo.lineHeight
     static let boxHeight: CGFloat = 170
+    /// Where the text view draws its first letter inside its own frame; the placeholder and the
+    /// snapshot's text sit that much further in, so they line up with typed text.
+    static let textViewInset = CGSize(width: 5, height: 4)
 
     /// A chip's box letter: larger than the text, so it is easy to hit.
     static let boxSize: CGFloat = 20
@@ -374,6 +377,12 @@ struct MemoEditor: View {
     @State private var top: CGFloat = 0
     /// The selected line in the box, for putting the bar beside it.
     @State private var line: CGRect?
+    @State private var hovering = false
+
+    private var textInset: EdgeInsets {
+        EdgeInsets(top: Metrics.spaceS + MemoStyle.textViewInset.height, leading: Metrics.spaceM + MemoStyle.textViewInset.width,
+                   bottom: Metrics.spaceS + MemoStyle.textViewInset.height, trailing: Metrics.spaceM + MemoStyle.textViewInset.width)
+    }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -381,28 +390,27 @@ struct MemoEditor: View {
                 // ImageRenderer cannot draw the AppKit text view.
                 Text(MemoStyle.rendered(draft.text))
                     .lineHeight(.exact(points: MemoStyle.lineHeight))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .padding(textInset)
             } else {
                 TextEditor(text: $draft.text, selection: $draft.selection)
                     .attributedTextFormattingDefinition(MemoFormatting())
-                    .font(.system(size: MemoStyle.size))
-                    .lineHeight(.exact(points: MemoStyle.lineHeight))
+                    .textStyle(.memo)
+                    .lineHeight(.exact(points: TextStyle.memo.lineHeight))
                     .foregroundStyle(.ink)
                     .scrollContentBackground(.hidden)
                     .focused($focused)
                     .disabled(draft.isUnreadable)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, Metrics.spaceM)
+                    .padding(.vertical, Metrics.spaceS)
                     .accessibilityLabel(title)
                     .accessibilityHint(placeholder)
             }
             if draft.text.characters.isEmpty {
                 Text(draft.isUnreadable ? "이 메모는 이 버전에서 열 수 없어요. 앱을 업데이트해 주세요." : placeholder)
-                    .font(.system(size: MemoStyle.size))
-                    .foregroundStyle(.inkFaint)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .textStyle(.memo)
+                    // A placeholder is faint; the unreadable notice is read, so it is soft ink.
+                    .foregroundStyle(draft.isUnreadable ? Color.inkSoft : Color.inkFaint)
+                    .padding(textInset)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
@@ -410,6 +418,8 @@ struct MemoEditor: View {
         .frame(maxWidth: .infinity, minHeight: MemoStyle.boxHeight, maxHeight: MemoStyle.boxHeight, alignment: .topLeading)
         .clipped()
         .background { if !isRenderingSnapshot { MemoMenuHost(draft: draft) } }
+        .background(hovering && !focused && !draft.isUnreadable ? Color.hover : Color.paper)
+        .onHover { hovering = $0 }
         .onGeometryChange(for: CGRect.self) { proxy in
             let local = CGRect(origin: .zero, size: proxy.size)
             let shown = proxy.bounds(of: .scrollView).map { local.intersection($0) } ?? local
@@ -417,6 +427,7 @@ struct MemoEditor: View {
             return shown.offsetBy(dx: frame.minX, dy: frame.minY)
         } action: { draft.visibleBox = $0 }
         .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
+        .focusRing(focused)
         .overlay(alignment: .topLeading) {
             if showsBar {
                 MemoFormatBar(draft: draft).offset(y: barY)
@@ -451,9 +462,9 @@ struct MemoEditor: View {
     private var barY: CGFloat {
         let height = MemoFormatBar.height
         guard let line, line.maxY > 0, line.minY < MemoStyle.boxHeight else {
-            return top > height + 12 ? -height - 6 : MemoStyle.boxHeight + 6
+            return top > height + Metrics.spaceL ? -height - Metrics.spaceS : MemoStyle.boxHeight + Metrics.spaceS
         }
-        return top + line.minY > height + 12 ? line.minY - height - 6 : line.maxY + 6
+        return top + line.minY > height + Metrics.spaceL ? line.minY - height - Metrics.spaceS : line.maxY + Metrics.spaceS
     }
 }
 
@@ -464,36 +475,36 @@ struct MemoFormatBar: View {
     static let height: CGFloat = 104
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 4) {
-                style("B", "굵게", "⌘B", isOn: draft.isOn(MemoAttributes.Bold.self), font: .system(size: 13, weight: .bold)) { draft.toggle(MemoAttributes.Bold.self) }
-                style("I", "기울임", "⌘I", isOn: draft.isOn(MemoAttributes.Italic.self), font: .system(size: 13, design: .serif).italic()) { draft.toggle(MemoAttributes.Italic.self) }
-                style("{ }", "코드 블록", "⌘⇧C", isOn: draft.isCode, font: .system(size: 11, weight: .semibold, design: .monospaced)) { draft.toggleCode() }
-                Rectangle().fill(.ink).frame(width: Metrics.line, height: 18).padding(.horizontal, 2)
-                style("fx", "수식", "⌥⌘E", isOn: draft.isOn(MemoAttributes.Math.self), font: .system(size: 14, design: .serif).italic()) { draft.toggle(MemoAttributes.Math.self) }
-                style("x²", "위첨자", "⌃⌘=", isOn: draft.shared(MemoAttributes.Script.self) == .raised, font: .system(size: 12)) { draft.toggleScript(.raised) }
-                style("x₂", "아래첨자", "⌃⌘-", isOn: draft.shared(MemoAttributes.Script.self) == .lowered, font: .system(size: 12)) { draft.toggleScript(.lowered) }
-                Spacer(minLength: 8)
+        VStack(alignment: .leading, spacing: Metrics.spaceS) {
+            HStack(spacing: Metrics.spaceXs) {
+                style("B", "굵게", "⌘B", isOn: draft.isOn(MemoAttributes.Bold.self), font: TextStyle.body.font.bold()) { draft.toggle(MemoAttributes.Bold.self) }
+                style("I", "기울임", "⌘I", isOn: draft.isOn(MemoAttributes.Italic.self), font: TextStyle.body.font.italic(), design: .serif) { draft.toggle(MemoAttributes.Italic.self) }
+                style("{ }", "코드 블록", "⌘⇧C", isOn: draft.isCode, font: TextStyle.cell.font.weight(.semibold), design: .monospaced) { draft.toggleCode() }
+                Rectangle().fill(.ink).frame(width: Metrics.line, height: 18).padding(.horizontal, Metrics.spaceXxs)
+                style("fx", "수식", "⌥⌘E", isOn: draft.isOn(MemoAttributes.Math.self), font: TextStyle.item.font.italic(), design: .serif) { draft.toggle(MemoAttributes.Math.self) }
+                style("x²", "위첨자", "⌃⌘=", isOn: draft.shared(MemoAttributes.Script.self) == .raised, font: TextStyle.small.font) { draft.toggleScript(.raised) }
+                style("x₂", "아래첨자", "⌃⌘-", isOn: draft.shared(MemoAttributes.Script.self) == .lowered, font: TextStyle.small.font) { draft.toggleScript(.lowered) }
+                Spacer(minLength: Metrics.spaceM)
                 Button("지우기") { draft.clearFormatting() }
                     .buttonStyle(DrawnButtonStyle(.text))
                     .focusable(false)
                     .help("서식 지우기")
             }
             let ink = draft.shared(MemoAttributes.Ink.self)
-            HStack(spacing: 3) {
+            HStack(spacing: Metrics.spaceXxs) {
                 swatch(label: "기본", isOn: ink == nil) {
-                    Text("가").font(.display(14)).foregroundStyle(.ink)
+                    Text("가").textStyle(.item).foregroundStyle(.ink)
                 } action: { draft.setInk(nil) }
                 ForEach(Palette.allCases, id: \.self) { palette in
                     swatch(label: palette.name, isOn: ink == palette) {
-                        Text("가").font(.display(14)).foregroundStyle(palette.ink)
+                        Text("가").textStyle(.item).foregroundStyle(palette.ink)
                     } action: { draft.setInk(palette) }
                 }
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("글자색")
             let highlight = draft.shared(MemoAttributes.Highlight.self)
-            HStack(spacing: 3) {
+            HStack(spacing: Metrics.spaceXxs) {
                 swatch(label: "형광펜 없음", isOn: highlight == nil) {
                     Path { p in p.move(to: CGPoint(x: 2, y: 20)); p.addLine(to: CGPoint(x: 20, y: 2)) }.stroke(.ink, lineWidth: Metrics.line)
                 } action: { draft.setHighlight(nil) }
@@ -506,24 +517,21 @@ struct MemoFormatBar: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("형광펜")
         }
-        .padding(8)
+        .padding(Metrics.spaceM)
         .frame(width: 312, height: Self.height, alignment: .topLeading)
-        .background(.paper)
-        .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.lineOuter))
-        .drawnShadow()
+        .floatingFrame()
     }
 
-    private func style(_ title: String, _ name: String, _ shortcut: String, isOn: Bool, font: Font, action: @escaping () -> Void) -> some View {
+    private func style(_ title: String, _ name: String, _ shortcut: String, isOn: Bool, font: Font, design: Font.Design? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(font)
+                .fontDesign(design)
                 .foregroundStyle(isOn ? Color.onInk : Color.ink)
                 .frame(width: 26, height: 24)
-                .background(isOn ? Color.ink : Color.paper)
                 .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(FormatButtonStyle(isOn: isOn))
         .focusable(false)
         .help("\(name) (\(shortcut))")
         .accessibilityLabel(name)
@@ -536,15 +544,37 @@ struct MemoFormatBar: View {
                 .frame(width: 22, height: 22)
                 .background(.paper)
                 .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
-                .padding(2)
-                .overlay { if isOn { Rectangle().strokeBorder(.ink, lineWidth: 1.5) } }
-                .contentShape(Rectangle())
+                .padding(Metrics.spaceXxs)
         }
-        .buttonStyle(.plain)
+        // The swatch keeps its colour; the chosen one stands in an ink square.
+        .buttonStyle(FormatButtonStyle(isOn: isOn))
         .focusable(false)
         .help(help ?? label)
         .accessibilityLabel(label)
         .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+}
+
+/// A format bar button: ink when switched on, the hover step under the pointer. The bar never takes
+/// keyboard focus, so it draws no ring.
+private struct FormatButtonStyle: ButtonStyle {
+    var isOn: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        FormatButtonBody(configuration: configuration, isOn: isOn)
+    }
+
+    private struct FormatButtonBody: View {
+        let configuration: Configuration
+        var isOn: Bool
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .background(isOn ? Color.ink : configuration.isPressed ? Color.rowActive : hovering ? Color.hover : Color.paper)
+                .contentShape(Rectangle())
+                .onHover { hovering = $0 }
+        }
     }
 }
 

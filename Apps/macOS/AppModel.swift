@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import SimplifyKit
@@ -11,7 +12,7 @@ final class AppModel {
     private(set) var selectedDay: Date
     private(set) var month: Period
     var panelScope: PeriodScope = .day
-    /// The month sheet or the week grid. Remembered across launches.
+    /// The month sheet, the week grid or the year. Remembered across launches.
     var calendarView = CalendarView(rawValue: UserDefaults.standard.string(forKey: "calendarView") ?? "") ?? .month {
         didSet { UserDefaults.standard.set(calendarView.rawValue, forKey: "calendarView") }
     }
@@ -31,8 +32,57 @@ final class AppModel {
     var cellTextSize = CellTextSize(rawValue: UserDefaults.standard.string(forKey: "cellTextSize") ?? "") ?? .medium {
         didSet { UserDefaults.standard.set(cellTextSize.rawValue, forKey: "cellTextSize") }
     }
+    /// White wall, graphite, or whatever the Mac is set to (설정 › 일반). Remembered across launches.
+    var theme = Theme(rawValue: UserDefaults.standard.string(forKey: "theme") ?? "") ?? .system {
+        didSet { UserDefaults.standard.set(theme.rawValue, forKey: "theme") }
+    }
 
-    enum CalendarView: String, Hashable { case month, week }
+    enum Theme: String, CaseIterable {
+        case system, light, dark
+
+        /// Sets the appearance every window and token colour follows.
+        @MainActor func apply() {
+            switch self {
+            case .system: NSApplication.shared.appearance = nil
+            case .light: NSApplication.shared.appearance = NSAppearance(named: .aqua)
+            case .dark: NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .system: "시스템"
+            case .light: "흰 벽"
+            case .dark: "흑연"
+            }
+        }
+    }
+
+    /// Timed events in day cells start with their time (설정 › 일반). On unless turned off.
+    var showsCellTimes = UserDefaults.standard.object(forKey: "showsCellTimes") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(showsCellTimes, forKey: "showsCellTimes") }
+    }
+
+    enum CalendarView: String, Hashable, CaseIterable {
+        case week, month, year
+
+        var label: String {
+            switch self {
+            case .week: "주"
+            case .month: "월"
+            case .year: "년"
+            }
+        }
+
+        /// One page of the view, for 이전/다음 labels.
+        var unit: String {
+            switch self {
+            case .week: "주"
+            case .month: "달"
+            case .year: "해"
+            }
+        }
+    }
 
     enum CellTextSize: String, CaseIterable {
         case small, medium, large
@@ -48,7 +98,7 @@ final class AppModel {
         var points: CGFloat {
             switch self {
             case .small: 10
-            case .medium: 11
+            case .medium: TextStyle.cell.size
             case .large: 13
             }
         }
@@ -87,6 +137,34 @@ final class AppModel {
         MonthGrid(month: month.start, calendar: calendar)
     }
 
+    /// The year of the chosen day, January to December.
+    var shownYear: Int { calendar.component(.year, from: selectedDay) }
+
+    /// Whole weeks from the week of 1 January to the week of 31 December.
+    var yearDays: [Date] {
+        let first = calendar.date(from: DateComponents(year: shownYear, month: 1, day: 1))!
+        let last = calendar.date(from: DateComponents(year: shownYear, month: 12, day: 31))!
+        let start = calendar.date(byAdding: .day, value: -(calendar.component(.weekday, from: first) - calendar.firstWeekday + 7) % 7, to: first)!
+        let end = calendar.date(byAdding: .day, value: (calendar.firstWeekday + 6 - calendar.component(.weekday, from: last)) % 7, to: last)!
+        let count = calendar.dateComponents([.day], from: start, to: end).day! + 1
+        return (0..<count).map { calendar.date(byAdding: .day, value: $0, to: start)! }
+    }
+
+    /// What decides `shownDays`: the view, and the first day of its month grid or year. Cheap to
+    /// compare, so the window reloads events only when it changes.
+    var shownRange: String {
+        switch calendarView {
+        case .year: "year-\(shownYear)"
+        case .week, .month: "month-\(month.start.timeIntervalSinceReferenceDate)"
+        }
+    }
+
+    /// The days whose events the calendar on screen needs: the month grid (which holds the week
+    /// on screen too) or the whole year.
+    var shownDays: [Date] {
+        calendarView == .year ? yearDays : grid.weeks.flatMap { $0 }
+    }
+
     /// Choosing a day outside the shown month turns to that month.
     func select(_ day: Date) {
         let day = calendar.startOfDay(for: day)
@@ -106,11 +184,12 @@ final class AppModel {
         select(calendar.date(byAdding: .month, value: months, to: selectedDay)!)
     }
 
-    /// One step of the view on screen: a month, or a week keeping the same weekday.
+    /// One step of the view on screen: a month, a week keeping the same weekday, or a year keeping the date.
     func turnPage(by steps: Int) {
         switch calendarView {
         case .month: turnMonth(by: steps)
         case .week: moveSelection(byDays: 7 * steps)
+        case .year: turnMonth(by: 12 * steps)
         }
     }
 

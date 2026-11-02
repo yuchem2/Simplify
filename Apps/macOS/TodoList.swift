@@ -91,71 +91,73 @@ struct TodoList: View {
     }
 
     private func rowContent(_ entry: TodoEntry) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Button { todos.setDone(entry.todoID, !entry.isDone) } label: { TodoBox(isOn: entry.isDone) }
-                .buttonStyle(.plain)
-                .padding(.top, 2)
+        let isEditing = editing == entry.id
+        // Picked from the list: ink; being renamed: grey.
+        let isChosen = todos.selectedRow == entry.id && !isEditing
+        return HStack(alignment: .top, spacing: Metrics.spaceM) {
+            Button { todos.setDone(entry.todoID, !entry.isDone) } label: { EmptyView() }
+                .buttonStyle(CheckBoxButtonStyle(isOn: entry.isDone, onInk: isChosen))
+                .padding(.top, Metrics.spaceXxs)
                 .accessibilityLabel(entry.title)
                 .accessibilityValue(entry.isDone ? "완료" : "미완료")
                 .accessibilityAddTraits(.isToggle)
-            VStack(alignment: .leading, spacing: 1) {
-                if editing == entry.id {
+            VStack(alignment: .leading, spacing: 0) {
+                if isEditing {
                     TextField("할 일", text: $editTitle)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 14))
+                        .textStyle(.item)
+                        .drawnField(.inline, focused: focus == .edit)
                         .focused($focus, equals: .edit)
                         .onSubmit { finishEditing(entry) }
                         .onExitCommand { editing = nil; focus = nil }
                         .onChange(of: focus) { _, now in if now != .edit, editing == entry.id { finishEditing(entry) } }
                 } else {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: Metrics.spaceS) {
                         if let label = entry.label {
                             Mark(label.ink, size: 8).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
                         }
+                        let color = isChosen ? Color.onInk : entry.isDone ? Color.inkSoft : Color.ink
                         Text(entry.title)
-                            .font(.system(size: 14))
-                            .strikethrough(entry.isDone)
-                            .foregroundStyle(entry.isDone ? Color.inkSoft : Color.ink)
+                            .textStyle(.item)
+                            .foregroundStyle(color)
+                            .ledgerStrikethrough(entry.isDone, color: color)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                meta(entry)
+                meta(entry, onInk: isChosen)
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 4)
-        .background { if todos.selectedRow == entry.id { Rectangle().fill(.shadeSoft) } }
-        .overlay { if todos.selectedRow == entry.id { Rectangle().strokeBorder(.ink, lineWidth: Metrics.line) } }
-        .padding(.horizontal, -4)
+        .padding(.vertical, Metrics.spaceXs)
+        .selectableRow(chosen: isChosen, active: isEditing)
     }
 
     /// Where else the ToDo shows, and the memo it came from.
     @ViewBuilder
-    private func meta(_ entry: TodoEntry) -> some View {
+    private func meta(_ entry: TodoEntry, onInk: Bool) -> some View {
         let places = entry.elsewhere.compactMap { $0.period(calendar: model.calendar) }
         let source = entry.sourceNoteID.flatMap { memos.period(ofNote: $0, calendar: model.calendar) }
         if !places.isEmpty || source != nil {
-            HStack(spacing: 10) {
+            HStack(spacing: Metrics.spaceM) {
                 if let source {
                     Button { show(source) } label: {
-                        HStack(spacing: 2) {
+                        HStack(spacing: Metrics.spaceXxs) {
                             Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .semibold))
                             Text("\(TodoNames.short(source)) 메모").underline()
                         }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(FocusOnlyStyle())
                     .help("메모 열기")
                 }
                 if !places.isEmpty {
-                    HStack(spacing: 3) {
+                    HStack(spacing: Metrics.spaceXxs) {
                         Image(systemName: "link").font(.system(size: 9, weight: .medium))
                         Text(places.map(TodoNames.short).joined(separator: " · ") + "에 연결됨")
                     }
-                    .foregroundStyle(.inkSoft)
+                    .foregroundStyle(onInk ? Color.onInk : Color.inkSoft)
                 }
             }
-            .font(.system(size: 11, weight: .medium))
+            .textStyle(.meta)
+            .foregroundStyle(onInk ? Color.onInk : Color.ink)
             .lineLimit(1)
         }
     }
@@ -192,21 +194,23 @@ struct TodoList: View {
     // MARK: Adding and editing
 
     private var addRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Metrics.spaceM) {
             Image(systemName: "plus").font(.system(size: 12, weight: .medium)).foregroundStyle(.inkFaint).frame(width: 16)
             if isRenderingSnapshot {
-                Text("할 일 추가").font(.system(size: 14)).foregroundStyle(.inkFaint)
+                Text("할 일 추가").textStyle(.item).foregroundStyle(.inkFaint)
             } else {
                 addField
             }
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, Metrics.spaceXs)
+        .selectableRow(chosen: false)
     }
 
     private var addField: some View {
             TextField("할 일 추가", text: $newTitle)
                 .textFieldStyle(.plain)
-                .font(.system(size: 14))
+                .textStyle(.item)
                 .focused($focus, equals: .add)
                 .onSubmit {
                     todos.add(newTitle, to: period)

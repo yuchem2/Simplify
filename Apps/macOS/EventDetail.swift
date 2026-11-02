@@ -12,19 +12,19 @@ struct EventDetailView: View {
         let source = calendars.sources[occurrence.sourceID]
         let event = calendars.event(id: occurrence.eventID)
         let writable = calendars.isWritable(occurrence.sourceID)
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: Metrics.spaceL) {
+            HStack(alignment: .firstTextBaseline, spacing: Metrics.spaceM) {
                 if source?.isHoliday != true {
                     EventMark(occurrence: occurrence, source: source, size: 11)
                         .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
                 }
                 Text(occurrence.title)
-                    .font(.display(19))
+                    .textStyle(.subheading)
                     .foregroundStyle(EventTime.titleColor(occurrence, source: source))
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
             }
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: Metrics.spaceS) {
                 fact("clock", EventText.when(occurrence, isReminder: source?.isReminderList == true, calendar: model.calendar))
                 if let repeats = event.flatMap({ EventText.repeats($0, start: occurrence.start, calendar: model.calendar) }) {
                     fact("repeat", repeats)
@@ -39,39 +39,37 @@ struct EventDetailView: View {
             if let notes = event?.notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
                 Rectangle().fill(.ink).frame(height: Metrics.line)
                 Text(notes)
-                    .font(.system(size: 13))
+                    .textStyle(.body)
                     .lineLimit(8)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
             if let write = calendars.unsentWrite(for: occurrence) {
                 if case .failed(let error) = write.status {
-                    Notice(icon: "exclamationmark.triangle", bold: "보내지 못했어요.", text: error.message, isError: true)
+                    NoticeBar(error.message, title: "보내지 못했어요.", tone: .warning)
                 } else {
-                    Notice(icon: "arrow.triangle.2.circlepath", text: "이 변경은 아직 캘린더에 보내지 않았어요. 연결되면 보내요.")
+                    NoticeBar("이 변경은 아직 캘린더에 보내지 않았어요. 연결되면 보내요.", tone: .info, icon: "arrow.triangle.2.circlepath")
                 }
             }
-            VStack(spacing: 10) {
+            VStack(spacing: Metrics.spaceL) {
                 Rectangle().fill(.ink).frame(height: Metrics.line)
-                HStack(spacing: 8) {
+                HStack(spacing: Metrics.spaceM) {
                     if writable {
                         Spacer()
                         Button("삭제") { ask(.delete) }
-                            .buttonStyle(DangerButtonStyle())
+                            .buttonStyle(DrawnButtonStyle(.danger))
                         Button("편집") { model.edit(occurrence, calendars: calendars) }
                             .buttonStyle(DrawnButtonStyle(.primary))
                     } else {
                         Label(readOnlyReason(source), systemImage: "lock")
-                            .font(.system(size: 11, weight: .medium))
+                            .textStyle(.meta)
                             .foregroundStyle(.inkSoft)
                         Spacer()
                     }
                 }
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 16)
-        .padding(.bottom, 14)
+        .padding(Metrics.spaceXl)
         .onKeyPress(.delete) {
             guard writable else { return .ignored }
             ask(.delete)
@@ -85,13 +83,13 @@ struct EventDetailView: View {
     }
 
     private func fact(_ icon: String, _ text: String, soft: String? = nil) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: Metrics.spaceM) {
             Image(systemName: icon)
                 .font(.system(size: 11))
                 .foregroundStyle(.inkSoft)
                 .frame(width: 14)
             Text("\(text)\(Text(soft.map { " · " + $0 } ?? "").foregroundStyle(.inkSoft))")
-                .font(.system(size: 13))
+                .textStyle(.body)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -117,23 +115,15 @@ struct EventDetailView: View {
 
 /// How an event's time and repeat read in the popover.
 enum EventText {
-    private static func formatter(_ format: String, _ calendar: Calendar) -> DateFormatter {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "ko_KR")
-        f.timeZone = calendar.timeZone
-        f.dateFormat = format
-        return f
-    }
-
     /// `10월 28일 (수)`, with the year when it is not this year.
     static func day(_ date: Date, calendar: Calendar) -> String {
         let thisYear = calendar.component(.year, from: .now) == calendar.component(.year, from: date)
-        return formatter(thisYear ? "M월 d일 (E)" : "yyyy년 M월 d일 (E)", calendar).string(from: date)
+        return DateText.string(date, thisYear ? "M월 d일 (E)" : "yyyy년 M월 d일 (E)", timeZone: calendar.timeZone)
     }
 
     /// `오후 7:00`
     static func time(_ date: Date, calendar: Calendar) -> String {
-        formatter("a h:mm", calendar).string(from: date)
+        DateText.clock(date, calendar: calendar)
     }
 
     /// `10월 28일 (수) 오후 7:00 – 8:00`, `10월 22일 (목) – 23일 (금) 종일`; a reminder shows its time alone.
@@ -157,7 +147,7 @@ enum EventText {
 
     /// `매주 수요일`, `반복 (사용자 지정)`, or nil for an event that does not repeat.
     static func repeats(_ event: EventSnapshot, start: Date, calendar: Calendar) -> String? {
-        if event.recurringEventID != nil { return "반복 일정 중 이 날만 바뀐 일정" }
+        if event.recurringEventID != nil { return "반복 일정 중 이날만 바뀐 일정" }
         if event.recurrenceUnsupported { return "반복 (사용자 지정)" }
         guard let recurrence = event.recurrence else { return nil }
         let choice = EventEditorModel.RepeatChoice(recurrence, start: start, calendar: calendar)

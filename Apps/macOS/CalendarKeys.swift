@@ -1,7 +1,7 @@
 import SwiftUI
 
 extension View {
-    /// The month sheet's and week grid's keys: the arrows move the chosen day, Tab picks its events,
+    /// The month sheet's, week grid's and year's keys (the year has no events to pick): the arrows move the chosen day, Tab picks its events,
     /// Return opens the picked event (or a folded panel), ⌫ deletes it. The view holds keyboard
     /// focus, taking it back when the settings modal or the event popover closes.
     func calendarKeys(model: AppModel, calendars: CalendarController, focused: FocusState<Bool>.Binding) -> some View {
@@ -12,18 +12,19 @@ extension View {
             .onChange(of: model.isModalOpen) { _, open in if !open { focused.wrappedValue = true } }
             .onKeyPress(.return) {
                 guard !model.isModalOpen else { return .ignored }
-                if model.openSelectedEvent(calendars: calendars) { return .handled }
+                // The year view shows no events to open.
+                if model.calendarView != .year, model.openSelectedEvent(calendars: calendars) { return .handled }
                 // With the panel folded, Return opens it on the chosen day.
                 guard model.isPanelHidden else { return .ignored }
                 model.isPanelHidden = false
                 return .handled
             }
             .onKeyPress(.delete) {
-                guard !model.isModalOpen else { return .ignored }
+                guard !model.isModalOpen, model.calendarView != .year else { return .ignored }
                 return model.deleteSelectedEvent(calendars: calendars) ? .handled : .ignored
             }
             .onKeyPress(keys: [.tab]) { press in
-                guard !model.isModalOpen else { return .ignored }
+                guard !model.isModalOpen, model.calendarView != .year else { return .ignored }
                 return model.moveEventSelection(by: press.modifiers.contains(.shift) ? -1 : 1, calendars: calendars) ? .handled : .ignored
             }
             .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in

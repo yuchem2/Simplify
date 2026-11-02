@@ -2,73 +2,96 @@
 
 import SwiftUI
 
-/// Colour values for both themes (white wall = light, black wall = dark).
+/// Colour values for both themes (white wall = light, graphite = dark).
 public enum Tokens {
-    /// The room: window chrome and page background behind the sheets.
-    public static let wall = Color(light: 0xf4f4f2, dark: 0x111111)
-    /// Drawn surfaces: month sheet, day panel, popovers, widgets.
-    public static let paper = Color(light: 0xffffff, dark: 0x1b1b1b)
-    /// Every outline and primary text; the fill of today's disc, checked boxes and the primary button.
-    public static let ink = Color(light: 0x1a1a1a, dark: 0xf0f0ee)
-    /// Secondary text: times, weekday names, calendar names, where a ToDo came from. On paper, wall and shade.
-    public static let inkSoft = Color(light: 0x575755, dark: 0xb8b8b4)
-    /// Out-of-month dates and placeholders only.
-    public static let inkFaint = Color(light: 0x80807d, dark: 0x85857f)
-    /// Cartoon shadow: the hard offset under sheets, selected rows in menus.
-    public static let shade = Color(light: 0xd8d8d5, dark: 0x3a3a38)
-    /// Out-of-month day cells, hover.
-    public static let shadeSoft = Color(light: 0xececea, dark: 0x252524)
-    /// Ground of a ToDo chip in a memo. Lighter than shade-soft in the dark so the chip still reads on the dark paper; the two themes sit closer together than the other greys.
-    public static let chip = Color(light: 0xe4e4e1, dark: 0x444441)
+    /// The room: window chrome and toolbar background around the paper.
+    public static let wall = Color(light: 0xf4f4f2, dark: 0x1f1e1c)
+    /// The one sheet: month or week grid and panel together, popovers, the settings modal.
+    public static let paper = Color(light: 0xffffff, dark: 0x2a2927)
+    /// One step off the paper: weekend columns in the month and week grid, widget nest.
+    public static let raised = Color(light: 0xf7f7f5, dark: 0x33312e)
+    /// Primary text, the spine between grid and panel, week rules, outlines of controls; fill of the primary button and of chosen items.
+    public static let ink = Color(light: 0x1a1a1a, dark: 0xecebe6)
+    /// Secondary text: times, weekday names, calendar names, empty states. On paper, wall and raised.
+    public static let inkSoft = Color(light: 0x575755, dark: 0xbab8b1)
+    /// Out-of-month dates, placeholders and disabled controls only. Never for text people need to read.
+    public static let inkFaint = Color(light: 0x80807d, dark: 0x8d8b85)
+    /// Hairlines: the paper's edge on the wall, rules between days in lists, the floating shadow's colour in light.
+    public static let shade = Color(light: 0xd8d8d5, dark: 0x4a4844)
+    /// Ground of disabled fields and of a switched-on (toggled) control's neighbours; out-of-month cells have no ground, only faint numbers.
+    public static let shadeSoft = Color(light: 0xececea, dark: 0x35332f)
+    /// Ground of a ToDo chip in a memo.
+    public static let chip = Color(light: 0xe4e4e1, dark: 0x4d4b47)
     /// Text and check marks on an ink fill.
-    public static let onInk = Color(light: 0xffffff, dark: 0x1b1b1b)
-    /// Sunday and public-holiday date numbers and holiday names — an alias of red-ink.
+    public static let onInk = Color(light: 0xffffff, dark: 0x2a2927)
+    /// Pointer over a day cell, list row or button: a quiet step off the paper.
+    public static let hover = Color(light: 0xf0f0ee, dark: 0x383633)
+    /// The chosen item where one is picked from many: menu cursor, picked event, chosen segment. Text on it is on-ink.
+    public static let selection = Tokens.ink
+    /// A row being edited or opened in place (a ToDo renamed, the row a menu belongs to). Ink text on it.
+    public static let rowActive = Color(light: 0xe4e4e1, dark: 0x4d4b47)
+    /// Keyboard focus: a 2 pt paper gap, then a 2 pt ink ring around the control.
+    public static let focusRing = Tokens.ink
+    /// Public-holiday and Sunday date numbers and holiday names. Holidays only.
     public static let holiday = Tokens.redInk
+    /// Destructive actions: the delete button's text and outline. Never a frame or background.
+    public static let danger = Tokens.redInk
+    /// Error text: ink with a warning sign, so red stays with holidays and delete.
+    public static let error = Tokens.ink
+    /// Ground of an error or warning notice.
+    public static let errorTint = Color(light: 0xfaf0c4, dark: 0x4a4331)
+    /// The current-time line in the week grid and the day strip.
+    public static let now = Tokens.ink
     /// Source links on ToDos: ink, underlined.
     public static let link = Tokens.ink
+    /// Desktop widget background (C · lights off): no outline, the radius does the framing.
+    public static let widgetSurface = Color(light: 0xfbfbfa, dark: 0x272624)
+    /// Inside a widget: the oval behind the date and other nested areas.
+    public static let widgetNest = Color(light: 0xf0efec, dark: 0x32302d)
     /// User palette · 빨강: calendar mark, text colour, ToDo label. On paper and on any *-tint.
     public static let redInk = Color(light: 0xb3332a, dark: 0xff8a7a)
-    /// User palette · 빨강: highlighter and all-day band background; ink and red-ink text sit on it.
-    public static let redTint = Color(light: 0xfbe3df, dark: 0x3e1f1b)
+    /// User palette · 빨강: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.
+    public static let redTint = Color(light: 0xfbe3df, dark: 0x553c38)
     /// User palette · 주황: calendar mark, text colour, ToDo label. On paper and on any *-tint.
     public static let orangeInk = Color(light: 0x9a4c00, dark: 0xffab5e)
-    /// User palette · 주황: highlighter and all-day band background; ink and orange-ink text sit on it.
-    public static let orangeTint = Color(light: 0xfce9d6, dark: 0x3b2a17)
+    /// User palette · 주황: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.
+    public static let orangeTint = Color(light: 0xfce9d6, dark: 0x554332)
     /// User palette · 노랑: calendar mark, text colour, ToDo label. On paper and on any *-tint.
     public static let yellowInk = Color(light: 0x7a6000, dark: 0xf2cf5b)
-    /// User palette · 노랑: highlighter and all-day band background; ink and yellow-ink text sit on it.
-    public static let yellowTint = Color(light: 0xfaf0c4, dark: 0x36301a)
+    /// User palette · 노랑: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.
+    public static let yellowTint = Color(light: 0xfaf0c4, dark: 0x524a31)
     /// User palette · 초록: calendar mark, text colour, ToDo label. On paper and on any *-tint.
     public static let greenInk = Color(light: 0x28702c, dark: 0x7fd185)
-    /// User palette · 초록: highlighter and all-day band background; ink and green-ink text sit on it.
-    public static let greenTint = Color(light: 0xe1f1e0, dark: 0x1d3320)
+    /// User palette · 초록: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.
+    public static let greenTint = Color(light: 0xe1f1e0, dark: 0x3b4b3a)
     /// User palette · 청록: calendar mark, text colour, ToDo label. On paper and on any *-tint.
     public static let tealInk = Color(light: 0x00776a, dark: 0x5fd0c0)
-    /// User palette · 청록: highlighter and all-day band background; ink and teal-ink text sit on it.
-    public static let tealTint = Color(light: 0xdcf0ed, dark: 0x163330)
+    /// User palette · 청록: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.
+    public static let tealTint = Color(light: 0xdcf0ed, dark: 0x354a46)
     /// User palette · 파랑: calendar mark, text colour, ToDo label. On paper and on any *-tint.
     public static let blueInk = Color(light: 0x2a5fc4, dark: 0x8ab0f7)
-    /// User palette · 파랑: highlighter and all-day band background; ink and blue-ink text sit on it.
-    public static let blueTint = Color(light: 0xe1e9fb, dark: 0x1b2840)
+    /// User palette · 파랑: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.
+    public static let blueTint = Color(light: 0xe1e9fb, dark: 0x3d4451)
     /// User palette · 보라: calendar mark, text colour, ToDo label. On paper and on any *-tint.
     public static let purpleInk = Color(light: 0x7a44bf, dark: 0xc39df5)
-    /// User palette · 보라: highlighter and all-day band background; ink and purple-ink text sit on it.
-    public static let purpleTint = Color(light: 0xece2f8, dark: 0x2c2140)
+    /// User palette · 보라: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.
+    public static let purpleTint = Color(light: 0xece2f8, dark: 0x494050)
     /// User palette · 분홍: calendar mark, text colour, ToDo label. On paper and on any *-tint.
     public static let pinkInk = Color(light: 0xb5325f, dark: 0xf58bb5)
-    /// User palette · 분홍: highlighter and all-day band background; ink and pink-ink text sit on it.
-    public static let pinkTint = Color(light: 0xf9e0e9, dark: 0x3d1d2a)
+    /// User palette · 분홍: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.
+    public static let pinkTint = Color(light: 0xf9e0e9, dark: 0x533d43)
     /// User palette · 회색: calendar mark, text colour, ToDo label. On paper and on any *-tint.
-    public static let greyInk = Color(light: 0x5e5e5b, dark: 0xb8b8b4)
-    /// User palette · 회색: highlighter and all-day band background; ink and grey-ink text sit on it.
-    public static let greyTint = Color(light: 0xe9e9e6, dark: 0x2c2c2a)
-    /// The flat cartoon shadow under drawn objects.
-    public static let shadowDrawn = Color(light: 0xd8d8d5, dark: 0x000000)
+    public static let greyInk = Color(light: 0x5e5e5b, dark: 0xbab8b1)
+    /// User palette · 회색: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.
+    public static let greyTint = Color(light: 0xe9e9e6, dark: 0x4d4b47)
+    /// The flat shadow under what floats above the paper: popovers, menus, the settings modal.
+    public static let shadowFloat = Color(light: 0xd8d8d5, dark: 0x121110)
 }
 
 public extension ShapeStyle where Self == Color {
     static var wall: Color { Tokens.wall }
     static var paper: Color { Tokens.paper }
+    static var raised: Color { Tokens.raised }
     static var ink: Color { Tokens.ink }
     static var inkSoft: Color { Tokens.inkSoft }
     static var inkFaint: Color { Tokens.inkFaint }
@@ -76,7 +99,16 @@ public extension ShapeStyle where Self == Color {
     static var shadeSoft: Color { Tokens.shadeSoft }
     static var chip: Color { Tokens.chip }
     static var onInk: Color { Tokens.onInk }
+    static var hover: Color { Tokens.hover }
+    static var rowActive: Color { Tokens.rowActive }
+    static var focusRing: Color { Tokens.focusRing }
     static var holiday: Color { Tokens.holiday }
+    static var danger: Color { Tokens.danger }
+    static var error: Color { Tokens.error }
+    static var errorTint: Color { Tokens.errorTint }
+    static var now: Color { Tokens.now }
+    static var widgetSurface: Color { Tokens.widgetSurface }
+    static var widgetNest: Color { Tokens.widgetNest }
 }
 
 /// The nine colours people put on their own content: calendars, memo text and highlights, ToDo labels.
@@ -129,26 +161,108 @@ public enum Palette: String, CaseIterable, Codable, Sendable {
 }
 
 public enum Metrics {
-    /// Outer outline of a sheet, panel or widget.
-    public static let lineOuter: CGFloat = 1.75
-    /// Grid lines, inner moulding line, rules.
+    /// Week rules, control outlines, popover outline, hairlines.
     public static let line: CGFloat = 1
-    /// Gap between the outer outline and the inner moulding line.
-    public static let mouldingInset: CGFloat = 6
-    /// Pattern-mark-to-text gap.
-    public static let space1: CGFloat = 4
-    /// Between list rows.
-    public static let space2: CGFloat = 8
-    /// Day cell padding.
-    public static let space3: CGFloat = 12
-    /// Panel padding inside the molding.
-    public static let space4: CGFloat = 16
-    /// Between panel sections.
-    public static let space6: CGFloat = 24
-    /// Sheets, cells, buttons, boxes.
+    /// Outline of small marks and boxes under 14 pt.
+    public static let lineMark: CGFloat = 1.2
+    /// Checkbox outline, reminder ring, the now line.
+    public static let lineBox: CGFloat = 1.5
+    /// The one heavy line: between grid and panel, under the weekday row, under a picked day.
+    public static let lineSpine: CGFloat = 1.75
+    /// Width of the focus ring.
+    public static let focusRing: CGFloat = 2
+    /// Paper gap between a control and its focus ring.
+    public static let focusGap: CGFloat = 2
+    /// Between a title and its meta line.
+    public static let spaceXxs: CGFloat = 2
+    /// Mark to text, icon to label.
+    public static let spaceXs: CGFloat = 4
+    /// Between rows in a list; label to field.
+    public static let spaceS: CGFloat = 6
+    /// Inside a row; between a section rule and its first row.
+    public static let spaceM: CGFloat = 8
+    /// Control padding; between fields.
+    public static let spaceL: CGFloat = 12
+    /// Popover padding.
+    public static let spaceXl: CGFloat = 16
+    /// Panel padding; between panel sections.
+    public static let spaceXxl: CGFloat = 20
+    /// Window margins; modal padding.
+    public static let spaceXxxl: CGFloat = 24
+    /// Paper, cells, buttons, boxes, popovers.
     public static let radiusNone: CGFloat = 0
-    /// Desktop widgets.
+    /// Desktop widgets (system mask).
     public static let radiusWidget: CGFloat = 18
-    /// Today's date disc.
+    /// Reminder rings, the now dot.
     public static let radiusFull: CGFloat = 9999
+    /// How far the floating shadow sits down and right.
+    public static let shadowOffset: CGFloat = 4
+    /// Black over the whole window under the settings popup, and again under a confirmation inside it.
+    public static let opacityScrim: Double = 0.2
+    /// Black flat shadow of the settings popup and its confirmation over the dimmed window (light; dark uses black).
+    public static let opacityModalShadow: Double = 0.45
+    /// The primary button under the pointer or pressed.
+    public static let opacityPrimaryHover: Double = 0.86
+    /// Events in day cells of the next or last month.
+    public static let opacityOutOfMonth: Double = 0.6
+    /// Hover and pressed states.
+    public static let motionQuick: Double = 0.12
+    /// Panel show/hide, popovers.
+    public static let motionPanel: Double = 0.2
+}
+
+/// The type scale. Use `.textStyle(_:)` on a view, or `.font` where only a Font fits.
+public enum TextStyle: CaseIterable, Sendable {
+    case title, heading, subheading, bigDate, date, item, memo, body, small, section, cell, meta
+
+    public var font: Font {
+        switch self {
+        case .title: .display(30, bold: true)
+        case .heading: .display(22, bold: true)
+        case .subheading: .display(20, bold: true)
+        case .bigDate: .display(36, bold: true).monospacedDigit()
+        case .date: .system(size: 15, weight: .semibold).monospacedDigit()
+        case .item: .system(size: 14, weight: .regular)
+        case .memo: .system(size: 15, weight: .regular)
+        case .body: .system(size: 13, weight: .regular)
+        case .small: .system(size: 12, weight: .regular)
+        case .section: .system(size: 12, weight: .semibold)
+        case .cell: .system(size: 11, weight: .regular)
+        case .meta: .system(size: 11, weight: .medium).monospacedDigit()
+        }
+    }
+
+    public var size: CGFloat {
+        switch self {
+        case .title: 30
+        case .heading: 22
+        case .subheading: 20
+        case .bigDate: 36
+        case .date: 15
+        case .item: 14
+        case .memo: 15
+        case .body: 13
+        case .small: 12
+        case .section: 12
+        case .cell: 11
+        case .meta: 11
+        }
+    }
+
+    public var lineHeight: CGFloat {
+        switch self {
+        case .title: 36
+        case .heading: 28
+        case .subheading: 26
+        case .bigDate: 36
+        case .date: 20
+        case .item: 20
+        case .memo: 26
+        case .body: 18
+        case .small: 16
+        case .section: 16
+        case .cell: 15
+        case .meta: 14
+        }
+    }
 }

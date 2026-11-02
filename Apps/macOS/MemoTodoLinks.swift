@@ -249,7 +249,7 @@ enum TodoTargets {
         var result: [Target] = []
         if memo.scope == .day {
             let c = calendar.dateComponents([.month, .day], from: memo.start)
-            result.append(Target(name: "이 날", detail: "\(c.month!)월 \(c.day!)일", period: memo))
+            result.append(Target(name: "이날", detail: "\(c.month!)월 \(c.day!)일", period: memo))
         }
         if memo.scope != .month {
             let week = Period(containing: memo.start, scope: .week, calendar: calendar)

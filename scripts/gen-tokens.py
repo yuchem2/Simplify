@@ -43,7 +43,7 @@ def color_expr(name):
 
 
 # Names SwiftUI already uses as ShapeStyle shortcuts; use Tokens.<name> for these instead.
-SWIFTUI_STYLES = {"link"}
+SWIFTUI_STYLES = {"link", "selection"}
 base = [n for n in colors
         if not any(n.startswith(p + "-") for p in palette) and n not in SWIFTUI_STYLES]
 lines = [
@@ -51,17 +51,18 @@ lines = [
     "",
     "import SwiftUI",
     "",
-    "/// Colour values for both themes (white wall = light, black wall = dark).",
+    "/// Colour values for both themes (white wall = light, graphite = dark).",
     "public enum Tokens {",
 ]
 for n in colors:
     lines.append(f"    /// {colors[n]['usage']}")
     lines.append(f"    public static let {camel(n)} = {color_expr(n)}")
-shadow = next(t for t in tokens["shadow"]["tokens"] if t["name"] == "shadow-drawn")["value"]
+shadow = next(t for t in tokens["shadow"]["tokens"] if t["name"] == "shadow-float")["value"]
 shadow_hex = {k: re.search(r"#[0-9a-fA-F]{6}", v).group(0) for k, v in shadow.items()}
+shadow_offset = re.match(r"(\d+)px", shadow["light"]).group(1)
 lines += [
-    "    /// The flat cartoon shadow under drawn objects.",
-    f"    public static let shadowDrawn = Color(light: {hex_literal(shadow_hex['light'])}, dark: {hex_literal(shadow_hex['dark'])})",
+    "    /// The flat shadow under what floats above the paper: popovers, menus, the settings modal.",
+    f"    public static let shadowFloat = Color(light: {hex_literal(shadow_hex['light'])}, dark: {hex_literal(shadow_hex['dark'])})",
     "}",
     "",
     "public extension ShapeStyle where Self == Color {",
@@ -91,7 +92,40 @@ for fam in ("line", "spacing", "radius"):
     for t in tokens[fam]["tokens"]:
         lines.append(f"    /// {t['usage']}")
         lines.append(f"    public static let {camel(t['name'])}: CGFloat = {px(t['value'])}")
+lines += ["    /// How far the floating shadow sits down and right.", f"    public static let shadowOffset: CGFloat = {shadow_offset}"]
+for t in tokens["opacity"]["tokens"]:
+    lines.append(f"    /// {t['usage']}")
+    lines.append(f"    public static let {camel(t['name'])}: Double = {t['value']}")
+for t in tokens["motion"]["tokens"]:
+    lines.append(f"    /// {t['usage']}")
+    lines.append(f"    public static let {camel(t['name'])}: Double = {t['value'].removesuffix('s')}")
 lines += ["}", ""]
+
+# Text styles: one case per style, with the font and the numbers views need to line things up.
+WEIGHTS = {400: "regular", 500: "medium", 600: "semibold", 700: "bold"}
+styles = [(g["family"], st) for g in tokens["type"]["groups"] for st in g["styles"]]
+lines += [
+    "/// The type scale. Use `.textStyle(_:)` on a view, or `.font` where only a Font fits.",
+    "public enum TextStyle: CaseIterable, Sendable {",
+    "    case " + ", ".join(camel(st["name"]) for _, st in styles),
+    "",
+    "    public var font: Font {",
+    "        switch self {",
+]
+for fam, st in styles:
+    size, weight = px(st["fontSize"]), st["fontWeight"]
+    if fam == "display":
+        font = f".display({size}, bold: {'true' if weight >= 700 else 'false'})"
+    else:
+        font = f".system(size: {size}, weight: .{WEIGHTS[weight]})"
+    if st.get("tabular"):
+        font += ".monospacedDigit()"
+    lines.append(f"        case .{camel(st['name'])}: {font}")
+lines += ["        }", "    }", "", "    public var size: CGFloat {", "        switch self {"]
+lines += [f"        case .{camel(st['name'])}: {px(st['fontSize'])}" for _, st in styles]
+lines += ["        }", "    }", "", "    public var lineHeight: CGFloat {", "        switch self {"]
+lines += [f"        case .{camel(st['name'])}: {px(st['lineHeight'])}" for _, st in styles]
+lines += ["        }", "    }", "}", ""]
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 OUT.write_text("\n".join(lines))

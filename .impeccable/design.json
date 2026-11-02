@@ -1,0 +1,1143 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-02T06:55:36+00:00",
+  "title": "Design System: Simplify",
+  "extensions": {
+    "colorMeta": {
+      "wall": {
+        "role": "neutral",
+        "displayName": "벽 (Wall)",
+        "canonical": "#f4f4f2",
+        "dark": "#1f1e1c",
+        "usage": "The room: window chrome and toolbar background around the paper.",
+        "tonalRamp": [
+          "oklch(15.0% 0.003 106.4)",
+          "oklch(26.4% 0.003 106.4)",
+          "oklch(37.9% 0.003 106.4)",
+          "oklch(49.3% 0.003 106.4)",
+          "oklch(60.7% 0.003 106.4)",
+          "oklch(72.1% 0.003 106.4)",
+          "oklch(83.6% 0.003 106.4)",
+          "oklch(95.0% 0.003 106.4)"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "종이 (Paper)",
+        "canonical": "#ffffff",
+        "dark": "#2a2927",
+        "usage": "The one sheet: month or week grid and panel together, popovers, the settings modal.",
+        "tonalRamp": [
+          "oklch(15.0% 0.000 89.9)",
+          "oklch(26.4% 0.000 89.9)",
+          "oklch(37.9% 0.000 89.9)",
+          "oklch(49.3% 0.000 89.9)",
+          "oklch(60.7% 0.000 89.9)",
+          "oklch(72.1% 0.000 89.9)",
+          "oklch(83.6% 0.000 89.9)",
+          "oklch(95.0% 0.000 89.9)"
+        ]
+      },
+      "raised": {
+        "role": "neutral",
+        "displayName": "한 단계 위 면 (Raised)",
+        "canonical": "#f7f7f5",
+        "dark": "#33312e",
+        "usage": "One step off the paper: weekend columns in the month and week grid, widget nest.",
+        "tonalRamp": [
+          "oklch(15.0% 0.003 106.4)",
+          "oklch(26.4% 0.003 106.4)",
+          "oklch(37.9% 0.003 106.4)",
+          "oklch(49.3% 0.003 106.4)",
+          "oklch(60.7% 0.003 106.4)",
+          "oklch(72.1% 0.003 106.4)",
+          "oklch(83.6% 0.003 106.4)",
+          "oklch(95.0% 0.003 106.4)"
+        ]
+      },
+      "ink": {
+        "role": "primary",
+        "displayName": "잉크 (Ink)",
+        "canonical": "#1a1a1a",
+        "dark": "#ecebe6",
+        "usage": "Primary text, the spine between grid and panel, week rules, outlines of controls; fill of the primary button and of chosen items.",
+        "tonalRamp": [
+          "oklch(15.0% 0.000 89.9)",
+          "oklch(26.4% 0.000 89.9)",
+          "oklch(37.9% 0.000 89.9)",
+          "oklch(49.3% 0.000 89.9)",
+          "oklch(60.7% 0.000 89.9)",
+          "oklch(72.1% 0.000 89.9)",
+          "oklch(83.6% 0.000 89.9)",
+          "oklch(95.0% 0.000 89.9)"
+        ]
+      },
+      "ink-soft": {
+        "role": "neutral",
+        "displayName": "보조 잉크",
+        "canonical": "#575755",
+        "dark": "#bab8b1",
+        "usage": "Secondary text: times, weekday names, calendar names, empty states. On paper, wall and raised.",
+        "tonalRamp": [
+          "oklch(15.0% 0.003 106.5)",
+          "oklch(26.4% 0.003 106.5)",
+          "oklch(37.9% 0.003 106.5)",
+          "oklch(49.3% 0.003 106.5)",
+          "oklch(60.7% 0.003 106.5)",
+          "oklch(72.1% 0.003 106.5)",
+          "oklch(83.6% 0.003 106.5)",
+          "oklch(95.0% 0.003 106.5)"
+        ]
+      },
+      "ink-faint": {
+        "role": "neutral",
+        "displayName": "흐린 잉크",
+        "canonical": "#80807d",
+        "dark": "#8d8b85",
+        "usage": "Out-of-month dates, placeholders and disabled controls only. Never for text people need to read.",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 106.5)",
+          "oklch(26.4% 0.004 106.5)",
+          "oklch(37.9% 0.004 106.5)",
+          "oklch(49.3% 0.004 106.5)",
+          "oklch(60.7% 0.004 106.5)",
+          "oklch(72.1% 0.004 106.5)",
+          "oklch(83.6% 0.004 106.5)",
+          "oklch(95.0% 0.004 106.5)"
+        ]
+      },
+      "shade": {
+        "role": "neutral",
+        "displayName": "그늘 (Shade)",
+        "canonical": "#d8d8d5",
+        "dark": "#4a4844",
+        "usage": "Hairlines: the paper's edge on the wall, rules between days in lists, the floating shadow's colour in light.",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 106.5)",
+          "oklch(26.4% 0.004 106.5)",
+          "oklch(37.9% 0.004 106.5)",
+          "oklch(49.3% 0.004 106.5)",
+          "oklch(60.7% 0.004 106.5)",
+          "oklch(72.1% 0.004 106.5)",
+          "oklch(83.6% 0.004 106.5)",
+          "oklch(95.0% 0.004 106.5)"
+        ]
+      },
+      "shade-soft": {
+        "role": "neutral",
+        "displayName": "옅은 그늘",
+        "canonical": "#ececea",
+        "dark": "#35332f",
+        "usage": "Ground of disabled fields and of a switched-on (toggled) control's neighbours; out-of-month cells have no ground, only faint numbers.",
+        "tonalRamp": [
+          "oklch(15.0% 0.003 106.5)",
+          "oklch(26.4% 0.003 106.5)",
+          "oklch(37.9% 0.003 106.5)",
+          "oklch(49.3% 0.003 106.5)",
+          "oklch(60.7% 0.003 106.5)",
+          "oklch(72.1% 0.003 106.5)",
+          "oklch(83.6% 0.003 106.5)",
+          "oklch(95.0% 0.003 106.5)"
+        ]
+      },
+      "chip": {
+        "role": "neutral",
+        "displayName": "칩 회색",
+        "canonical": "#e4e4e1",
+        "dark": "#4d4b47",
+        "usage": "Ground of a ToDo chip in a memo.",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 106.5)",
+          "oklch(26.4% 0.004 106.5)",
+          "oklch(37.9% 0.004 106.5)",
+          "oklch(49.3% 0.004 106.5)",
+          "oklch(60.7% 0.004 106.5)",
+          "oklch(72.1% 0.004 106.5)",
+          "oklch(83.6% 0.004 106.5)",
+          "oklch(95.0% 0.004 106.5)"
+        ]
+      },
+      "on-ink": {
+        "role": "primary",
+        "displayName": "잉크 위 글자",
+        "canonical": "#ffffff",
+        "dark": "#2a2927",
+        "usage": "Text and check marks on an ink fill.",
+        "tonalRamp": [
+          "oklch(15.0% 0.000 89.9)",
+          "oklch(26.4% 0.000 89.9)",
+          "oklch(37.9% 0.000 89.9)",
+          "oklch(49.3% 0.000 89.9)",
+          "oklch(60.7% 0.000 89.9)",
+          "oklch(72.1% 0.000 89.9)",
+          "oklch(83.6% 0.000 89.9)",
+          "oklch(95.0% 0.000 89.9)"
+        ]
+      },
+      "hover": {
+        "role": "neutral",
+        "displayName": "포인터 면 (Hover)",
+        "canonical": "#f0f0ee",
+        "dark": "#383633",
+        "usage": "Pointer over a day cell, list row or button: a quiet step off the paper.",
+        "tonalRamp": [
+          "oklch(15.0% 0.003 106.4)",
+          "oklch(26.4% 0.003 106.4)",
+          "oklch(37.9% 0.003 106.4)",
+          "oklch(49.3% 0.003 106.4)",
+          "oklch(60.7% 0.003 106.4)",
+          "oklch(72.1% 0.003 106.4)",
+          "oklch(83.6% 0.003 106.4)",
+          "oklch(95.0% 0.003 106.4)"
+        ]
+      },
+      "row-active": {
+        "role": "neutral",
+        "displayName": "고치는 줄 (Row active)",
+        "canonical": "#e4e4e1",
+        "dark": "#4d4b47",
+        "usage": "A row being edited or opened in place (a ToDo renamed, the row a menu belongs to). Ink text on it.",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 106.5)",
+          "oklch(26.4% 0.004 106.5)",
+          "oklch(37.9% 0.004 106.5)",
+          "oklch(49.3% 0.004 106.5)",
+          "oklch(60.7% 0.004 106.5)",
+          "oklch(72.1% 0.004 106.5)",
+          "oklch(83.6% 0.004 106.5)",
+          "oklch(95.0% 0.004 106.5)"
+        ]
+      },
+      "error-tint": {
+        "role": "neutral",
+        "displayName": "경고 면 (Error tint)",
+        "canonical": "#faf0c4",
+        "dark": "#4a4331",
+        "usage": "Ground of an error or warning notice.",
+        "tonalRamp": [
+          "oklch(15.0% 0.009 96.7)",
+          "oklch(26.4% 0.025 96.7)",
+          "oklch(37.9% 0.043 96.7)",
+          "oklch(49.3% 0.058 96.7)",
+          "oklch(60.7% 0.058 96.7)",
+          "oklch(72.1% 0.043 96.7)",
+          "oklch(83.6% 0.025 96.7)",
+          "oklch(95.0% 0.009 96.7)"
+        ]
+      },
+      "shadow-float": {
+        "role": "neutral",
+        "displayName": "떠 있는 그림자",
+        "canonical": "#d8d8d5",
+        "dark": "#121110",
+        "usage": "Popovers, menus, the settings modal: 4px 4px 0, no blur.",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 106.5)",
+          "oklch(26.4% 0.004 106.5)",
+          "oklch(37.9% 0.004 106.5)",
+          "oklch(49.3% 0.004 106.5)",
+          "oklch(60.7% 0.004 106.5)",
+          "oklch(72.1% 0.004 106.5)",
+          "oklch(83.6% 0.004 106.5)",
+          "oklch(95.0% 0.004 106.5)"
+        ]
+      },
+      "widget-surface": {
+        "role": "neutral",
+        "displayName": "위젯 면 (불 끈 갤러리)",
+        "canonical": "#fbfbfa",
+        "dark": "#272624",
+        "usage": "Desktop widget background (C · lights off): no outline, the radius does the framing.",
+        "tonalRamp": [
+          "oklch(15.0% 0.001 106.4)",
+          "oklch(26.4% 0.001 106.4)",
+          "oklch(37.9% 0.001 106.4)",
+          "oklch(49.3% 0.001 106.4)",
+          "oklch(60.7% 0.001 106.4)",
+          "oklch(72.1% 0.001 106.4)",
+          "oklch(83.6% 0.001 106.4)",
+          "oklch(95.0% 0.001 106.4)"
+        ]
+      },
+      "widget-nest": {
+        "role": "neutral",
+        "displayName": "위젯 둥지",
+        "canonical": "#f0efec",
+        "dark": "#32302d",
+        "usage": "Inside a widget: the oval behind the date and other nested areas.",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 91.4)",
+          "oklch(26.4% 0.004 91.4)",
+          "oklch(37.9% 0.004 91.4)",
+          "oklch(49.3% 0.004 91.4)",
+          "oklch(60.7% 0.004 91.4)",
+          "oklch(72.1% 0.004 91.4)",
+          "oklch(83.6% 0.004 91.4)",
+          "oklch(95.0% 0.004 91.4)"
+        ]
+      },
+      "wall-dark": {
+        "role": "neutral",
+        "displayName": "벽 (Wall) · 흑연",
+        "canonical": "#1f1e1c",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 84.6)",
+          "oklch(26.4% 0.004 84.6)",
+          "oklch(37.9% 0.004 84.6)",
+          "oklch(49.3% 0.004 84.6)",
+          "oklch(60.7% 0.004 84.6)",
+          "oklch(72.1% 0.004 84.6)",
+          "oklch(83.6% 0.004 84.6)",
+          "oklch(95.0% 0.004 84.6)"
+        ]
+      },
+      "paper-dark": {
+        "role": "neutral",
+        "displayName": "종이 (Paper) · 흑연",
+        "canonical": "#2a2927",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 84.6)",
+          "oklch(26.4% 0.004 84.6)",
+          "oklch(37.9% 0.004 84.6)",
+          "oklch(49.3% 0.004 84.6)",
+          "oklch(60.7% 0.004 84.6)",
+          "oklch(72.1% 0.004 84.6)",
+          "oklch(83.6% 0.004 84.6)",
+          "oklch(95.0% 0.004 84.6)"
+        ]
+      },
+      "raised-dark": {
+        "role": "neutral",
+        "displayName": "한 단계 위 면 (Raised) · 흑연",
+        "canonical": "#33312e",
+        "tonalRamp": [
+          "oklch(15.0% 0.006 78.2)",
+          "oklch(26.4% 0.006 78.2)",
+          "oklch(37.9% 0.006 78.2)",
+          "oklch(49.3% 0.006 78.2)",
+          "oklch(60.7% 0.006 78.2)",
+          "oklch(72.1% 0.006 78.2)",
+          "oklch(83.6% 0.006 78.2)",
+          "oklch(95.0% 0.006 78.2)"
+        ]
+      },
+      "ink-dark": {
+        "role": "primary",
+        "displayName": "잉크 (Ink) · 흑연",
+        "canonical": "#ecebe6",
+        "tonalRamp": [
+          "oklch(15.0% 0.007 97.4)",
+          "oklch(26.4% 0.007 97.4)",
+          "oklch(37.9% 0.007 97.4)",
+          "oklch(49.3% 0.007 97.4)",
+          "oklch(60.7% 0.007 97.4)",
+          "oklch(72.1% 0.007 97.4)",
+          "oklch(83.6% 0.007 97.4)",
+          "oklch(95.0% 0.007 97.4)"
+        ]
+      },
+      "ink-soft-dark": {
+        "role": "neutral",
+        "displayName": "보조 잉크 · 흑연",
+        "canonical": "#bab8b1",
+        "tonalRamp": [
+          "oklch(15.0% 0.010 93.6)",
+          "oklch(26.4% 0.010 93.6)",
+          "oklch(37.9% 0.010 93.6)",
+          "oklch(49.3% 0.010 93.6)",
+          "oklch(60.7% 0.010 93.6)",
+          "oklch(72.1% 0.010 93.6)",
+          "oklch(83.6% 0.010 93.6)",
+          "oklch(95.0% 0.010 93.6)"
+        ]
+      },
+      "ink-faint-dark": {
+        "role": "neutral",
+        "displayName": "흐린 잉크 · 흑연",
+        "canonical": "#8d8b85",
+        "tonalRamp": [
+          "oklch(15.0% 0.009 91.5)",
+          "oklch(26.4% 0.009 91.5)",
+          "oklch(37.9% 0.009 91.5)",
+          "oklch(49.3% 0.009 91.5)",
+          "oklch(60.7% 0.009 91.5)",
+          "oklch(72.1% 0.009 91.5)",
+          "oklch(83.6% 0.009 91.5)",
+          "oklch(95.0% 0.009 91.5)"
+        ]
+      },
+      "shade-dark": {
+        "role": "neutral",
+        "displayName": "그늘 (Shade) · 흑연",
+        "canonical": "#4a4844",
+        "tonalRamp": [
+          "oklch(15.0% 0.007 84.6)",
+          "oklch(26.4% 0.007 84.6)",
+          "oklch(37.9% 0.007 84.6)",
+          "oklch(49.3% 0.007 84.6)",
+          "oklch(60.7% 0.007 84.6)",
+          "oklch(72.1% 0.007 84.6)",
+          "oklch(83.6% 0.007 84.6)",
+          "oklch(95.0% 0.007 84.6)"
+        ]
+      },
+      "shade-soft-dark": {
+        "role": "neutral",
+        "displayName": "옅은 그늘 · 흑연",
+        "canonical": "#35332f",
+        "tonalRamp": [
+          "oklch(15.0% 0.008 84.6)",
+          "oklch(26.4% 0.008 84.6)",
+          "oklch(37.9% 0.008 84.6)",
+          "oklch(49.3% 0.008 84.6)",
+          "oklch(60.7% 0.008 84.6)",
+          "oklch(72.1% 0.008 84.6)",
+          "oklch(83.6% 0.008 84.6)",
+          "oklch(95.0% 0.008 84.6)"
+        ]
+      },
+      "chip-dark": {
+        "role": "neutral",
+        "displayName": "칩 회색 · 흑연",
+        "canonical": "#4d4b47",
+        "tonalRamp": [
+          "oklch(15.0% 0.007 84.6)",
+          "oklch(26.4% 0.007 84.6)",
+          "oklch(37.9% 0.007 84.6)",
+          "oklch(49.3% 0.007 84.6)",
+          "oklch(60.7% 0.007 84.6)",
+          "oklch(72.1% 0.007 84.6)",
+          "oklch(83.6% 0.007 84.6)",
+          "oklch(95.0% 0.007 84.6)"
+        ]
+      },
+      "on-ink-dark": {
+        "role": "primary",
+        "displayName": "잉크 위 글자 · 흑연",
+        "canonical": "#2a2927",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 84.6)",
+          "oklch(26.4% 0.004 84.6)",
+          "oklch(37.9% 0.004 84.6)",
+          "oklch(49.3% 0.004 84.6)",
+          "oklch(60.7% 0.004 84.6)",
+          "oklch(72.1% 0.004 84.6)",
+          "oklch(83.6% 0.004 84.6)",
+          "oklch(95.0% 0.004 84.6)"
+        ]
+      },
+      "hover-dark": {
+        "role": "neutral",
+        "displayName": "포인터 면 (Hover) · 흑연",
+        "canonical": "#383633",
+        "tonalRamp": [
+          "oklch(15.0% 0.006 78.2)",
+          "oklch(26.4% 0.006 78.2)",
+          "oklch(37.9% 0.006 78.2)",
+          "oklch(49.3% 0.006 78.2)",
+          "oklch(60.7% 0.006 78.2)",
+          "oklch(72.1% 0.006 78.2)",
+          "oklch(83.6% 0.006 78.2)",
+          "oklch(95.0% 0.006 78.2)"
+        ]
+      },
+      "row-active-dark": {
+        "role": "neutral",
+        "displayName": "고치는 줄 (Row active) · 흑연",
+        "canonical": "#4d4b47",
+        "tonalRamp": [
+          "oklch(15.0% 0.007 84.6)",
+          "oklch(26.4% 0.007 84.6)",
+          "oklch(37.9% 0.007 84.6)",
+          "oklch(49.3% 0.007 84.6)",
+          "oklch(60.7% 0.007 84.6)",
+          "oklch(72.1% 0.007 84.6)",
+          "oklch(83.6% 0.007 84.6)",
+          "oklch(95.0% 0.007 84.6)"
+        ]
+      },
+      "error-tint-dark": {
+        "role": "neutral",
+        "displayName": "경고 면 (Error tint) · 흑연",
+        "canonical": "#4a4331",
+        "tonalRamp": [
+          "oklch(15.0% 0.005 89.3)",
+          "oklch(26.4% 0.013 89.3)",
+          "oklch(37.9% 0.023 89.3)",
+          "oklch(49.3% 0.030 89.3)",
+          "oklch(60.7% 0.030 89.3)",
+          "oklch(72.1% 0.023 89.3)",
+          "oklch(83.6% 0.013 89.3)",
+          "oklch(95.0% 0.005 89.3)"
+        ]
+      },
+      "shadow-float-dark": {
+        "role": "neutral",
+        "displayName": "떠 있는 그림자 · 흑연",
+        "canonical": "#121110",
+        "tonalRamp": [
+          "oklch(15.0% 0.003 67.7)",
+          "oklch(26.4% 0.003 67.7)",
+          "oklch(37.9% 0.003 67.7)",
+          "oklch(49.3% 0.003 67.7)",
+          "oklch(60.7% 0.003 67.7)",
+          "oklch(72.1% 0.003 67.7)",
+          "oklch(83.6% 0.003 67.7)",
+          "oklch(95.0% 0.003 67.7)"
+        ]
+      },
+      "widget-surface-dark": {
+        "role": "neutral",
+        "displayName": "위젯 면 (불 끈 갤러리) · 흑연",
+        "canonical": "#272624",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 84.6)",
+          "oklch(26.4% 0.004 84.6)",
+          "oklch(37.9% 0.004 84.6)",
+          "oklch(49.3% 0.004 84.6)",
+          "oklch(60.7% 0.004 84.6)",
+          "oklch(72.1% 0.004 84.6)",
+          "oklch(83.6% 0.004 84.6)",
+          "oklch(95.0% 0.004 84.6)"
+        ]
+      },
+      "widget-nest-dark": {
+        "role": "neutral",
+        "displayName": "위젯 둥지 · 흑연",
+        "canonical": "#32302d",
+        "tonalRamp": [
+          "oklch(15.0% 0.006 78.2)",
+          "oklch(26.4% 0.006 78.2)",
+          "oklch(37.9% 0.006 78.2)",
+          "oklch(49.3% 0.006 78.2)",
+          "oklch(60.7% 0.006 78.2)",
+          "oklch(72.1% 0.006 78.2)",
+          "oklch(83.6% 0.006 78.2)",
+          "oklch(95.0% 0.006 78.2)"
+        ]
+      },
+      "red-ink": {
+        "role": "tertiary",
+        "displayName": "빨강 잉크 / 공휴일·삭제 (holiday, danger)",
+        "canonical": "#b3332a",
+        "dark": "#ff8a7a",
+        "usage": "User palette · 빨강: calendar mark, text colour, ToDo label. On paper and on any *-tint.",
+        "tonalRamp": [
+          "oklch(15.0% 0.025 28.4)",
+          "oklch(26.4% 0.073 28.4)",
+          "oklch(37.9% 0.123 28.4)",
+          "oklch(49.3% 0.166 28.4)",
+          "oklch(60.7% 0.166 28.4)",
+          "oklch(72.1% 0.123 28.4)",
+          "oklch(83.6% 0.073 28.4)",
+          "oklch(95.0% 0.025 28.4)"
+        ]
+      },
+      "red-tint": {
+        "role": "tertiary",
+        "displayName": "빨강 틴트",
+        "canonical": "#fbe3df",
+        "dark": "#553c38",
+        "usage": "User palette · 빨강: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 29.0)",
+          "oklch(26.4% 0.012 29.0)",
+          "oklch(37.9% 0.020 29.0)",
+          "oklch(49.3% 0.027 29.0)",
+          "oklch(60.7% 0.027 29.0)",
+          "oklch(72.1% 0.020 29.0)",
+          "oklch(83.6% 0.012 29.0)",
+          "oklch(95.0% 0.004 29.0)"
+        ]
+      },
+      "orange-ink": {
+        "role": "secondary",
+        "displayName": "주황 잉크",
+        "canonical": "#9a4c00",
+        "dark": "#ffab5e",
+        "usage": "User palette · 주황: calendar mark, text colour, ToDo label. On paper and on any *-tint.",
+        "tonalRamp": [
+          "oklch(15.0% 0.019 53.9)",
+          "oklch(26.4% 0.055 53.9)",
+          "oklch(37.9% 0.094 53.9)",
+          "oklch(49.3% 0.127 53.9)",
+          "oklch(60.7% 0.127 53.9)",
+          "oklch(72.1% 0.094 53.9)",
+          "oklch(83.6% 0.055 53.9)",
+          "oklch(95.0% 0.019 53.9)"
+        ]
+      },
+      "orange-tint": {
+        "role": "secondary",
+        "displayName": "주황 틴트",
+        "canonical": "#fce9d6",
+        "dark": "#554332",
+        "usage": "User palette · 주황: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.",
+        "tonalRamp": [
+          "oklch(15.0% 0.005 67.4)",
+          "oklch(26.4% 0.014 67.4)",
+          "oklch(37.9% 0.024 67.4)",
+          "oklch(49.3% 0.033 67.4)",
+          "oklch(60.7% 0.033 67.4)",
+          "oklch(72.1% 0.024 67.4)",
+          "oklch(83.6% 0.014 67.4)",
+          "oklch(95.0% 0.005 67.4)"
+        ]
+      },
+      "yellow-ink": {
+        "role": "secondary",
+        "displayName": "노랑 잉크",
+        "canonical": "#7a6000",
+        "dark": "#f2cf5b",
+        "usage": "User palette · 노랑: calendar mark, text colour, ToDo label. On paper and on any *-tint.",
+        "tonalRamp": [
+          "oklch(15.0% 0.015 90.2)",
+          "oklch(26.4% 0.045 90.2)",
+          "oklch(37.9% 0.076 90.2)",
+          "oklch(49.3% 0.102 90.2)",
+          "oklch(60.7% 0.102 90.2)",
+          "oklch(72.1% 0.076 90.2)",
+          "oklch(83.6% 0.045 90.2)",
+          "oklch(95.0% 0.015 90.2)"
+        ]
+      },
+      "yellow-tint": {
+        "role": "secondary",
+        "displayName": "노랑 틴트",
+        "canonical": "#faf0c4",
+        "dark": "#524a31",
+        "usage": "User palette · 노랑: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.",
+        "tonalRamp": [
+          "oklch(15.0% 0.009 96.7)",
+          "oklch(26.4% 0.025 96.7)",
+          "oklch(37.9% 0.043 96.7)",
+          "oklch(49.3% 0.058 96.7)",
+          "oklch(60.7% 0.058 96.7)",
+          "oklch(72.1% 0.043 96.7)",
+          "oklch(83.6% 0.025 96.7)",
+          "oklch(95.0% 0.009 96.7)"
+        ]
+      },
+      "green-ink": {
+        "role": "secondary",
+        "displayName": "초록 잉크",
+        "canonical": "#28702c",
+        "dark": "#7fd185",
+        "usage": "User palette · 초록: calendar mark, text colour, ToDo label. On paper and on any *-tint.",
+        "tonalRamp": [
+          "oklch(15.0% 0.019 144.2)",
+          "oklch(26.4% 0.055 144.2)",
+          "oklch(37.9% 0.093 144.2)",
+          "oklch(49.3% 0.125 144.2)",
+          "oklch(60.7% 0.125 144.2)",
+          "oklch(72.1% 0.093 144.2)",
+          "oklch(83.6% 0.055 144.2)",
+          "oklch(95.0% 0.019 144.2)"
+        ]
+      },
+      "green-tint": {
+        "role": "secondary",
+        "displayName": "초록 틴트",
+        "canonical": "#e1f1e0",
+        "dark": "#3b4b3a",
+        "usage": "User palette · 초록: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 143.7)",
+          "oklch(26.4% 0.012 143.7)",
+          "oklch(37.9% 0.021 143.7)",
+          "oklch(49.3% 0.028 143.7)",
+          "oklch(60.7% 0.028 143.7)",
+          "oklch(72.1% 0.021 143.7)",
+          "oklch(83.6% 0.012 143.7)",
+          "oklch(95.0% 0.004 143.7)"
+        ]
+      },
+      "teal-ink": {
+        "role": "secondary",
+        "displayName": "청록 잉크",
+        "canonical": "#00776a",
+        "dark": "#5fd0c0",
+        "usage": "User palette · 청록: calendar mark, text colour, ToDo label. On paper and on any *-tint.",
+        "tonalRamp": [
+          "oklch(15.0% 0.014 181.8)",
+          "oklch(26.4% 0.040 181.8)",
+          "oklch(37.9% 0.068 181.8)",
+          "oklch(49.3% 0.092 181.8)",
+          "oklch(60.7% 0.092 181.8)",
+          "oklch(72.1% 0.068 181.8)",
+          "oklch(83.6% 0.040 181.8)",
+          "oklch(95.0% 0.014 181.8)"
+        ]
+      },
+      "teal-tint": {
+        "role": "secondary",
+        "displayName": "청록 틴트",
+        "canonical": "#dcf0ed",
+        "dark": "#354a46",
+        "usage": "User palette · 청록: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.",
+        "tonalRamp": [
+          "oklch(15.0% 0.003 186.0)",
+          "oklch(26.4% 0.009 186.0)",
+          "oklch(37.9% 0.016 186.0)",
+          "oklch(49.3% 0.021 186.0)",
+          "oklch(60.7% 0.021 186.0)",
+          "oklch(72.1% 0.016 186.0)",
+          "oklch(83.6% 0.009 186.0)",
+          "oklch(95.0% 0.003 186.0)"
+        ]
+      },
+      "blue-ink": {
+        "role": "secondary",
+        "displayName": "파랑 잉크",
+        "canonical": "#2a5fc4",
+        "dark": "#8ab0f7",
+        "usage": "User palette · 파랑: calendar mark, text colour, ToDo label. On paper and on any *-tint.",
+        "tonalRamp": [
+          "oklch(15.0% 0.025 261.7)",
+          "oklch(26.4% 0.074 261.7)",
+          "oklch(37.9% 0.125 261.7)",
+          "oklch(49.3% 0.168 261.7)",
+          "oklch(60.7% 0.168 261.7)",
+          "oklch(72.1% 0.125 261.7)",
+          "oklch(83.6% 0.074 261.7)",
+          "oklch(95.0% 0.025 261.7)"
+        ]
+      },
+      "blue-tint": {
+        "role": "secondary",
+        "displayName": "파랑 틴트",
+        "canonical": "#e1e9fb",
+        "dark": "#3d4451",
+        "usage": "User palette · 파랑: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 266.6)",
+          "oklch(26.4% 0.011 266.6)",
+          "oklch(37.9% 0.019 266.6)",
+          "oklch(49.3% 0.026 266.6)",
+          "oklch(60.7% 0.026 266.6)",
+          "oklch(72.1% 0.019 266.6)",
+          "oklch(83.6% 0.011 266.6)",
+          "oklch(95.0% 0.004 266.6)"
+        ]
+      },
+      "purple-ink": {
+        "role": "secondary",
+        "displayName": "보라 잉크",
+        "canonical": "#7a44bf",
+        "dark": "#c39df5",
+        "usage": "User palette · 보라: calendar mark, text colour, ToDo label. On paper and on any *-tint.",
+        "tonalRamp": [
+          "oklch(15.0% 0.028 300.1)",
+          "oklch(26.4% 0.081 300.1)",
+          "oklch(37.9% 0.137 300.1)",
+          "oklch(49.3% 0.185 300.1)",
+          "oklch(60.7% 0.185 300.1)",
+          "oklch(72.1% 0.137 300.1)",
+          "oklch(83.6% 0.081 300.1)",
+          "oklch(95.0% 0.028 300.1)"
+        ]
+      },
+      "purple-tint": {
+        "role": "secondary",
+        "displayName": "보라 틴트",
+        "canonical": "#ece2f8",
+        "dark": "#494050",
+        "usage": "User palette · 보라: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.",
+        "tonalRamp": [
+          "oklch(15.0% 0.005 306.2)",
+          "oklch(26.4% 0.014 306.2)",
+          "oklch(37.9% 0.023 306.2)",
+          "oklch(49.3% 0.031 306.2)",
+          "oklch(60.7% 0.031 306.2)",
+          "oklch(72.1% 0.023 306.2)",
+          "oklch(83.6% 0.014 306.2)",
+          "oklch(95.0% 0.005 306.2)"
+        ]
+      },
+      "pink-ink": {
+        "role": "secondary",
+        "displayName": "분홍 잉크",
+        "canonical": "#b5325f",
+        "dark": "#f58bb5",
+        "usage": "User palette · 분홍: calendar mark, text colour, ToDo label. On paper and on any *-tint.",
+        "tonalRamp": [
+          "oklch(15.0% 0.025 4.4)",
+          "oklch(26.4% 0.074 4.4)",
+          "oklch(37.9% 0.126 4.4)",
+          "oklch(49.3% 0.170 4.4)",
+          "oklch(60.7% 0.170 4.4)",
+          "oklch(72.1% 0.126 4.4)",
+          "oklch(83.6% 0.074 4.4)",
+          "oklch(95.0% 0.025 4.4)"
+        ]
+      },
+      "pink-tint": {
+        "role": "secondary",
+        "displayName": "분홍 틴트",
+        "canonical": "#f9e0e9",
+        "dark": "#533d43",
+        "usage": "User palette · 분홍: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 353.9)",
+          "oklch(26.4% 0.013 353.9)",
+          "oklch(37.9% 0.022 353.9)",
+          "oklch(49.3% 0.030 353.9)",
+          "oklch(60.7% 0.030 353.9)",
+          "oklch(72.1% 0.022 353.9)",
+          "oklch(83.6% 0.013 353.9)",
+          "oklch(95.0% 0.004 353.9)"
+        ]
+      },
+      "grey-ink": {
+        "role": "secondary",
+        "displayName": "회색 잉크",
+        "canonical": "#5e5e5b",
+        "dark": "#bab8b1",
+        "usage": "User palette · 회색: calendar mark, text colour, ToDo label. On paper and on any *-tint.",
+        "tonalRamp": [
+          "oklch(15.0% 0.005 106.6)",
+          "oklch(26.4% 0.005 106.6)",
+          "oklch(37.9% 0.005 106.6)",
+          "oklch(49.3% 0.005 106.6)",
+          "oklch(60.7% 0.005 106.6)",
+          "oklch(72.1% 0.005 106.6)",
+          "oklch(83.6% 0.005 106.6)",
+          "oklch(95.0% 0.005 106.6)"
+        ]
+      },
+      "grey-tint": {
+        "role": "secondary",
+        "displayName": "회색 틴트",
+        "canonical": "#e9e9e6",
+        "dark": "#4d4b47",
+        "usage": "User palette · 회색: highlighter, all-day band and day-strip block background. Dark: 20% of the ink over graphite paper.",
+        "tonalRamp": [
+          "oklch(15.0% 0.004 106.5)",
+          "oklch(26.4% 0.004 106.5)",
+          "oklch(37.9% 0.004 106.5)",
+          "oklch(49.3% 0.004 106.5)",
+          "oklch(60.7% 0.004 106.5)",
+          "oklch(72.1% 0.004 106.5)",
+          "oklch(83.6% 0.004 106.5)",
+          "oklch(95.0% 0.004 106.5)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "Display · title",
+        "purpose": "달력 머리의 년·월·주 제목.",
+        "swiftUI": ".textStyle(.title)"
+      },
+      "heading": {
+        "displayName": "Display · heading",
+        "purpose": "하루 패널 제목.",
+        "swiftUI": ".textStyle(.heading)"
+      },
+      "subheading": {
+        "displayName": "Display · subheading",
+        "purpose": "팝오버 제목, 편집기 제목 입력 칸.",
+        "swiftUI": ".textStyle(.subheading)"
+      },
+      "big-date": {
+        "displayName": "Display · big-date",
+        "purpose": "위젯 날짜 타원 속 오늘 숫자(준비됨).",
+        "swiftUI": ".textStyle(.bigDate)"
+      },
+      "date": {
+        "displayName": "date",
+        "purpose": "월간 칸·주 머리글의 날짜 숫자, SF 등폭. 오늘은 700.",
+        "swiftUI": ".textStyle(.date)"
+      },
+      "item": {
+        "displayName": "item",
+        "purpose": "패널의 일정·할 일 제목, 팝오버 목록 줄.",
+        "swiftUI": ".textStyle(.item)"
+      },
+      "memo": {
+        "displayName": "memo",
+        "purpose": "메모 본문, 행 26px.",
+        "swiftUI": ".textStyle(.memo)"
+      },
+      "body": {
+        "displayName": "body",
+        "purpose": "버튼, 세그먼트, 메뉴, 입력 칸, 안내 문장.",
+        "swiftUI": ".textStyle(.body)"
+      },
+      "small": {
+        "displayName": "small",
+        "purpose": "글자 버튼, 안내 띠, 도움말.",
+        "swiftUI": ".textStyle(.small)"
+      },
+      "section": {
+        "displayName": "section",
+        "purpose": "섹션 이름(SectionRule). 자간 0.",
+        "swiftUI": ".textStyle(.section)"
+      },
+      "cell": {
+        "displayName": "cell",
+        "purpose": "월간 칸 안의 일정 제목. 설정에서 10 · 11 · 13.",
+        "swiftUI": ".textStyle(.cell)"
+      },
+      "meta": {
+        "displayName": "meta",
+        "purpose": "시간, 캘린더 이름, 개수, 요일 이름, 태그. 등폭 숫자.",
+        "swiftUI": ".textStyle(.meta)"
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-float",
+        "value": "4px 4px 0 #d8d8d5",
+        "dark": "4px 4px 0 #121110",
+        "purpose": "떠 있는 것(팝오버, 메뉴, 서식 막대, 설정 상자). 블러 없는 단색 오프셋. SwiftUI floatingFrame(), Metrics.shadowOffset 4."
+      },
+      {
+        "name": "shadow-float-over-dim",
+        "value": "floatingFrame(shadow:)",
+        "purpose": "어둡게 깐 창 위의 설정 상자·확인 대화. 막보다 진한 그림자를 넘겨요."
+      },
+      {
+        "name": "focus-ring",
+        "value": "0 0 0 2px #ffffff, 0 0 0 4px #1a1a1a",
+        "dark": "0 0 0 2px #2a2927, 0 0 0 4px #ecebe6",
+        "purpose": "키보드 포커스: 종이 2px 틈 + 잉크 2px 링. SwiftUI focusRing(_:)."
+      }
+    ],
+    "motion": [
+      {
+        "name": "motion-quick",
+        "value": "easeOut 0.12s",
+        "purpose": "hover·눌림 상태."
+      },
+      {
+        "name": "motion-panel",
+        "value": "easeOut 0.2s",
+        "purpose": "패널 접기/펴기, 팝오버. 동작 줄이기면 투명도만."
+      }
+    ],
+    "lines": [
+      {
+        "name": "line",
+        "value": "1px",
+        "purpose": "주 가로줄, 컨트롤 윤곽, 팝오버 테두리, 실선 (Metrics.line)."
+      },
+      {
+        "name": "line-mark",
+        "value": "1.2px",
+        "purpose": "14pt 미만 표식·상자 (Metrics.lineMark)."
+      },
+      {
+        "name": "line-box",
+        "value": "1.5px",
+        "purpose": "체크 상자, 미리알림 고리, 현재 시각 선, 오류 입력 칸 (Metrics.lineBox)."
+      },
+      {
+        "name": "line-spine",
+        "value": "1.75px",
+        "purpose": "격자와 패널 사이 등줄, 요일 줄 아래 (Metrics.lineSpine)."
+      },
+      {
+        "name": "focus-ring",
+        "value": "2px",
+        "purpose": "포커스 링 굵기."
+      },
+      {
+        "name": "focus-gap",
+        "value": "2px",
+        "purpose": "컨트롤과 포커스 링 사이 종이 틈."
+      }
+    ],
+    "breakpoints": [],
+    "layout": {
+      "panelWidth": "360px",
+      "toolbarHeight": "64px",
+      "sheetMargins": "20px leading · 24px trailing · 24px bottom",
+      "spine": "1.75px",
+      "dayCellMin": "100x80px",
+      "todayBar": "3px",
+      "weekHourHeight": "44px",
+      "weekGutter": "56px",
+      "weekLaneHeight": "20px (max 4)",
+      "dayStripHeight": "34px (9–24시)",
+      "popoverWidth": "340px",
+      "panelPopWidth": "316px",
+      "formatBarWidth": "312px",
+      "settingsModal": "760x500px"
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "잉크로 채운 주 버튼. 화면에 하나(메인 창은 새 일정).",
+      "html": "<button class=\"ds-btn ds-btn-primary\">새 일정</button>",
+      "css": ":host{--wall:#f4f4f2;--paper:#fff;--raised:#f7f7f5;--ink:#1a1a1a;--ink-soft:#575755;--ink-faint:#80807d;--shade:#d8d8d5;--shade-soft:#ececea;--on-ink:#fff;--hover:#f0f0ee;--row-active:#e4e4e1;--error-tint:#faf0c4;--danger:#b3332a;--shadow-float:#d8d8d5}.ds-btn{font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',system-ui,sans-serif;font-size:13px;line-height:18px;min-height:28px;min-width:28px;padding:0 12px;border:1px solid var(--ink);border-radius:0;background:var(--paper);color:var(--ink);cursor:default;transition:background .12s ease-out}.ds-btn:hover{background:var(--hover)}.ds-btn:active{background:var(--row-active)}.ds-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--paper),0 0 0 4px var(--ink)}.ds-btn:disabled{color:var(--ink-faint);border-color:var(--ink-faint);background:var(--paper)}.ds-btn-primary{background:var(--ink);color:var(--on-ink);font-weight:600}.ds-btn-primary:hover,.ds-btn-primary:active{background:rgba(26,26,26,.86)}"
+    },
+    {
+      "name": "Plain and Toggled Buttons",
+      "kind": "button",
+      "refersTo": "button-plain",
+      "description": "기본 상자 버튼과 켜진 토글(shade-soft). 포인터 hover, 눌림 row-active.",
+      "html": "<div class=\"ds-row\"><button class=\"ds-btn\">기본</button><button class=\"ds-btn ds-btn-toggled\">켜짐</button><button class=\"ds-btn\" disabled>못 누름</button></div>",
+      "css": ":host{--wall:#f4f4f2;--paper:#fff;--raised:#f7f7f5;--ink:#1a1a1a;--ink-soft:#575755;--ink-faint:#80807d;--shade:#d8d8d5;--shade-soft:#ececea;--on-ink:#fff;--hover:#f0f0ee;--row-active:#e4e4e1;--error-tint:#faf0c4;--danger:#b3332a;--shadow-float:#d8d8d5}.ds-btn{font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',system-ui,sans-serif;font-size:13px;line-height:18px;min-height:28px;min-width:28px;padding:0 12px;border:1px solid var(--ink);border-radius:0;background:var(--paper);color:var(--ink);cursor:default;transition:background .12s ease-out}.ds-btn:hover{background:var(--hover)}.ds-btn:active{background:var(--row-active)}.ds-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--paper),0 0 0 4px var(--ink)}.ds-btn:disabled{color:var(--ink-faint);border-color:var(--ink-faint);background:var(--paper)}.ds-row{display:flex;gap:8px}.ds-btn-toggled{background:var(--shade-soft)}.ds-btn-toggled:active{background:var(--row-active)}"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "삭제에만 쓰는 빨강 글자·테두리 버튼.",
+      "html": "<button class=\"ds-btn ds-btn-danger\">삭제</button>",
+      "css": ":host{--wall:#f4f4f2;--paper:#fff;--raised:#f7f7f5;--ink:#1a1a1a;--ink-soft:#575755;--ink-faint:#80807d;--shade:#d8d8d5;--shade-soft:#ececea;--on-ink:#fff;--hover:#f0f0ee;--row-active:#e4e4e1;--error-tint:#faf0c4;--danger:#b3332a;--shadow-float:#d8d8d5}.ds-btn{font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',system-ui,sans-serif;font-size:13px;line-height:18px;min-height:28px;min-width:28px;padding:0 12px;border:1px solid var(--ink);border-radius:0;background:var(--paper);color:var(--ink);cursor:default;transition:background .12s ease-out}.ds-btn:hover{background:var(--hover)}.ds-btn:active{background:var(--row-active)}.ds-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--paper),0 0 0 4px var(--ink)}.ds-btn:disabled{color:var(--ink-faint);border-color:var(--ink-faint);background:var(--paper)}.ds-btn-danger{color:var(--danger);border-color:var(--danger)}"
+    },
+    {
+      "name": "Text Button",
+      "kind": "button",
+      "refersTo": "button-text",
+      "description": "섹션 끝의 작은 동작(추가, 가져오기). 12px 밑줄.",
+      "html": "<button class=\"ds-text\">가져오기</button>",
+      "css": ":host{--wall:#f4f4f2;--paper:#fff;--raised:#f7f7f5;--ink:#1a1a1a;--ink-soft:#575755;--ink-faint:#80807d;--shade:#d8d8d5;--shade-soft:#ececea;--on-ink:#fff;--hover:#f0f0ee;--row-active:#e4e4e1;--error-tint:#faf0c4;--danger:#b3332a;--shadow-float:#d8d8d5}.ds-text{font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',system-ui,sans-serif;font-size:12px;line-height:16px;background:none;border:0;padding:0 2px;color:var(--ink);text-decoration:underline;cursor:default}.ds-text:hover{background:var(--hover)}.ds-text:active{opacity:.6}.ds-text:focus-visible{outline:none;box-shadow:0 0 0 2px var(--paper),0 0 0 4px var(--ink)}"
+    },
+    {
+      "name": "Segmented Tabs",
+      "kind": "nav",
+      "refersTo": "segment",
+      "description": "잉크 선으로 이어 붙인 직각 칸. 고른 칸은 잉크 채움.",
+      "html": "<div class=\"ds-seg\" role=\"tablist\"><button class=\"ds-seg-i is-on\">하루</button><button class=\"ds-seg-i\">한 주</button><button class=\"ds-seg-i\">한 달</button></div>",
+      "css": ":host{--wall:#f4f4f2;--paper:#fff;--raised:#f7f7f5;--ink:#1a1a1a;--ink-soft:#575755;--ink-faint:#80807d;--shade:#d8d8d5;--shade-soft:#ececea;--on-ink:#fff;--hover:#f0f0ee;--row-active:#e4e4e1;--error-tint:#faf0c4;--danger:#b3332a;--shadow-float:#d8d8d5}.ds-seg{display:inline-flex;border:1px solid var(--ink)}.ds-seg-i{font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',system-ui,sans-serif;font-size:13px;height:28px;padding:0 12px;border:0;border-left:1px solid var(--ink);background:var(--paper);color:var(--ink);cursor:default}.ds-seg-i:first-child{border-left:0}.ds-seg-i:hover{background:var(--hover)}.ds-seg-i.is-on{background:var(--ink);color:var(--on-ink);font-weight:600}.ds-seg-i:focus-visible{outline:none;box-shadow:0 0 0 2px var(--paper),0 0 0 4px var(--ink);position:relative}"
+    },
+    {
+      "name": "Drawn Field",
+      "kind": "input",
+      "refersTo": "field-box",
+      "description": "하나의 입력 모양 drawnField(.box). 포커스 링, 오류 error-tint, 비활성 shade-soft.",
+      "html": "<div class=\"ds-fields\"><input class=\"ds-field\" placeholder=\"기본\"><input class=\"ds-field is-err\" value=\"오류\"><input class=\"ds-field\" placeholder=\"비활성\" disabled></div>",
+      "css": ":host{--wall:#f4f4f2;--paper:#fff;--raised:#f7f7f5;--ink:#1a1a1a;--ink-soft:#575755;--ink-faint:#80807d;--shade:#d8d8d5;--shade-soft:#ececea;--on-ink:#fff;--hover:#f0f0ee;--row-active:#e4e4e1;--error-tint:#faf0c4;--danger:#b3332a;--shadow-float:#d8d8d5}.ds-fields{display:flex;gap:12px}.ds-field{font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',system-ui,sans-serif;font-size:13px;height:28px;padding:0 8px;border:1px solid var(--ink);border-radius:0;background:var(--paper);color:var(--ink)}.ds-field::placeholder{color:var(--ink-faint)}.ds-field:hover{background:var(--hover)}.ds-field:focus-visible{outline:none;box-shadow:0 0 0 2px var(--paper),0 0 0 4px var(--ink);background:var(--paper)}.ds-field.is-err{background:var(--error-tint);border-width:1.5px}.ds-field:disabled{background:var(--shade-soft);border-color:var(--ink-faint);color:var(--ink-faint)}"
+    },
+    {
+      "name": "Tag",
+      "kind": "chip",
+      "refersTo": "tag",
+      "description": "잉크 1px 상자 속 짧은 말: 오늘, 읽기 전용, 다시 연결 필요.",
+      "html": "<span class=\"ds-tag\">오늘</span> <span class=\"ds-tag ds-tag-soft\">읽기 전용</span>",
+      "css": ":host{--wall:#f4f4f2;--paper:#fff;--raised:#f7f7f5;--ink:#1a1a1a;--ink-soft:#575755;--ink-faint:#80807d;--shade:#d8d8d5;--shade-soft:#ececea;--on-ink:#fff;--hover:#f0f0ee;--row-active:#e4e4e1;--error-tint:#faf0c4;--danger:#b3332a;--shadow-float:#d8d8d5}.ds-tag{font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',system-ui,sans-serif;font-size:11px;line-height:14px;font-weight:600;padding:1px 6px;border:1px solid var(--ink);color:var(--ink)}.ds-tag-soft{color:var(--ink-soft);border-color:var(--ink-soft)}"
+    },
+    {
+      "name": "Notice Bar",
+      "kind": "card",
+      "refersTo": "notice-warning",
+      "description": "경고 안내 띠: error-tint 바탕, 잉크 글자, 경고 표시. 빨강은 쓰지 않아요.",
+      "html": "<div class=\"ds-notice\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><path d=\"M6 1.2 11 10.5H1Z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.1\" stroke-linejoin=\"round\"/><path d=\"M6 4.6v3M6 8.8v.4\" stroke=\"currentColor\" stroke-width=\"1.1\"/></svg><span><b>메모를 저장할 수 없어요.</b> 이번 실행에서 쓴 메모는 남지 않아요.</span></div>",
+      "css": ":host{--wall:#f4f4f2;--paper:#fff;--raised:#f7f7f5;--ink:#1a1a1a;--ink-soft:#575755;--ink-faint:#80807d;--shade:#d8d8d5;--shade-soft:#ececea;--on-ink:#fff;--hover:#f0f0ee;--row-active:#e4e4e1;--error-tint:#faf0c4;--danger:#b3332a;--shadow-float:#d8d8d5}.ds-notice{font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',system-ui,sans-serif;display:flex;gap:8px;align-items:baseline;font-size:12px;line-height:16px;padding:7px 10px;background:var(--error-tint);border:1px solid var(--ink);color:var(--ink)}.ds-notice b{font-weight:600}"
+    },
+    {
+      "name": "Ink Ledger Sheet",
+      "kind": "custom",
+      "refersTo": "sheet",
+      "description": "한 장의 종이: 주 가로줄 격자, 주말 raised, 오늘 3px 잉크 막대, 1.75px 등줄 뒤의 패널.",
+      "html": "<div class=\"ds-sheet\"><div class=\"ds-grid\"><div class=\"ds-wk\"><div class=\"ds-c we hol\">1</div><div class=\"ds-c today\">2</div><div class=\"ds-c\">3</div><div class=\"ds-c we\">4</div></div><div class=\"ds-wk\"><div class=\"ds-c we hol\">8</div><div class=\"ds-c chosen\">9</div><div class=\"ds-c\">10</div><div class=\"ds-c we\">11</div></div></div><div class=\"ds-panel\"><b>11월 2일 월요일</b></div></div>",
+      "css": ":host{--wall:#f4f4f2;--paper:#fff;--raised:#f7f7f5;--ink:#1a1a1a;--ink-soft:#575755;--ink-faint:#80807d;--shade:#d8d8d5;--shade-soft:#ececea;--on-ink:#fff;--hover:#f0f0ee;--row-active:#e4e4e1;--error-tint:#faf0c4;--danger:#b3332a;--shadow-float:#d8d8d5}.ds-sheet{display:flex;background:var(--paper);border:1px solid var(--shade)}.ds-grid{flex:1;border-top:1.75px solid var(--ink)}.ds-wk{display:flex;border-bottom:1px solid var(--ink)}.ds-c{font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',system-ui,sans-serif;flex:1;height:56px;padding:4px 8px;font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink);position:relative}.ds-c:hover{box-shadow:inset 0 0 0 4px var(--paper),inset 0 0 0 5px var(--shade)}.ds-c.we{background:var(--raised)}.ds-c.hol{color:#b3332a}.ds-c.today{font-weight:700;box-shadow:inset 0 3px 0 var(--ink)}.ds-c.chosen{box-shadow:inset 1px 0 0 var(--ink),inset -1px 0 0 var(--ink)}.ds-panel{width:180px;border-left:1.75px solid var(--ink);padding:20px;font-family:'Gowun Batang',AppleMyungjo,serif;font-size:22px}"
+    },
+    {
+      "name": "Day Strip",
+      "kind": "custom",
+      "refersTo": "day-strip",
+      "description": "하루 띠: 9시부터 24시까지 한 줄에 일정 블록(tint + 잉크 외곽 + 3px 색 끝), 미리알림 고리, 잉크 현재 시각 선.",
+      "html": "<div class=\"ds-strip\"><div class=\"ds-track\"></div><i class=\"ds-blk\" style=\"left:4%;width:5%;--t:#e1e9fb;--k:#2a5fc4\"></i><i class=\"ds-blk\" style=\"left:28%;width:8%;--t:#fce9d6;--k:#9a4c00\"></i><i class=\"ds-blk\" style=\"left:44%;width:10%;--t:#e1e9fb;--k:#2a5fc4\"></i><i class=\"ds-ring\" style=\"left:63%\"></i><i class=\"ds-now\" style=\"left:24%\"></i></div><div class=\"ds-hours\"><span>9시</span><span>12시</span><span>15시</span><span>18시</span><span>21시</span><span>24시</span></div>",
+      "css": ":host{--wall:#f4f4f2;--paper:#fff;--raised:#f7f7f5;--ink:#1a1a1a;--ink-soft:#575755;--ink-faint:#80807d;--shade:#d8d8d5;--shade-soft:#ececea;--on-ink:#fff;--hover:#f0f0ee;--row-active:#e4e4e1;--error-tint:#faf0c4;--danger:#b3332a;--shadow-float:#d8d8d5}.ds-strip{position:relative;height:34px;width:320px}.ds-track{position:absolute;left:0;right:0;top:16px;height:2px;background:var(--shade)}.ds-blk{position:absolute;top:8px;height:18px;background:var(--t);border:1px solid var(--ink);border-left:3px solid var(--k);box-sizing:border-box}.ds-ring{position:absolute;top:12.5px;width:9px;height:9px;border-radius:50%;border:1.5px solid #7a6000;background:var(--paper);box-sizing:border-box}.ds-now{position:absolute;top:0;bottom:0;width:2px;background:var(--ink)}.ds-hours{font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',system-ui,sans-serif;display:flex;justify-content:space-between;width:320px;margin-top:4px;font-size:11px;font-weight:500;color:var(--ink-soft)}"
+    },
+    {
+      "name": "Widget C 불 끈 갤러리",
+      "kind": "custom",
+      "refersTo": "widget",
+      "description": "선 없는 위젯 면 + 18px 마스크, 둥지 타원 속 명조 날짜. 토큰·컴포넌트만 준비(7단계).",
+      "html": "<div class=\"ds-widget\"><div class=\"ds-oval\">8</div><div class=\"ds-wmeta\">10월 · 목요일</div></div>",
+      "css": ":host{--wall:#f4f4f2;--paper:#fff;--raised:#f7f7f5;--ink:#1a1a1a;--ink-soft:#575755;--ink-faint:#80807d;--shade:#d8d8d5;--shade-soft:#ececea;--on-ink:#fff;--hover:#f0f0ee;--row-active:#e4e4e1;--error-tint:#faf0c4;--danger:#b3332a;--shadow-float:#d8d8d5}.ds-widget{width:170px;height:170px;border-radius:18px;background:#fbfbfa;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}.ds-oval{width:76px;height:62px;border-radius:50%;background:#f0efec;display:flex;align-items:center;justify-content:center;font-family:'Gowun Batang',AppleMyungjo,serif;font-weight:700;font-size:36px;color:var(--ink)}.ds-wmeta{font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',system-ui,sans-serif;font-size:11px;font-weight:500;color:var(--ink-soft)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "잉크 장부",
+    "overview": "Simplify는 한 장의 종이에 잉크로 줄을 그은 장부처럼 보이는 캘린더·다이어리예요. 창 바탕(`wall`)은 책상이고, 그 위에 종이(`paper`) 한 장이 놓여 있어요. 월·주 격자와 하루 패널은 따로 떨어진 두 장이 아니라 같은 종이이고, 둘 사이에 굵은 잉크 등줄(spine) 하나만 그어요. 종이 자체는 테두리도 그림자도 없이 `shade` 실선 하나로 책상과 만나요. 그림자는 종이 위에 떠 있는 것(팝오버, 메뉴, 설정 상자)만 가져요.\n\n틀은 흑백이고 색은 내용의 것이에요. 툴바, 버튼, 세그먼트, 체크 상자, 고른 상태는 모두 `ink`와 `paper`, 회색 단계로만 그려요. 색은 사용자 캘린더와 라벨의 9색 팔레트에만 들어가고, 빨강은 공휴일과 삭제 두 곳에만 남아요. 날짜와 시각은 SF Pro 등폭 숫자로 장부의 숫자 칸처럼 읽히고, 고운바탕 명조는 제목에만 나와요. 밀도는 데스크톱 캘린더답게 촘촘하지만(칸 안 글자 11px), 주마다 그은 잉크 가로줄과 한 단계 다른 주말 면이 질서를 잡아 줘요.\n\n모든 컨트롤은 포인터(`hover` 면)와 키보드(종이 2px 틈 + 잉크 2px 링)에 답해요. 다크 D1 \"흑연\"은 검정이 아니라 따뜻한 회갈색 종이에 밝은 잉크예요. 위젯 C \"불 끈 갤러리\"는 선 없이 면의 밝기와 둥근 마스크로만 액자를 만들어요(토큰과 컴포넌트만 준비돼 있고 위젯 화면은 7단계예요).",
+    "keyCharacteristics": [
+      "한 장의 종이: 격자와 패널이 한 면이고, 사이에 1.75px 잉크 등줄 하나",
+      "주 가로줄: 월간 격자는 주마다 1px 잉크 줄, 요일 줄 아래는 1.75px",
+      "주말은 `raised` 한 단계 다른 면, 오늘은 칸 위 3px 잉크 막대",
+      "하루 띠: 9시부터 24시까지 한 줄에 일정 블록과 현재 시각",
+      "현재 시각 선은 잉크(빨강 아님)",
+      "고른 것은 잉크 채움 + `on-ink` 글자, 고치는 중은 회색, 포인터는 `hover`",
+      "직각 모서리, 둥근 것은 미리알림 고리·현재 시각 점·위젯뿐",
+      "라이트(흰 벽)와 다크 D1 \"흑연\"을 모든 토큰이 같이 가져요"
+    ],
+    "rules": [
+      {
+        "name": "The Ink-Only Frame Rule",
+        "body": "툴바, 버튼, 세그먼트, 테두리, 체크 상자, 고른 상태 같은 틀은 `ink` · `paper` · 회색 단계만 써요. 팔레트 색이 틀에 들어가면 사용자의 색과 앱의 색이 구분되지 않아요.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two Reds Rule",
+        "body": "빨강은 공휴일(`holiday`)과 삭제(`danger`)에만 써요. 오류·경고는 잉크 글자 + 경고 표시 + `error-tint`, 현재 시각 선은 잉크예요. 오늘 열이나 오늘 칸에 빨강 면을 깔지 않아요.",
+        "section": "colors"
+      },
+      {
+        "name": "The Ink-and-Tint Pair Rule",
+        "body": "팔레트 색은 늘 쌍으로 써요. 표식과 글자는 `-ink`, 넓은 면은 `-tint`. `-ink`는 넓은 면에 칠하지 않고 띠의 왼쪽 6px, 시간 블록의 왼쪽 4px, 하루 띠 블록의 왼쪽 3px 끝 줄로만 써요.",
+        "section": "colors"
+      },
+      {
+        "name": "The Title-Only Display Rule",
+        "body": "고운바탕은 title · heading · subheading(그리고 위젯 big-date)에만 써요. 날짜 숫자, 이메일, 문장, 숫자 칸에는 쓰지 않아요.",
+        "section": "typography"
+      },
+      {
+        "name": "The Ledger Numerals Rule",
+        "body": "날짜·시각·개수는 SF Pro 등폭 숫자(`date`, `meta`)로 써서 줄마다 자리가 맞아요.",
+        "section": "typography"
+      },
+      {
+        "name": "The No-Tracking Rule",
+        "body": "한글에 자간을 주지 않아요. 섹션 이름도 자간 0이에요. 글자 크기는 `.textStyle(…)`로만 정하고 `.font(.system(size:))`는 SF Symbol 크기와 사용자 글자 크기 설정에만 써요. 연필(메모 있음)과 체크(완료·남은 할 일)는 SF Symbol 대신 Kit `Glyph`로 1.2~1.8px 잉크 선을 그어요.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Paper Rule",
+        "body": "메인 종이는 `MainView`가 `paperSheet()`로 한 번만 그려요. 격자와 패널 뷰는 자기 배경이나 테두리를 그리지 않고, 둘 사이에는 1.75px 잉크 등줄 하나만 있어요.",
+        "section": "layout"
+      },
+      {
+        "name": "The Week Rule",
+        "body": "월간 격자의 구조선은 주마다 그은 1px 잉크 가로줄이에요. 날 사이는 선이 아니라 주말 `raised` 면과 여백으로 나눠요.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat Paper Rule",
+        "body": "메인 종이 위의 것은 그림자를 갖지 않아요. 그림자는 떠 있는 것의 표시이고, 오른쪽 아래 4px · 블러 0 · 단색 하나뿐이에요. 상태(hover 등)에 따라 키우지 않아요.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** 메인 종이는 `MainView`의 `paperSheet()` 한 번으로 두고, 격자와 패널 사이는 `Metrics.lineSpine`(1.75) 잉크 등줄 하나로 나눠요.",
+      "**Do** 떠 있는 것(팝오버, 메뉴, 모달)은 `floatingFrame()`으로, 어두운 막 위에서는 `floatingFrame(shadow:)`로 그려요.",
+      "**Do** 선은 `Metrics.line` 1 / `lineMark` 1.2 / `lineBox` 1.5 / `lineSpine` 1.75 네 단계로만 그어요.",
+      "**Do** 고른 것은 `Tokens.selection`(잉크) + `on-ink`, 고치는 줄은 `row-active`, 포인터는 `hover`로, 줄에는 `selectableRow(chosen:active:)`를 써요.",
+      "**Do** 글자는 `.textStyle(…)`, 간격은 `Metrics.spaceXxs…spaceXxxl`로 써요.",
+      "**Do** 입력 칸은 `drawnField(.box | .inline | .title, focused:, error:)`, 버튼은 `DrawnButtonStyle` 다섯 종류, 체크는 `CheckBox` 하나로 그려요.",
+      "**Do** 키보드로 갈 수 있는 곳은 `focusRing`(종이 2px 틈 + 잉크 2px)을 보여 줘요. 버튼의 링은 전체 키보드 접근이 켜졌을 때만이에요.",
+      "**Do** 오류·경고는 `NoticeBar(tone: .warning)` 또는 잉크 글자 + `exclamationmark.triangle`으로 알려요.",
+      "**Do** 팔레트 색은 `-ink`(표식·글자·끝 줄)와 `-tint`(면)를 쌍으로 꺼내 써요.",
+      "**Do** 미끄러지는 전환은 동작 줄이기가 켜져 있으면 투명도만 바꿔요."
+    ],
+    "donts": [
+      "**Don't** 격자나 패널 뷰에 자기 배경·테두리·그림자를 그리지 마세요. 메인 종이는 한 장이에요.",
+      "**Don't** 이중선(몰딩), 장식선, 블러 있는 그림자, 그라데이션을 쓰지 마세요.",
+      "**Don't** 빨강을 공휴일과 삭제 말고 쓰지 마세요. 오류, 현재 시각 선, 오늘 표시는 잉크예요.",
+      "**Don't** 팔레트 색을 틀(툴바, 버튼, 테두리, 고른 상태)에 쓰지 마세요.",
+      "**Don't** `ink`로 채운 주 버튼을 화면에 둘 이상 두지 마세요. 켜진 토글은 `row-active` 바탕에 굵은 테두리예요.",
+      "**Don't** 고운바탕을 날짜 숫자, 이메일, 문장, 숫자 칸에 쓰지 마세요. 한글에 자간을 주지 마세요.",
+      "**Don't** `ink-faint`를 읽어야 하는 글자에 쓰지 마세요. 빈 상태 문장은 `ink-soft`예요.",
+      "**Don't** 모서리를 둥글게 만들지 마세요. 미리알림 고리, 현재 시각 점, 위젯 말고는 직각이에요.",
+      "**Don't** 시스템 세그먼트 컨트롤이나 둥근 시스템 버튼 스타일을 쓰지 마세요."
+    ]
+  }
+}

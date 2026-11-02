@@ -2,8 +2,8 @@ import AuthenticationServices
 import SwiftUI
 import SimplifyKit
 
-/// Settings as a drawn panel over the main window: a menu on the left (계정 · 캘린더 · 일반),
-/// the chosen page on the right. Esc, × or a click outside closes it.
+/// Settings as a box floating over the dimmed window: a menu on the left (계정 · 캘린더 · 일반), the
+/// chosen page on the right. ×, esc or a click outside the box closes it.
 struct SettingsModal: View {
     let model: AppModel
     let calendars: CalendarController
@@ -18,68 +18,80 @@ struct SettingsModal: View {
     /// Reconnecting a known iCloud account: its Apple ID stays as it is.
     @State private var reconnectingAppleID: String?
     @State private var confirming: CalendarController.Account?
-    @FocusState private var focused: Bool
+    /// Accounts whose calendars are folded away on the calendars page.
+    @State private var folded: Set<CalendarController.Account.ID> = []
     @FocusState private var focusedField: FormFieldID?
 
     enum FormFieldID { case appleID, password }
 
-    /// `intro` opens straight on an account kind's connect page (the snapshot uses it).
-    init(model: AppModel, calendars: CalendarController, intro: CalendarProviderKind? = nil) {
+    /// `intro` opens straight on an account kind's connect page, `page` on another menu (the snapshot uses both).
+    init(model: AppModel, calendars: CalendarController, intro: CalendarProviderKind? = nil, page: Page = .accounts) {
         self.model = model
         self.calendars = calendars
         _intro = State(initialValue: intro)
+        _page = State(initialValue: page)
     }
 
     enum Page { case accounts, calendars, general }
 
     var body: some View {
-        ZStack {
-            // Dims the month behind; a little darker on the black wall so the panel still stands out.
-            Color.black.opacity(colorScheme == .dark ? 0.6 : 0.38)
-                .ignoresSafeArea()
-                .onTapGesture { close() }
-                .accessibilityHidden(true)
+        GeometryReader { geo in
+            ZStack {
+                // The whole window dims, the title bar too; a click outside closes settings.
+                Color.black.opacity(Metrics.opacityScrim)
+                    .ignoresSafeArea()
+                    .onTapGesture { if confirming == nil { close() } }
+                    .accessibilityHidden(true)
+                panel
+                    .frame(width: min(geo.size.width - Self.margin * 2, Self.size.width),
+                           height: min(geo.size.height - Self.margin * 2, Self.size.height))
+                    .floatingFrame(shadow: modalShadow)
+                    .accessibilityAddTraits(.isModal)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .overlay { if let account = confirming { confirmDisconnect(account) } }
+    }
 
-            VStack(spacing: 0) {
-                HStack {
-                    Text("설정").font(.display(22)).accessibilityAddTraits(.isHeader)
-                    Spacer()
-                    Button { close() } label: { Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)) }
-                        .buttonStyle(DrawnButtonStyle())
-                        .accessibilityLabel("닫기")
-                }
-                .padding(.leading, 24)
-                .padding(.trailing, 20)
-                .padding(.vertical, 14)
-                .overlay(alignment: .bottom) { Rectangle().fill(.ink).frame(height: Metrics.line).padding(.horizontal, Metrics.mouldingInset) }
+    /// The largest the settings box grows, and the least room it leaves around itself.
+    static let size = CGSize(width: 760, height: 540)
+    static let margin: CGFloat = 32
 
-                HStack(spacing: 0) {
-                    sidebar
-                    Rectangle().fill(.ink).frame(width: Metrics.line).padding(.bottom, Metrics.mouldingInset)
-                    ScrollArea {
-                        content
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 18)
-                    }
+    private var panel: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("설정").textStyle(.subheading).accessibilityAddTraits(.isHeader)
+                Spacer()
+                Button { close() } label: { Image(systemName: "xmark").font(.system(size: 12, weight: .semibold)) }
+                    .buttonStyle(DrawnButtonStyle(.icon))
+                    // esc: the box itself takes no focus, or every button in it would read as focused.
+                    .keyboardShortcut(confirming == nil ? .cancelAction : nil)
+                    // Signing in has to finish or fail first.
+                    .disabled(calendars.addState == .signingIn)
+                    .help(calendars.addState == .signingIn ? "로그인이 끝나면 닫을 수 있어요" : "설정 닫기 (esc)")
+                    .accessibilityLabel("설정 닫기")
+            }
+            .padding(.leading, Metrics.spaceXxl)
+            .padding(.trailing, Metrics.spaceL)
+            .padding(.vertical, Metrics.spaceL)
+            Rectangle().fill(.shade).frame(height: Metrics.line)
+
+            HStack(spacing: 0) {
+                sidebar
+                // The same spine as between the calendar and the panel.
+                Rectangle().fill(.ink).frame(width: Metrics.lineSpine)
+                ScrollArea {
+                    content
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, Metrics.spaceXxxl)
+                        .padding(.vertical, Metrics.spaceXxl)
                 }
             }
-            .frame(width: 760, height: 500)
-            .mouldedFrame(shadow: modalShadow)
-            .overlay { if let account = confirming { confirmDisconnect(account) } }
-            .accessibilityAddTraits(.isModal)
-        }
-        .focusable()
-        .focusEffectDisabled()
-        .focused($focused)
-        .onAppear { focused = true }
-        .onExitCommand {
-            if confirming != nil { confirming = nil } else { close() }
         }
     }
 
-    /// The usual shade would read as a light edge on the dimmed window, so the modal casts a dark one.
-    private var modalShadow: Color { colorScheme == .dark ? .black : .black.opacity(0.45) }
+    /// The settings box and its confirmation sit over the dimmed window, where the usual shadow would not read.
+    private var modalShadow: Color { colorScheme == .dark ? .black : .black.opacity(Metrics.opacityModalShadow) }
 
     private func close() {
         guard calendars.addState != .signingIn else { return }
@@ -91,31 +103,29 @@ struct SettingsModal: View {
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
             sideItem("계정", icon: "person", page: .accounts)
             sideItem("캘린더", icon: "calendar", page: .calendars)
             sideItem("일반", icon: "gearshape", page: .general)
             Spacer()
         }
-        .padding(.leading, 16)
-        .padding(.trailing, 10)
-        .padding(.vertical, 14)
-        .frame(width: 180)
+        .padding(Metrics.spaceL)
+        .frame(width: 184)
     }
 
     private func sideItem(_ title: String, icon: String, page target: Page) -> some View {
         let isOn = page == target
         return Button { page = target } label: {
             Label(title, systemImage: icon)
-                .font(.system(size: 13, weight: isOn ? .semibold : .regular))
+                .textStyle(.body)
+                .fontWeight(isOn ? .semibold : .regular)
                 .foregroundStyle(isOn ? Color.onInk : Color.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(isOn ? Color.ink : Color.clear)
-                .contentShape(Rectangle())
+                .padding(.horizontal, Metrics.spaceM)
+                .padding(.vertical, Metrics.spaceS)
+                .selectableRow(chosen: isOn, inset: 0)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(FocusOnlyStyle())
         .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 
@@ -135,34 +145,54 @@ struct SettingsModal: View {
 
     private var generalPage: some View {
         @Bindable var model = model
-        return VStack(alignment: .leading, spacing: 14) {
-            SectionRule("달력")
+        return VStack(alignment: .leading, spacing: Metrics.spaceL) {
+            SectionRule("모양")
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("칸 안 일정 글자 크기").font(.system(size: 14))
+                VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
+                    Text("테마").textStyle(.item)
+                    Text("시스템을 고르면 Mac의 밝은 모드·어두운 모드를 따라가요.")
+                        .textStyle(.small)
+                        .foregroundStyle(.inkSoft)
+                }
+                Spacer()
+                SegmentedTabs(AppModel.Theme.allCases.map { ($0, $0.label) }, selection: $model.theme)
+                    .accessibilityLabel("테마")
+            }
+
+            SectionRule("달력").padding(.top, Metrics.spaceM)
+            HStack {
+                VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
+                    Text("칸 안 일정 글자 크기").textStyle(.item)
                     Text("작게 고를수록 한 칸에 일정이 더 많이, 제목이 더 길게 보여요.")
-                        .font(.system(size: 11, weight: .medium))
+                        .textStyle(.small)
                         .foregroundStyle(.inkSoft)
                 }
                 Spacer()
                 SegmentedTabs(AppModel.CellTextSize.allCases.map { ($0, $0.label) }, selection: $model.cellTextSize)
             }
-            HStack(spacing: 6) {
+            HStack(spacing: Metrics.spaceS) {
                 Mark(Palette.blue.ink, size: model.cellTextSize.markSize)
-                Text("주간 스탠드업 · 디자인 리뷰 · 필라테스")
+                // The size the day cells use, so the preview reads exactly like a cell.
+                Text(model.showsCellTimes ? "09:30 주간 스탠드업 · 14:00 디자인 리뷰" : "주간 스탠드업 · 디자인 리뷰 · 필라테스")
                     .font(.system(size: model.cellTextSize.points))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
+            .padding(.horizontal, Metrics.spaceL)
+            .padding(.vertical, Metrics.spaceM)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // A strip of the weekend face, so it reads as a sample of the grid rather than a control.
+            .background(.raised)
             .accessibilityLabel("미리 보기")
+            Toggle(isOn: $model.showsCellTimes) {
+                Text("달력 칸에 시작 시각 보기").textStyle(.item)
+            }
+            .toggleStyle(DrawnCheckboxStyle())
 
-            SectionRule("미리알림").padding(.top, 8)
+            SectionRule("미리알림").padding(.top, Metrics.spaceM)
             Toggle(isOn: Binding(get: { calendars.showsCompletedReminders }, set: { calendars.showsCompletedReminders = $0 })) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("완료된 미리알림 보기").font(.system(size: 14))
+                VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
+                    Text("완료된 미리알림 보기").textStyle(.item)
                     Text("끄면 완료한 미리알림은 달력에서 빠져요. 켜면 줄을 그어 보여 줘요.")
-                        .font(.system(size: 11, weight: .medium))
+                        .textStyle(.small)
                         .foregroundStyle(.inkSoft)
                 }
             }
@@ -171,20 +201,20 @@ struct SettingsModal: View {
     }
 
     private var accountsPage: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Metrics.spaceL) {
             SectionRule("연결된 계정")
             if calendars.accounts.isEmpty {
                 Text("아직 연결한 계정이 없어요. Google·iCloud 계정이나 이 Mac의 미리알림을 추가하면 그 일정이 달력에 보여요.")
-                    .font(.system(size: 13))
+                    .textStyle(.body)
                     .foregroundStyle(.inkSoft)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, Metrics.spaceM)
             }
             ForEach(calendars.accounts) { account in
                 accountRow(account)
-                if account.id != calendars.accounts.last?.id { Rectangle().fill(.ink).frame(height: Metrics.line) }
+                if account.id != calendars.accounts.last?.id { Rectangle().fill(.shade).frame(height: Metrics.line) }
             }
             HStack {
-                Text("로그인 정보는 이 Mac의 키체인에만 저장해요.").font(.system(size: 12)).foregroundStyle(.inkSoft)
+                Text("로그인 정보는 이 Mac의 키체인에만 저장해요.").textStyle(.small).foregroundStyle(.inkSoft)
                 Spacer()
                 Menu {
                     Button("Google") { intro = .google }
@@ -198,29 +228,28 @@ struct SettingsModal: View {
                 .buttonStyle(DrawnButtonStyle())
                 .fixedSize()
             }
-            .padding(.top, 4)
+            .padding(.top, Metrics.spaceXs)
         }
     }
 
     private func accountRow(_ account: CalendarController.Account) -> some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: Metrics.spaceL) {
             ProviderIcon(kind: account.provider)
-                .frame(width: 32, height: 32)
-                .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
+                .foregroundStyle(.inkSoft)
+                .frame(width: 20)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(account.email).font(.system(size: 14))
-                HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
+                Text(account.email).textStyle(.item)
+                HStack(spacing: Metrics.spaceM) {
                     if account.status == .needsReauth {
-                        Tag(text: "다시 연결 필요", color: .holiday)
-                        Text(calendars.problems[account.id] ?? "로그인이 만료됐어요").font(.system(size: 11, weight: .medium)).foregroundStyle(.inkSoft)
+                        ErrorTag("다시 연결 필요")
+                        Text(calendars.problems[account.id] ?? "로그인이 만료됐어요").textStyle(.small).foregroundStyle(.inkSoft)
                     } else if let problem = calendars.problems[account.id] {
-                        Tag(text: "동기화 실패", color: .holiday)
-                        Text(problem).font(.system(size: 11, weight: .medium)).foregroundStyle(.inkSoft)
+                        ErrorTag("동기화 실패")
+                        Text(problem).textStyle(.small).foregroundStyle(.inkSoft)
                     } else {
-                        Tag(text: account.provider.label, color: .inkSoft)
-                        Text("\(account.provider == .reminders ? "목록" : "캘린더") \(account.calendarCount)개 · \(SyncStatusView.syncedText(account.lastSyncedAt))")
-                            .font(.system(size: 11, weight: .medium))
+                        Text("\(account.provider.label) · \(account.provider == .reminders ? "목록" : "캘린더") \(account.calendarCount)개 · \(SyncStatusView.syncedText(account.lastSyncedAt))")
+                            .textStyle(.meta)
                             .foregroundStyle(.inkSoft)
                     }
                 }
@@ -232,49 +261,77 @@ struct SettingsModal: View {
             }
             Button("연결 해제") { confirming = account }.buttonStyle(DrawnButtonStyle(.text))
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, Metrics.spaceM)
     }
 
     private var calendarsPage: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: Metrics.spaceXxl) {
             if calendars.accounts.isEmpty {
                 Text("연결한 계정이 없어요. 계정 메뉴에서 계정이나 미리알림을 추가해 주세요.")
-                    .font(.system(size: 13))
+                    .textStyle(.body)
                     .foregroundStyle(.inkSoft)
             }
             ForEach(calendars.sourcesByAccount, id: \.0.id) { account, sources in
-                VStack(alignment: .leading, spacing: 4) {
-                    SectionRule(account.email) {
-                        if account.status == .needsReauth { Tag(text: "다시 연결 필요", color: .holiday) }
-                        else { Text(account.provider.label).font(.system(size: 11, weight: .medium)).foregroundStyle(.inkSoft) }
+                let isFolded = folded.contains(account.id)
+                VStack(alignment: .leading, spacing: Metrics.spaceXs) {
+                    // The account's name folds its calendars away.
+                    Button {
+                        withAnimation(.easeOut(duration: Metrics.motionQuick)) {
+                            if isFolded { folded.remove(account.id) } else { folded.insert(account.id) }
+                        }
+                    } label: {
+                        HStack(spacing: Metrics.spaceS) {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.inkSoft)
+                                .rotationEffect(.degrees(isFolded ? -90 : 0))
+                            SectionRule(account.email) {
+                                if account.status == .needsReauth { ErrorTag("다시 연결 필요") }
+                                else {
+                                    Text(isFolded ? "\(account.provider.label) · \(sources.allSatisfy(\.isReminderList) ? "목록" : "캘린더") \(sources.count)개" : account.provider.label)
+                                        .textStyle(.meta).foregroundStyle(.inkSoft)
+                                }
+                            }
+                        }
+                        .contentShape(Rectangle())
                     }
-                    ForEach(sources) { source in
-                        HStack(spacing: 10) {
+                    .buttonStyle(FocusOnlyStyle())
+                    .help(isFolded ? "펼치기" : "접기")
+                    .accessibilityLabel(account.status == .needsReauth ? "\(account.email), 다시 연결 필요" : account.email)
+                    .accessibilityValue(isFolded ? "접힘" : "펼쳐짐")
+                    if !isFolded { ForEach(sources) { source in
+                        HStack(spacing: Metrics.spaceM) {
                             Toggle(isOn: Binding(get: { source.isVisible }, set: { calendars.setVisible(source.id, $0) })) {
-                                HStack(spacing: 10) {
+                                HStack(spacing: Metrics.spaceM) {
                                     if source.isReminderList { ReminderMark(source.palette.ink) } else { Mark(source.palette.ink) }
                                     Text(source.name)
-                                        .font(.system(size: 14))
+                                        .textStyle(.item)
                                         .foregroundStyle(source.isVisible ? Color.ink : Color.inkSoft)
                                 }
                             }
                             .toggleStyle(DrawnCheckboxStyle())
                             .accessibilityLabel("\(source.name) 보이기")
                             Spacer()
-                            if source.isHoliday { Tag(text: "공휴일", color: .inkSoft) }
-                            if source.isReadOnly { Tag(text: "읽기 전용", color: .inkSoft) }
-                            else { Text(source.palette.name).font(.system(size: 11, weight: .medium)).foregroundStyle(.inkSoft) }
+                            Text(sourceNote(source)).textStyle(.meta).foregroundStyle(.inkSoft)
                         }
-                        .padding(.vertical, 4)
-                    }
+                        .padding(.vertical, Metrics.spaceXs)
+                    } }
                 }
             }
             if calendars.accounts.contains(where: { $0.status == .needsReauth }) {
                 Text("다시 연결하기 전까지는 마지막으로 맞춘 일정을 그대로 보여 줘요.")
-                    .font(.system(size: 12))
+                    .textStyle(.small)
                     .foregroundStyle(.inkSoft)
             }
         }
+    }
+
+    /// `공휴일 · 읽기 전용`, `읽기 전용`, or the palette colour the calendar is drawn in.
+    private func sourceNote(_ source: CalendarController.Source) -> String {
+        var parts: [String] = []
+        if source.isHoliday { parts.append("공휴일") }
+        if source.isReadOnly { parts.append("읽기 전용") }
+        return parts.isEmpty ? source.palette.name : parts.joined(separator: " · ")
     }
 
     // MARK: - Adding an account
@@ -283,7 +340,7 @@ struct SettingsModal: View {
     private var addingKind: CalendarProviderKind { intro ?? calendars.addingKind }
 
     @ViewBuilder private var addFlow: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: Metrics.spaceL) {
             switch calendars.addState {
             case .idle:
                 switch addingKind {
@@ -292,8 +349,8 @@ struct SettingsModal: View {
                 case .reminders: remindersIntro
                 }
             case .signingIn:
-                Text(addingKind.connectTitle).font(.display(20))
-                HStack(spacing: 10) {
+                Text(addingKind.connectTitle).textStyle(.subheading)
+                HStack(spacing: Metrics.spaceM) {
                     ProgressView().controlSize(.small)
                     switch addingKind {
                     case .google: Text("Google 창에서 로그인해 주세요.")
@@ -302,15 +359,15 @@ struct SettingsModal: View {
                     }
                 }
             case .importing(let email):
-                Text(email).font(.display(20))
-                HStack(spacing: 10) {
+                Text(email).textStyle(.item).fontWeight(.semibold)
+                HStack(spacing: Metrics.spaceM) {
                     ProgressView().controlSize(.small)
                     Text(addingKind == .reminders ? "미리알림 목록을 가져오는 중이에요. 창을 닫아도 계속 가져와요."
                                                   : "캘린더와 일정을 가져오는 중이에요. 창을 닫아도 계속 가져와요.")
                 }
                 HStack { Spacer(); Button("닫기") { calendars.resetAddState() }.buttonStyle(DrawnButtonStyle()) }
             case .done(let email, let count):
-                Text(email).font(.display(20))
+                Text(email).textStyle(.item).fontWeight(.semibold)
                 Text(addingKind == .reminders
                      ? "미리알림 목록 \(count)개를 가져왔어요. 마감일이 있는 미리알림이 그날 달력에 보여요."
                      : "캘린더 \(count)개를 가져왔어요. 캘린더 메뉴에서 보일 캘린더를 고를 수 있어요.")
@@ -320,8 +377,8 @@ struct SettingsModal: View {
                     Button("완료") { calendars.resetAddState() }.buttonStyle(DrawnButtonStyle(.primary)).keyboardShortcut(.defaultAction)
                 }
             case .failed(let message):
-                Text("연결하지 못했어요").font(.display(20))
-                Text(message)
+                Text(addingKind.connectTitle).textStyle(.subheading)
+                NoticeBar(message, title: "연결하지 못했어요", tone: .warning)
                 HStack {
                     Spacer()
                     if addingKind == .reminders {
@@ -335,12 +392,12 @@ struct SettingsModal: View {
                 }
             }
         }
-        .font(.system(size: 13))
+        .textStyle(.body)
         .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder private var googleIntro: some View {
-        Text("Google 계정 연결").font(.display(20))
+        Text("Google 계정 연결").textStyle(.subheading)
         Text("Google 캘린더 일정을 이 Mac으로 가져와요. 로그인은 Google 창에서 하고, Simplify는 암호를 보지 않아요.")
         Text("처음 로그인할 때 \"확인되지 않은 앱\" 경고가 나오면 고급 › Simplify(으)로 이동을 눌러요. 개인용으로 만든 앱이라 Google 검수를 받지 않았어요.")
             .foregroundStyle(.inkSoft)
@@ -357,11 +414,11 @@ struct SettingsModal: View {
     }
 
     @ViewBuilder private var iCloudForm: some View {
-        Text(reconnectingAppleID == nil ? "iCloud 계정 연결" : "iCloud 다시 연결").font(.display(20))
+        Text(reconnectingAppleID == nil ? "iCloud 계정 연결" : "iCloud 다시 연결").textStyle(.subheading)
         Text("iCloud 캘린더 일정을 이 Mac으로 가져와요. Apple ID 암호 대신, 이 앱에만 쓰는 앱 전용 암호로 연결해요.")
-        VStack(alignment: .leading, spacing: 4) {
-            Text("앱 전용 암호 만들기").font(.system(size: 13, weight: .semibold))
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: Metrics.spaceXs) {
+            Text("앱 전용 암호 만들기").textStyle(.body).fontWeight(.semibold)
+            HStack(spacing: Metrics.spaceM) {
                 Text("1. account.apple.com에 로그인해요.")
                 Button("열기") { openURL(URL(string: "https://account.apple.com/account/manage")!) }
                     .buttonStyle(DrawnButtonStyle(.text))
@@ -369,26 +426,25 @@ struct SettingsModal: View {
             Text("2. 로그인 및 보안 › 앱 전용 암호에서 새 암호를 만들어요. 이름은 \"Simplify\"면 돼요.")
             Text("3. 나온 암호를 아래에 붙여 넣어요.")
             Text("이중 인증을 켠 계정에서만 앱 전용 암호를 만들 수 있어요.")
-                .font(.system(size: 12))
+                .textStyle(.small)
                 .foregroundStyle(.inkSoft)
-                .padding(.top, 2)
+                .padding(.top, Metrics.spaceXxs)
         }
-        FormField(label: "Apple ID", isEnabled: reconnectingAppleID == nil) {
+        FormField(label: "Apple ID", focused: focusedField == .appleID, isEnabled: reconnectingAppleID == nil) {
             TextField("name@icloud.com", text: $appleID)
                 .textContentType(.username)
                 .focused($focusedField, equals: .appleID)
         }
-        FormField(label: "앱 전용 암호") {
+        FormField(label: "앱 전용 암호", focused: focusedField == .password) {
             SecureField("abcd-efgh-ijkl-mnop", text: $appPassword)
                 .textContentType(.password)
                 .focused($focusedField, equals: .password)
                 .onSubmit(connectICloud)
         }
         // Lands in the first empty field, so the password can be pasted and sent straight away.
-        // A tick later than appearing, after the modal has taken focus itself.
         .task { focusedField = appleID.isEmpty ? .appleID : .password }
         HStack {
-            Text("암호는 이 Mac의 키체인에만 저장해요.").font(.system(size: 12)).foregroundStyle(.inkSoft)
+            Text("암호는 이 Mac의 키체인에만 저장해요.").textStyle(.small).foregroundStyle(.inkSoft)
             Spacer()
             Button("취소") { closeIntro() }.buttonStyle(DrawnButtonStyle())
             Button("연결") { connectICloud() }
@@ -399,7 +455,7 @@ struct SettingsModal: View {
     }
 
     @ViewBuilder private var remindersIntro: some View {
-        Text("미리알림 가져오기").font(.display(20))
+        Text("미리알림 가져오기").textStyle(.subheading)
         Text("이 Mac의 미리알림 앱에 있는 목록을 가져와요. 마감일이 있는 미리알림이 그날 달력에 보이고, 미리알림 앱에서 바꾸면 바로 따라 바뀌어요.")
         Text("처음 한 번 \"Simplify가 미리알림에 접근하려고 합니다\" 창이 떠요. 마감일이 없는 미리알림은 달력에 보이지 않아요.")
             .foregroundStyle(.inkSoft)
@@ -467,15 +523,15 @@ struct SettingsModal: View {
 
     private func confirmDisconnect(_ account: CalendarController.Account) -> some View {
         ZStack {
-            Color.black.opacity(0.2).onTapGesture { confirming = nil }
-            VStack(alignment: .leading, spacing: 14) {
-                Text("연결을 해제할까요?").font(.display(20))
+            Color.black.opacity(Metrics.opacityScrim).ignoresSafeArea().onTapGesture { confirming = nil }.accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: Metrics.spaceL) {
+                Text("연결을 해제할까요?").textStyle(.subheading)
                 Text(disconnectMessage(account))
-                    .font(.system(size: 13))
+                    .textStyle(.body)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Spacer()
-                    Button("취소") { confirming = nil }.buttonStyle(DrawnButtonStyle())
+                    Button("취소") { confirming = nil }.buttonStyle(DrawnButtonStyle()).keyboardShortcut(.cancelAction)
                     Button("연결 해제") {
                         let id = account.id
                         confirming = nil
@@ -484,9 +540,9 @@ struct SettingsModal: View {
                     .buttonStyle(DrawnButtonStyle(.primary))
                 }
             }
-            .padding(22)
+            .padding(Metrics.spaceXxxl)
             .frame(width: 420)
-            .mouldedFrame(shadow: modalShadow)
+            .floatingFrame(shadow: modalShadow)
             .accessibilityAddTraits(.isModal)
         }
     }
@@ -527,52 +583,50 @@ private struct ProviderIcon: View {
 
     var body: some View {
         switch kind {
-        case .google: Text("G").font(.system(size: 14, weight: .semibold))
-        case .icloud: Image(systemName: "icloud").font(.system(size: 14, weight: .medium))
-        case .reminders: Image(systemName: "checklist").font(.system(size: 14, weight: .medium))
+        case .google: Text("G").textStyle(.item).fontWeight(.semibold)
+        case .icloud: Image(systemName: "icloud").font(.system(size: 13, weight: .regular))
+        case .reminders: Image(systemName: "checklist").font(.system(size: 13, weight: .regular))
         }
     }
 }
 
-/// A labelled text field drawn as an outlined box; a locked one reads as plain shaded text.
+/// A labelled text field in the one input look; a locked one reads as disabled.
 private struct FormField<Field: View>: View {
     let label: String
+    var focused: Bool
     var isEnabled = true
     @ViewBuilder let field: Field
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(.inkSoft)
+        VStack(alignment: .leading, spacing: Metrics.spaceS) {
+            Text(label).textStyle(.meta).foregroundStyle(.inkSoft)
+            // Disabled outside the drawn field, so the field reads it and draws itself locked.
             field
-                .textFieldStyle(.plain)
-                .font(.system(size: 14))
-                .foregroundStyle(isEnabled ? Color.ink : Color.inkSoft)
+                .drawnField(.box, focused: focused)
                 .disabled(!isEnabled)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(isEnabled ? Color.paper : Color.shadeSoft)
-                .overlay(Rectangle().strokeBorder(isEnabled ? Color.ink : Color.inkFaint, lineWidth: Metrics.line))
         }
     }
 }
 
-/// A small outlined label: `Google`, `읽기 전용`, `다시 연결 필요`.
-struct Tag: View {
+/// Something wrong with an account: a warning sign and an ink tag, never red.
+private struct ErrorTag: View {
     let text: String
-    let color: Color
+
+    init(_ text: String) { self.text = text }
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .overlay(Rectangle().strokeBorder(color, lineWidth: Metrics.line))
+        HStack(spacing: Metrics.spaceXs) {
+            Image(systemName: "exclamationmark.triangle")
+                .textStyle(.meta)
+                .accessibilityHidden(true)
+            Tag(text, color: Tokens.error, fill: .errorTint)
+        }
+        .foregroundStyle(Tokens.error)
     }
 }
 
-/// The sync state in the toolbar, beside 새 일정. Quiet when fine; red and clickable when an
-/// account needs signing in again.
+/// The sync state in the toolbar, beside 새 일정. Quiet when fine; ink with a warning sign and
+/// clickable when an account needs signing in again.
 struct SyncStatusView: View {
     let calendars: CalendarController
     let openSettings: () -> Void
@@ -583,7 +637,7 @@ struct SyncStatusView: View {
             Button(action: openSettings) { Label("캘린더 연결", systemImage: "plus") }
                 .buttonStyle(DrawnButtonStyle())
         case .syncing:
-            HStack(spacing: 6) {
+            HStack(spacing: Metrics.spaceS) {
                 ProgressView().controlSize(.mini)
                 Text("맞추는 중…")
             }
@@ -592,23 +646,26 @@ struct SyncStatusView: View {
             Button(action: openSettings) {
                 Label("계정 \(calendars.accounts.count)개 · \(Self.syncedText(last))", systemImage: "arrow.triangle.2.circlepath")
             }
-            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .buttonStyle(FocusOnlyStyle())
             .modifier(StatusText())
         case .needsReauth(let email):
             Button(action: openSettings) {
                 Label("\(email) 다시 연결 필요", systemImage: "exclamationmark.triangle")
                     .underline()
             }
-            .buttonStyle(.plain)
-            .modifier(StatusText(color: .holiday))
+            .contentShape(Rectangle())
+            .buttonStyle(FocusOnlyStyle())
+            .modifier(StatusText(color: Tokens.error))
         case .offline(let last):
             Text("오프라인 · \(Self.syncedText(last))").modifier(StatusText())
         case .failed(let email):
             Button(action: openSettings) {
                 Label("\(email) 동기화 실패", systemImage: "exclamationmark.triangle").underline()
             }
-            .buttonStyle(.plain)
-            .modifier(StatusText(color: .holiday))
+            .contentShape(Rectangle())
+            .buttonStyle(FocusOnlyStyle())
+            .modifier(StatusText(color: Tokens.error))
         }
     }
 
@@ -622,7 +679,7 @@ struct SyncStatusView: View {
     private struct StatusText: ViewModifier {
         var color: Color = .inkSoft
         func body(content: Content) -> some View {
-            content.font(.system(size: 11, weight: .medium)).foregroundStyle(color)
+            content.textStyle(.meta).foregroundStyle(color)
         }
     }
 }
