@@ -6,17 +6,21 @@ import SimplifyKit
 struct SimplifyApp: App {
     @State private var model: AppModel
     @State private var calendars: CalendarController
+    @State private var memos: MemoBook
     private let container: ModelContainer
 
     init() {
         SimplifyFonts.register()
+        var isSaved = true
         do {
             container = try SimplifyStore.makeContainer()
         } catch {
-            // Keep the app usable if the shared store cannot open; nothing is saved this session.
-            assertionFailure("Diary store failed to open: \(error)")
+            // Keep the app usable if the shared store cannot open; nothing is saved this session,
+            // and the panel says so.
             container = try! SimplifyStore.makeContainer(inMemory: true)
+            isSaved = false
         }
+        _memos = State(initialValue: MemoBook(container: container, isSaved: isSaved))
         let cache = SimplifyStore.openCache()
         let model = AppModel()
         _model = State(initialValue: model)
@@ -26,7 +30,7 @@ struct SimplifyApp: App {
     var body: some Scene {
         // One window: the app has a single month view and a single sync loop.
         Window("Simplify", id: "main") {
-            MainView(model: model, calendars: calendars)
+            MainView(model: model, calendars: calendars, memos: memos)
                 // Seven 100 pt day cells beside the 360 pt panel, plus margins.
                 .frame(minWidth: 1180, minHeight: 700)
         }
@@ -35,6 +39,7 @@ struct SimplifyApp: App {
         .defaultLaunchBehavior(.presented)
         .modelContainer(container)
         .commands {
+            MemoCommands()
             CommandGroup(replacing: .appSettings) {
                 Button("설정…") { model.isSettingsOpen = true }
                     .keyboardShortcut(",", modifiers: .command)
@@ -50,19 +55,29 @@ struct SimplifyApp: App {
                     .keyboardShortcut("\\", modifiers: .command)
                     .disabled(model.isModalOpen)
             }
-            CommandMenu("이동") {
-                Group {
-                    Button("오늘") { model.goToToday() }
-                        .keyboardShortcut("t", modifiers: .command)
-                    let unit = model.calendarView == .week ? "주" : "달"
-                    Button("이전 \(unit)") { model.turnPage(by: -1) }
-                        .keyboardShortcut(.leftArrow, modifiers: .command)
-                    Button("다음 \(unit)") { model.turnPage(by: 1) }
-                        .keyboardShortcut(.rightArrow, modifiers: .command)
-                }
-                // The calendar under the settings modal or an event popover stays put.
-                .disabled(model.isModalOpen)
+            MoveCommands(model: model)
+        }
+    }
+}
+
+/// The 이동 menu. Off under the settings modal or an event popover, and while a memo is being
+/// written, so ⌘← and ⌘→ move the caret instead of the page.
+private struct MoveCommands: Commands {
+    let model: AppModel
+    @FocusedValue(\.memoDraft) private var focusedMemo
+
+    var body: some Commands {
+        CommandMenu("이동") {
+            Group {
+                Button("오늘") { model.goToToday() }
+                    .keyboardShortcut("t", modifiers: .command)
+                let unit = model.calendarView == .week ? "주" : "달"
+                Button("이전 \(unit)") { model.turnPage(by: -1) }
+                    .keyboardShortcut(.leftArrow, modifiers: .command)
+                Button("다음 \(unit)") { model.turnPage(by: 1) }
+                    .keyboardShortcut(.rightArrow, modifiers: .command)
             }
+            .disabled(model.isModalOpen || focusedMemo != nil)
         }
     }
 }

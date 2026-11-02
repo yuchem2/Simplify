@@ -6,6 +6,7 @@ import SimplifyKit
 struct WeekGrid: View {
     let model: AppModel
     let calendars: CalendarController
+    let memos: MemoBook
     @FocusState private var focused: Bool
 
     static let hourHeight: CGFloat = 44
@@ -27,7 +28,8 @@ struct WeekGrid: View {
                 Color.clear.frame(width: Self.gutter, height: 1)
                 ForEach(days, id: \.self) { day in
                     DayHead(day: day, model: model, isHoliday: calendars.holidayDays.contains(day),
-                            count: calendars.slots[day]?.count ?? 0) {
+                            count: calendars.slots[day]?.count ?? 0,
+                            hasMemo: memos.has(Period(containing: day, scope: .day, calendar: model.calendar))) {
                         if model.isSelected(day), model.isPanelHidden { model.isPanelHidden = false }
                         model.select(day)
                         focused = true
@@ -89,6 +91,7 @@ private struct DayHead: View {
     let model: AppModel
     let isHoliday: Bool
     let count: Int
+    let hasMemo: Bool
     let onSelect: () -> Void
 
     var body: some View {
@@ -107,6 +110,7 @@ private struct DayHead: View {
                     .font(.system(size: 11, weight: .semibold))
                     .tracking(0.7)
                     .foregroundStyle(red ? Color.holiday : Color.inkSoft)
+                if hasMemo { MemoMark() }
             }
             .padding(.leading, 10)
             .padding(.top, 4)
@@ -131,6 +135,7 @@ private struct DayHead: View {
         var text = Period(containing: day, scope: .day, calendar: model.calendar).title
         if isToday { text += ", 오늘" }
         if count > 0 { text += ", 일정 \(count)개" }
+        if hasMemo { text += ", 메모 있음" }
         return text
     }
 }

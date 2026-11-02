@@ -27,12 +27,15 @@ public struct SegmentedTabs<Value: Hashable>: View {
     let options: [(value: Value, label: String)]
     @Binding var selection: Value
     var disabled: Set<Value> = []
+    /// Segments that get a `MemoMark` after their label.
+    var marked: Set<Value> = []
     var fills = false
 
-    public init(_ options: [(value: Value, label: String)], selection: Binding<Value>, disabled: Set<Value> = [], fillsWidth: Bool = false) {
+    public init(_ options: [(value: Value, label: String)], selection: Binding<Value>, disabled: Set<Value> = [], marked: Set<Value> = [], fillsWidth: Bool = false) {
         self.options = options
         _selection = selection
         self.disabled = disabled
+        self.marked = marked
         fills = fillsWidth
     }
 
@@ -42,18 +45,22 @@ public struct SegmentedTabs<Value: Hashable>: View {
                 if index > 0 { Rectangle().fill(.ink).frame(width: Metrics.line) }
                 let isOn = option.value == selection
                 Button { selection = option.value } label: {
-                    Text(option.label)
-                        .font(.system(size: 13, weight: isOn ? .semibold : .regular))
-                        .foregroundStyle(isOn ? Color.onInk : disabled.contains(option.value) ? Color.inkFaint : Color.ink)
-                        .padding(.horizontal, 12)
-                        .frame(maxWidth: fills ? .infinity : nil)
-                        .frame(height: 28)
-                        .background(isOn ? Color.ink : Color.paper)
-                        .contentShape(Rectangle())
+                    HStack(spacing: 5) {
+                        Text(option.label)
+                        if marked.contains(option.value) { MemoMark(color: isOn ? .onInk : .inkSoft) }
+                    }
+                    .font(.system(size: 13, weight: isOn ? .semibold : .regular))
+                    .foregroundStyle(isOn ? Color.onInk : disabled.contains(option.value) ? Color.inkFaint : Color.ink)
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: fills ? .infinity : nil)
+                    .frame(height: 28)
+                    .background(isOn ? Color.ink : Color.paper)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(disabled.contains(option.value))
                 .accessibilityAddTraits(isOn ? .isSelected : [])
+                .accessibilityValue(marked.contains(option.value) ? Text("메모 있음") : Text(verbatim: ""))
             }
         }
         .fixedSize(horizontal: !fills, vertical: true)
@@ -179,6 +186,22 @@ public struct ReminderMark: View {
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
+    }
+}
+
+/// A small pencil: this day, week or month has a memo.
+public struct MemoMark: View {
+    var color: Color
+
+    public init(color: Color = .inkSoft) {
+        self.color = color
+    }
+
+    public var body: some View {
+        Image(systemName: "pencil")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(color)
+            .accessibilityHidden(true)
     }
 }
 

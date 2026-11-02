@@ -2,16 +2,20 @@ import SwiftUI
 import SimplifyKit
 
 /// The moulded panel beside the month: the chosen day, its week, or its month.
-/// Events come from the calendar cache; memos (stage 5) and ToDos (stage 6) are still empty.
+/// Events come from the calendar cache, memos from the diary store; ToDos (stage 6) are still empty.
 struct DayPanel: View {
     @Bindable var model: AppModel
     let calendars: CalendarController
+    let memos: MemoBook
 
     var body: some View {
         let period = model.panelPeriod
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
-                SegmentedTabs([(PeriodScope.day, "하루"), (.week, "한 주"), (.month, "한 달")], selection: $model.panelScope, fillsWidth: true)
+                if !memos.isSaved { UnsavedMemosNotice() }
+                SegmentedTabs([(PeriodScope.day, "하루"), (.week, "한 주"), (.month, "한 달")], selection: $model.panelScope,
+                              marked: Set(PeriodScope.allCases.filter { memos.has(Period(containing: model.selectedDay, scope: $0, calendar: model.calendar)) }),
+                              fillsWidth: true)
                 HStack(alignment: .firstTextBaseline) {
                     Text(period.title)
                         .font(.display(22))
@@ -30,7 +34,7 @@ struct DayPanel: View {
                 }
             }
             .padding(.horizontal, 22)
-            .padding(.top, 20)
+            .padding(.top, memos.isSaved ? 20 : 16)
             .padding(.bottom, 10)
 
             ScrollArea {
@@ -49,13 +53,7 @@ struct DayPanel: View {
                                     DayEvents(slots: calendars.slots[period.start] ?? [], day: period.start, model: model, calendars: calendars, calendar: model.calendar, empty: section.empty)
                                 }
                             } else if section.kind == .memo {
-                                Text(section.empty)
-                                    .font(.system(size: 15))
-                                    .foregroundStyle(.inkFaint)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 10)
-                                    .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
-                                    .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
+                                MemoEditor(draft: memos.draft, period: period, title: section.title, placeholder: section.empty)
                             } else {
                                 Text(section.empty)
                                     .font(.system(size: 14))
@@ -93,6 +91,26 @@ struct DayPanel: View {
             [Section(title: "이번 달 할 일", action: "가져오기", empty: "할 일이 없어요.", kind: .todos),
              Section(title: "월간 메모", empty: "이번 달 메모를 적어 보세요.", kind: .memo)]
         }
+    }
+}
+
+/// Shown over the tabs when the diary store would not open and memos only live in memory.
+private struct UnsavedMemosNotice: View {
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 12))
+                .accessibilityHidden(true)
+            Text("\(Text("메모를 저장할 수 없어요.").fontWeight(.semibold)) 이번 실행에서 쓴 메모는 남지 않아요.")
+                .font(.system(size: 12))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.shadeSoft)
+        .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
+        .accessibilityElement(children: .combine)
     }
 }
 

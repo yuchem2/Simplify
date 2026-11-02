@@ -5,6 +5,7 @@ import SimplifyKit
 struct MonthSheet: View {
     let model: AppModel
     let calendars: CalendarController
+    let memos: MemoBook
     /// The sheet holds keyboard focus so the arrow keys move the chosen day.
     @FocusState private var focused: Bool
 
@@ -37,7 +38,8 @@ struct MonthSheet: View {
                             ForEach(week, id: \.self) { day in
                                 DayCell(day: day, model: model, calendars: calendars, inMonth: grid.isInMonth(day),
                                         slots: calendars.slots[day] ?? [], lanes: lanes, sources: calendars.sources,
-                                        isHoliday: calendars.holidayDays.contains(day), height: height, textSize: model.cellTextSize) {
+                                        isHoliday: calendars.holidayDays.contains(day), hasMemo: memos.has(Period(containing: day, scope: .day, calendar: model.calendar)),
+                                        height: height, textSize: model.cellTextSize) {
                                     // After the click's other handlers: an event click or a double-click opens the
                                     // event popover in the same click, and then the panel and focus stay as they are.
                                     Task { @MainActor in
@@ -96,6 +98,7 @@ private struct DayCell: View {
     let lanes: BandLanes?
     let sources: [String: CalendarController.Source]
     let isHoliday: Bool
+    let hasMemo: Bool
     let height: CGFloat
     let textSize: AppModel.CellTextSize
     let onSelect: () -> Void
@@ -107,15 +110,18 @@ private struct DayCell: View {
         ZStack(alignment: .topLeading) {
             VStack(alignment: .leading, spacing: 2) {
                 // Numbers start on the same line as the weekday labels; today's disc grows
-                // around its number without moving it.
-                Text("\(number)")
-                    .font(.display(16))
-                    .foregroundStyle(numberColor(isToday: isToday))
-                    .padding(.horizontal, isToday ? 4 : 0)
-                    .frame(minWidth: isToday ? 24 : nil, minHeight: 24)
-                    .background { if isToday { Capsule().fill(.ink) } }
-                    // The disc's left edge sits 4 pt before the date line, well inside the selection.
-                    .padding(.leading, isToday ? -4 : 0)
+                // around its number without moving it. A pencil after it: the day has a memo.
+                HStack(spacing: 4) {
+                    Text("\(number)")
+                        .font(.display(16))
+                        .foregroundStyle(numberColor(isToday: isToday))
+                        .padding(.horizontal, isToday ? 4 : 0)
+                        .frame(minWidth: isToday ? 24 : nil, minHeight: 24)
+                        .background { if isToday { Capsule().fill(.ink) } }
+                        // The disc's left edge sits 4 pt before the date line, well inside the selection.
+                        .padding(.leading, isToday ? -4 : 0)
+                    if hasMemo { MemoMark() }
+                }
                 let (shown, hidden) = visibleRows
                 ForEach(Array(shown.enumerated()), id: \.offset) { _, slot in
                     if let slot {
@@ -181,6 +187,7 @@ private struct DayCell: View {
         var text = Period(containing: day, scope: .day, calendar: model.calendar).title
         if isToday { text += ", 오늘" }
         if !slots.isEmpty { text += ", 일정 \(slots.count)개" }
+        if hasMemo { text += ", 메모 있음" }
         return text
     }
 }

@@ -8,6 +8,7 @@ import SimplifyKit
 struct MainView: View {
     let model: AppModel
     let calendars: CalendarController
+    let memos: MemoBook
 
     var body: some View {
         ZStack {
@@ -15,11 +16,11 @@ struct MainView: View {
                 MainToolbar(model: model, calendars: calendars)
                 HStack(alignment: .top, spacing: 24) {
                     switch model.calendarView {
-                    case .month: MonthSheet(model: model, calendars: calendars)
-                    case .week: WeekGrid(model: model, calendars: calendars)
+                    case .month: MonthSheet(model: model, calendars: calendars, memos: memos)
+                    case .week: WeekGrid(model: model, calendars: calendars, memos: memos)
                     }
                     if !model.isPanelHidden {
-                        DayPanel(model: model, calendars: calendars)
+                        DayPanel(model: model, calendars: calendars, memos: memos)
                             .frame(width: 360)
                             .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
@@ -45,6 +46,9 @@ struct MainView: View {
             calendars.show(days: model.grid.weeks.flatMap { $0 }, calendar: model.calendar)
         }
         .task { calendars.startAutoSync() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            memos.draft.flush()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             calendars.appBecameActive()
         }
@@ -56,7 +60,7 @@ struct MainView: View {
             model.timeZoneDidChange()
         }
         #if DEBUG
-        .task { Snapshot.runIfRequested(model: model, calendars: calendars) }
+        .task { Snapshot.runIfRequested(model: model, calendars: calendars, memos: memos) }
         .task { WriteCheck.runIfRequested(model: model, calendars: calendars) }
         #endif
     }
