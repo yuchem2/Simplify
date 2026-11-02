@@ -155,9 +155,10 @@ private struct SegmentStyle: ButtonStyle {
 }
 
 /// Buttons drawn as outlined boxes. `.primary` is filled with ink (one per screen), `.toggled` is a
-/// plain button shown switched on, `.text` is an underlined word, `.danger` deletes something.
+/// plain button shown switched on, `.text` is an underlined word. `.danger` and `.dangerText` (a red
+/// underlined word) do what cannot be undone: delete, drop edits, disconnect.
 public struct DrawnButtonStyle: ButtonStyle {
-    public enum Kind: Sendable { case plain, primary, toggled, text, danger, icon }
+    public enum Kind: Sendable { case plain, primary, toggled, text, dangerText, danger, icon }
     var kind: Kind
 
     public init(_ kind: Kind = .plain) { self.kind = kind }
@@ -177,11 +178,11 @@ private struct DrawnButtonBody: View {
     var body: some View {
         Group {
             switch kind {
-            case .text:
+            case .text, .dangerText:
                 configuration.label
                     .textStyle(.small)
                     .underline()
-                    .foregroundStyle(isEnabled ? Color.ink : Color.inkFaint)
+                    .foregroundStyle(!isEnabled ? Color.inkFaint : kind == .dangerText ? Color.danger : Color.ink)
                     .padding(.horizontal, Metrics.spaceXxs)
                     .background(hovering && isEnabled ? Color.hover : Color.clear)
                     .opacity(configuration.isPressed ? 0.6 : 1)

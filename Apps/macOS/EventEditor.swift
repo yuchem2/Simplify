@@ -513,9 +513,9 @@ struct EventQuestionView: View {
     @ViewBuilder private var confirmButton: some View {
         switch question {
         case .discard:
-            // Red stays with delete; dropping unsaved edits is the plain default action.
+            // Dropped edits cannot come back, so this is red like delete.
             Button("버리기") { model.popover = nil }
-                .buttonStyle(DrawnButtonStyle())
+                .buttonStyle(DrawnButtonStyle(.danger))
                 .keyboardShortcut(.defaultAction)
         case .delete:
             Button(isDeleting ? "지우는 중…" : "삭제") { delete() }

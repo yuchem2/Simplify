@@ -34,9 +34,9 @@ public enum Tokens {
     public static let focusRing = Tokens.ink
     /// Public-holiday and Sunday date numbers and holiday names. Holidays only.
     public static let holiday = Tokens.redInk
-    /// Destructive actions: the delete button's text and outline. Never a frame or background.
+    /// Actions that cannot be undone (delete, discard edits or unsent changes, disconnect): their text and outline. Never a frame or background.
     public static let danger = Tokens.redInk
-    /// Error text: ink with a warning sign, so red stays with holidays and delete.
+    /// Error text: ink with a warning sign, so red stays with holidays and actions that cannot be undone.
     public static let error = Tokens.ink
     /// Ground of an error or warning notice.
     public static let errorTint = Color(light: 0xfaf0c4, dark: 0x4a4331)

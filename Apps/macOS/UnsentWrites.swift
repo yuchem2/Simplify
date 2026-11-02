@@ -67,6 +67,7 @@ private struct UnsentWritesList: View {
                         Button("다시 시도") { calendars.retryWrite(write.id) }
                     }
                     Button("버리기") { calendars.discardWrite(write.id) }
+                        .buttonStyle(DrawnButtonStyle(.dangerText))
                 }
                 .buttonStyle(DrawnButtonStyle(.text))
                 .padding(.top, Metrics.spaceXxs)

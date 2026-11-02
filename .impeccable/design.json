@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-02T06:55:36+00:00",
+  "generatedAt": "2026-11-02T07:03:22+00:00",
   "title": "Design System: Simplify",
   "extensions": {
     "colorMeta": {
@@ -518,7 +518,7 @@
       },
       "red-ink": {
         "role": "tertiary",
-        "displayName": "빨강 잉크 / 공휴일·삭제 (holiday, danger)",
+        "displayName": "빨강 잉크 / 공휴일·되돌릴 수 없는 동작 (holiday, danger)",
         "canonical": "#b3332a",
         "dark": "#ff8a7a",
         "usage": "User palette · 빨강: calendar mark, text colour, ToDo label. On paper and on any *-tint.",
@@ -987,7 +987,7 @@
       "name": "Danger Button",
       "kind": "button",
       "refersTo": "button-danger",
-      "description": "삭제에만 쓰는 빨강 글자·테두리 버튼.",
+      "description": "되돌릴 수 없는 동작(삭제·버리기·연결 해제)에만 쓰는 빨강 글자·테두리 버튼.",
       "html": "<button class=\"ds-btn ds-btn-danger\">삭제</button>",
       "css": ":host{--wall:#f4f4f2;--paper:#fff;--raised:#f7f7f5;--ink:#1a1a1a;--ink-soft:#575755;--ink-faint:#80807d;--shade:#d8d8d5;--shade-soft:#ececea;--on-ink:#fff;--hover:#f0f0ee;--row-active:#e4e4e1;--error-tint:#faf0c4;--danger:#b3332a;--shadow-float:#d8d8d5}.ds-btn{font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',system-ui,sans-serif;font-size:13px;line-height:18px;min-height:28px;min-width:28px;padding:0 12px;border:1px solid var(--ink);border-radius:0;background:var(--paper);color:var(--ink);cursor:default;transition:background .12s ease-out}.ds-btn:hover{background:var(--hover)}.ds-btn:active{background:var(--row-active)}.ds-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--paper),0 0 0 4px var(--ink)}.ds-btn:disabled{color:var(--ink-faint);border-color:var(--ink-faint);background:var(--paper)}.ds-btn-danger{color:var(--danger);border-color:var(--danger)}"
     },
@@ -1058,7 +1058,7 @@
   ],
   "narrative": {
     "northStar": "잉크 장부",
-    "overview": "Simplify는 한 장의 종이에 잉크로 줄을 그은 장부처럼 보이는 캘린더·다이어리예요. 창 바탕(`wall`)은 책상이고, 그 위에 종이(`paper`) 한 장이 놓여 있어요. 월·주 격자와 하루 패널은 따로 떨어진 두 장이 아니라 같은 종이이고, 둘 사이에 굵은 잉크 등줄(spine) 하나만 그어요. 종이 자체는 테두리도 그림자도 없이 `shade` 실선 하나로 책상과 만나요. 그림자는 종이 위에 떠 있는 것(팝오버, 메뉴, 설정 상자)만 가져요.\n\n틀은 흑백이고 색은 내용의 것이에요. 툴바, 버튼, 세그먼트, 체크 상자, 고른 상태는 모두 `ink`와 `paper`, 회색 단계로만 그려요. 색은 사용자 캘린더와 라벨의 9색 팔레트에만 들어가고, 빨강은 공휴일과 삭제 두 곳에만 남아요. 날짜와 시각은 SF Pro 등폭 숫자로 장부의 숫자 칸처럼 읽히고, 고운바탕 명조는 제목에만 나와요. 밀도는 데스크톱 캘린더답게 촘촘하지만(칸 안 글자 11px), 주마다 그은 잉크 가로줄과 한 단계 다른 주말 면이 질서를 잡아 줘요.\n\n모든 컨트롤은 포인터(`hover` 면)와 키보드(종이 2px 틈 + 잉크 2px 링)에 답해요. 다크 D1 \"흑연\"은 검정이 아니라 따뜻한 회갈색 종이에 밝은 잉크예요. 위젯 C \"불 끈 갤러리\"는 선 없이 면의 밝기와 둥근 마스크로만 액자를 만들어요(토큰과 컴포넌트만 준비돼 있고 위젯 화면은 7단계예요).",
+    "overview": "Simplify는 한 장의 종이에 잉크로 줄을 그은 장부처럼 보이는 캘린더·다이어리예요. 창 바탕(`wall`)은 책상이고, 그 위에 종이(`paper`) 한 장이 놓여 있어요. 월·주 격자와 하루 패널은 따로 떨어진 두 장이 아니라 같은 종이이고, 둘 사이에 굵은 잉크 등줄(spine) 하나만 그어요. 종이 자체는 테두리도 그림자도 없이 `shade` 실선 하나로 책상과 만나요. 그림자는 종이 위에 떠 있는 것(팝오버, 메뉴, 설정 상자)만 가져요.\n\n틀은 흑백이고 색은 내용의 것이에요. 툴바, 버튼, 세그먼트, 체크 상자, 고른 상태는 모두 `ink`와 `paper`, 회색 단계로만 그려요. 색은 사용자 캘린더와 라벨의 9색 팔레트에만 들어가고, 빨강은 공휴일과 되돌릴 수 없는 동작(삭제·버리기·연결 해제)에만 남아요. 날짜와 시각은 SF Pro 등폭 숫자로 장부의 숫자 칸처럼 읽히고, 고운바탕 명조는 제목에만 나와요. 밀도는 데스크톱 캘린더답게 촘촘하지만(칸 안 글자 11px), 주마다 그은 잉크 가로줄과 한 단계 다른 주말 면이 질서를 잡아 줘요.\n\n모든 컨트롤은 포인터(`hover` 면)와 키보드(종이 2px 틈 + 잉크 2px 링)에 답해요. 다크 D1 \"흑연\"은 검정이 아니라 따뜻한 회갈색 종이에 밝은 잉크예요. 위젯 C \"불 끈 갤러리\"는 선 없이 면의 밝기와 둥근 마스크로만 액자를 만들어요(토큰과 컴포넌트만 준비돼 있고 위젯 화면은 7단계예요).",
     "keyCharacteristics": [
       "한 장의 종이: 격자와 패널이 한 면이고, 사이에 1.75px 잉크 등줄 하나",
       "주 가로줄: 월간 격자는 주마다 1px 잉크 줄, 요일 줄 아래는 1.75px",
@@ -1077,7 +1077,7 @@
       },
       {
         "name": "The Two Reds Rule",
-        "body": "빨강은 공휴일(`holiday`)과 삭제(`danger`)에만 써요. 오류·경고는 잉크 글자 + 경고 표시 + `error-tint`, 현재 시각 선은 잉크예요. 오늘 열이나 오늘 칸에 빨강 면을 깔지 않아요.",
+        "body": "빨강은 공휴일(`holiday`)과 되돌릴 수 없는 동작(삭제·버리기·연결 해제)(`danger`)에만 써요. 오류·경고는 잉크 글자 + 경고 표시 + `error-tint`, 현재 시각 선은 잉크예요. 오늘 열이나 오늘 칸에 빨강 면을 깔지 않아요.",
         "section": "colors"
       },
       {
@@ -1131,7 +1131,7 @@
     "donts": [
       "**Don't** 격자나 패널 뷰에 자기 배경·테두리·그림자를 그리지 마세요. 메인 종이는 한 장이에요.",
       "**Don't** 이중선(몰딩), 장식선, 블러 있는 그림자, 그라데이션을 쓰지 마세요.",
-      "**Don't** 빨강을 공휴일과 삭제 말고 쓰지 마세요. 오류, 현재 시각 선, 오늘 표시는 잉크예요.",
+      "**Don't** 빨강을 공휴일과 되돌릴 수 없는 동작 말고 쓰지 마세요. 오류, 현재 시각 선, 오늘 표시는 잉크예요.",
       "**Don't** 팔레트 색을 틀(툴바, 버튼, 테두리, 고른 상태)에 쓰지 마세요.",
       "**Don't** `ink`로 채운 주 버튼을 화면에 둘 이상 두지 마세요. 켜진 토글은 `row-active` 바탕에 굵은 테두리예요.",
       "**Don't** 고운바탕을 날짜 숫자, 이메일, 문장, 숫자 칸에 쓰지 마세요. 한글에 자간을 주지 마세요.",

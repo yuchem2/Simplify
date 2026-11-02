@@ -259,7 +259,7 @@ struct SettingsModal: View {
                 Button("다시 연결") { reconnect(account) }
                 .buttonStyle(DrawnButtonStyle(.primary))
             }
-            Button("연결 해제") { confirming = account }.buttonStyle(DrawnButtonStyle(.text))
+            Button("연결 해제") { confirming = account }.buttonStyle(DrawnButtonStyle(.dangerText))
         }
         .padding(.vertical, Metrics.spaceM)
     }
@@ -537,7 +537,7 @@ struct SettingsModal: View {
                         confirming = nil
                         Task { await calendars.disconnect(id) }
                     }
-                    .buttonStyle(DrawnButtonStyle(.primary))
+                    .buttonStyle(DrawnButtonStyle(.danger))
                 }
             }
             .padding(Metrics.spaceXxxl)
