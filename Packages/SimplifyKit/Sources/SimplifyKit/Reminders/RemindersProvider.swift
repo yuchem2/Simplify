@@ -49,7 +49,18 @@ public actor RemindersProvider: CalendarProvider {
         return Self.changes(for: snapshots, syncToken: syncToken)
     }
 
-    // Reminders stay read-only: the calendar only shows them.
+    /// Ticks a reminder off, or back on, in the Reminders app (stage 6). EventKit records the
+    /// completion date itself. The next read shows the change.
+    public func setCompleted(_ isCompleted: Bool, reminderID: String) throws {
+        guard Self.isAuthorized else { throw CalendarSyncError.remindersAccessDenied }
+        guard let reminder = store.calendarItem(withIdentifier: reminderID) as? EKReminder else { throw CalendarSyncError.conflict }
+        guard reminder.calendar.allowsContentModifications else { throw CalendarSyncError.readOnly }
+        guard reminder.isCompleted != isCompleted else { return }
+        reminder.isCompleted = isCompleted
+        try store.save(reminder, commit: true)
+    }
+
+    // Otherwise reminders stay read-only: the calendar only shows them.
 
     public func createEvent(_ draft: EventDraft, id: String, in remote: RemoteCalendar.Reference, calendar: Calendar) async throws {
         throw CalendarSyncError.readOnly

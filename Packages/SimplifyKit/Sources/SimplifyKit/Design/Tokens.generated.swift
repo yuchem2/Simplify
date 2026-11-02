@@ -16,8 +16,10 @@ public enum Tokens {
     public static let inkFaint = Color(light: 0x80807d, dark: 0x85857f)
     /// Cartoon shadow: the hard offset under sheets, selected rows in menus.
     public static let shade = Color(light: 0xd8d8d5, dark: 0x3a3a38)
-    /// Out-of-month day cells, the memo chip, hover.
+    /// Out-of-month day cells, hover.
     public static let shadeSoft = Color(light: 0xececea, dark: 0x252524)
+    /// Ground of a ToDo chip in a memo. Lighter than shade-soft in the dark so the chip still reads on the dark paper; the two themes sit closer together than the other greys.
+    public static let chip = Color(light: 0xe4e4e1, dark: 0x444441)
     /// Text and check marks on an ink fill.
     public static let onInk = Color(light: 0xffffff, dark: 0x1b1b1b)
     /// Sunday and public-holiday date numbers and holiday names — an alias of red-ink.
@@ -72,6 +74,7 @@ public extension ShapeStyle where Self == Color {
     static var inkFaint: Color { Tokens.inkFaint }
     static var shade: Color { Tokens.shade }
     static var shadeSoft: Color { Tokens.shadeSoft }
+    static var chip: Color { Tokens.chip }
     static var onInk: Color { Tokens.onInk }
     static var holiday: Color { Tokens.holiday }
 }

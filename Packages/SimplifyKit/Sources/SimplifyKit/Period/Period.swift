@@ -27,6 +27,26 @@ public struct Period: Hashable, Sendable {
         }
     }
 
+    /// The period a stored `key` names, or nil for a key that does not parse.
+    public init?(key: String, scope: PeriodScope, calendar: Calendar = .simplify) {
+        let parts = key.split(separator: "-").map(String.init)
+        var components = DateComponents()
+        switch scope {
+        case .day:
+            guard parts.count == 3, let y = Int(parts[0]), let m = Int(parts[1]), let d = Int(parts[2]) else { return nil }
+            components = DateComponents(year: y, month: m, day: d)
+        case .week:
+            guard parts.count == 2, let y = Int(parts[0]), parts[1].first == "W", let w = Int(parts[1].dropFirst()) else { return nil }
+            components = DateComponents(weekday: calendar.firstWeekday, weekOfYear: w, yearForWeekOfYear: y)
+        case .month:
+            guard parts.count == 2, let y = Int(parts[0]), let m = Int(parts[1]) else { return nil }
+            components = DateComponents(year: y, month: m, day: 1)
+        }
+        guard let date = calendar.date(from: components) else { return nil }
+        self.init(containing: date, scope: scope, calendar: calendar)
+        guard self.key == key else { return nil }
+    }
+
     /// The first instant after the period.
     public var end: Date {
         calendar.dateInterval(of: component, for: start)!.end

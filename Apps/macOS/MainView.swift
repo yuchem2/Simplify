@@ -42,6 +42,12 @@ struct MainView: View {
         }
         .background(.wall)
         .foregroundStyle(.ink)
+        .environment(\.toggleReminder, ReminderToggle { occurrence in
+            Task {
+                // Nothing to point at for a failure; the ring stays as it was and the Mac says no.
+                if await calendars.setReminderDone(occurrence, !occurrence.isCompleted) != nil { NSSound.beep() }
+            }
+        })
         .onChange(of: model.month, initial: true) {
             calendars.show(days: model.grid.weeks.flatMap { $0 }, calendar: model.calendar)
         }

@@ -189,6 +189,50 @@ public struct ReminderMark: View {
     }
 }
 
+/// A ToDo's box: an ink square, filled with a check once done. 16 pt in the panel.
+public struct TodoBox: View {
+    var isOn: Bool
+    var size: CGFloat
+
+    public init(isOn: Bool, size: CGFloat = 16) {
+        self.isOn = isOn
+        self.size = size
+    }
+
+    public var body: some View {
+        ZStack {
+            Rectangle().fill(isOn ? Color.ink : Color.paper)
+            Rectangle().strokeBorder(.ink, lineWidth: size < 14 ? 1.2 : 1.5)
+            if isOn {
+                Image(systemName: "checkmark").font(.system(size: size * 0.56, weight: .bold)).foregroundStyle(.onInk)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Unfinished ToDos left on a day: a small check mark and the count, beside the date.
+public struct TodoCount: View {
+    var count: Int
+
+    public init(_ count: Int) {
+        self.count = count
+    }
+
+    public var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
+            Text("\(count)").font(.system(size: 11, weight: .medium)).monospacedDigit()
+        }
+        .foregroundStyle(.inkSoft)
+        // Never squeezed: the date and weekday beside it give way first.
+        .fixedSize()
+        .layoutPriority(1)
+        .accessibilityHidden(true)
+    }
+}
+
 /// A small pencil: this day, week or month has a memo.
 public struct MemoMark: View {
     var color: Color

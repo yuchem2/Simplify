@@ -37,6 +37,7 @@ enum Snapshot {
             model.isSettingsOpen = false
             renderEventPopovers(model: model, calendars: shown, memos: memos)
             renderMemos(model: model, calendars: shown)
+            renderTodos(model: model, calendars: shown)
         }
         NSApp.terminate(nil)
     }
@@ -145,16 +146,80 @@ enum Snapshot {
         memo += styled("0") { $0[MemoAttributes.Math.self] = true; $0[MemoAttributes.Script.self] = .lowered }
         memo += AttributedString("\n")
         memo += styled("brew upgrade --cask xcode") { $0[MemoAttributes.Code.self] = true }
-        memo += AttributedString("\n다음 주 월요일 회의 안건 미리 보내기")
+        memo += AttributedString("\n다음 주 월요일 회의 안건 미리 보내기\n[ ] 필라테스 회원권 연장 문의\n")
         func day(_ offset: Int) -> Period {
             Period(containing: calendar.date(byAdding: .day, value: offset, to: today)!, scope: .day, calendar: calendar)
         }
+        // ToDos: today's own, one linked in from the week, the week's and the month's, a few days around.
+        func todo(_ title: String, _ period: Period, done: Bool = false, label: Palette? = nil) -> TodoItem {
+            let item = try! Todos.add(title, to: period, in: context)!
+            if done { try! Todos.setDone(item.id, true, in: context) }
+            if let label { try! Todos.setLabel(item.id, label, in: context) }
+            return item
+        }
+        let week = Period(containing: today, scope: .week, calendar: calendar)
+        let month = Period(containing: today, scope: .month, calendar: calendar)
+        _ = todo("회의록 정리", day(0), done: true)
+        let report = todo("분기 리포트 초안 보내기", month, label: .red)
+        try! Todos.link(report.id, to: day(0), in: context)
+        let lodging = todo("워크숍 숙소 확인", week, label: .teal)
+        try! Todos.link(lodging.id, to: day(0), in: context)
+        _ = todo("견적서 회신", day(0))
+        _ = todo("워크숍 발표 자료 준비", week)
+        _ = todo("건강검진 예약", month, done: true)
+        _ = todo("책 두 권 읽기", month)
+        _ = todo("가글 사기", day(1))
+        _ = todo("세탁소 맡기기", day(3))
+        _ = todo("항공권 체크인", day(3))
+        _ = todo("지난 일", day(-3), done: true)
+        memo += AttributedString("워크숍 전에 ")
+        memo += MemoChips.chip(id: lodging.id, title: lodging.title, isDone: false)
         try! Memos.save(memo, for: day(0), in: context)
+        try! Memos.save(AttributedString("TODO: 세금계산서 발행"), for: day(-4), in: context)
         try! Memos.save(AttributedString("치과 다녀와서 가글 사기"), for: day(1), in: context)
         try! Memos.save(AttributedString("가족 저녁 메뉴 정하기"), for: day(-2), in: context)
         try! Memos.save(AttributedString("워크숍 준비 끝내기. 운동은 세 번."), for: Period(containing: today, scope: .week, calendar: calendar), in: context)
         try! Memos.save(AttributedString("분기 마감이 겹쳐 촘촘했던 달.\n다음 달에는 오전을 비워 두기."), for: Period(containing: today, scope: .month, calendar: calendar), in: context)
         return MemoBook(container: container, isSaved: isSaved)
+    }
+
+    /// The ToDo pops over the panel: 가져오기, the memo's `[[` search and ⌘⇧T.
+    private static func renderTodos(model: AppModel, calendars: CalendarController) {
+        let memos = sampleMemos(calendar: model.calendar, isSaved: true)
+        model.select(model.today)
+        model.panelScope = .day
+        memos.draft.open(model.panelPeriod)
+        func light(_ name: String) { render(MainView(model: model, calendars: calendars, memos: memos), name: name, appearance: .aqua, scheme: .light) }
+        light("todo")
+        render(MainView(model: model, calendars: calendars, memos: memos), name: "todo-dark", appearance: .darkAqua, scheme: .dark)
+        memos.todos.pop = .importer(model.panelPeriod)
+        light("todo-import")
+        memos.todos.pop = .search(at: 0, typed: false)
+        light("todo-search")
+        memos.todos.pop = .makeTodos(lines: [0])
+        light("todo-make")
+        memos.todos.pop = nil
+        model.panelScope = .month
+        memos.draft.open(model.panelPeriod)
+        light("todo-month")
+        model.panelScope = .day
+        let view = model.calendarView
+        model.calendarView = .month
+        light("todo-monthview")
+        model.calendarView = view
+        // Chips as the memo box draws them, open and done.
+        var chips = AttributedString("워크숍 전에 확인할 것\n")
+        chips += MemoChips.chip(id: UUID(), title: "워크숍 숙소 확인", isDone: false)
+        chips += AttributedString("\n")
+        chips += MemoChips.chip(id: UUID(), title: "참석자 명단 회신", isDone: true)
+        chips += AttributedString(" 은 어제 보냄\n– 발표는 20분 안쪽으로")
+        for (name, appearance, scheme) in [("todo-chips", NSAppearance.Name.aqua, ColorScheme.light), ("todo-chips-dark", .darkAqua, .dark)] {
+            render(ZStack(alignment: .topLeading) {
+                Color.paper
+                Text(MemoStyle.rendered(chips)).lineHeight(.exact(points: MemoStyle.lineHeight)).padding(.horizontal, 14).padding(.vertical, 10)
+                    .frame(width: 316, alignment: .leading).overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line)).padding(20)
+            }.frame(width: 360, height: 180), name: name, appearance: appearance, scheme: scheme, size: CGSize(width: 360, height: 180))
+        }
     }
 
     private static func render(_ view: some View, name: String, appearance: NSAppearance.Name, scheme: ColorScheme, size: CGSize = CGSize(width: 1260, height: 800)) {

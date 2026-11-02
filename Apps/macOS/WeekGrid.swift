@@ -29,7 +29,8 @@ struct WeekGrid: View {
                 ForEach(days, id: \.self) { day in
                     DayHead(day: day, model: model, isHoliday: calendars.holidayDays.contains(day),
                             count: calendars.slots[day]?.count ?? 0,
-                            hasMemo: memos.has(Period(containing: day, scope: .day, calendar: model.calendar))) {
+                            hasMemo: memos.has(Period(containing: day, scope: .day, calendar: model.calendar)),
+                            todoCount: memos.todos.remaining(on: day, calendar: model.calendar)) {
                         if model.isSelected(day), model.isPanelHidden { model.isPanelHidden = false }
                         model.select(day)
                         focused = true
@@ -92,6 +93,8 @@ private struct DayHead: View {
     let isHoliday: Bool
     let count: Int
     let hasMemo: Bool
+    /// Unfinished ToDos on the day, as ✓N at the head's trailing end.
+    let todoCount: Int
     let onSelect: () -> Void
 
     var body: some View {
@@ -110,9 +113,16 @@ private struct DayHead: View {
                     .font(.system(size: 11, weight: .semibold))
                     .tracking(0.7)
                     .foregroundStyle(red ? Color.holiday : Color.inkSoft)
+                    // Beside ✓N the weekday keeps its width; without it the head is as before.
+                    .fixedSize(horizontal: todoCount > 0, vertical: false)
                 if hasMemo { MemoMark() }
+                if todoCount > 0 {
+                    Spacer(minLength: 0)
+                    TodoCount(todoCount)
+                }
             }
             .padding(.leading, 10)
+            .padding(.trailing, todoCount > 0 ? 8 : 0)
             .padding(.top, 4)
             .padding(.bottom, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -136,6 +146,7 @@ private struct DayHead: View {
         if isToday { text += ", 오늘" }
         if count > 0 { text += ", 일정 \(count)개" }
         if hasMemo { text += ", 메모 있음" }
+        if todoCount > 0 { text += ", 남은 할 일 \(todoCount)개" }
         return text
     }
 }

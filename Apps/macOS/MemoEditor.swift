@@ -13,8 +13,29 @@ final class MemoDraft {
     /// empty and never saved over.
     private(set) var isUnreadable = false
     @ObservationIgnored private var saved = AttributedString()
+    /// When the last left click in the memo box happened (system uptime) and its click count, set
+    /// by `MemoMenuHost`, so a selection change right after it is that click and not a redraw.
+    @ObservationIgnored var lastBoxClick: TimeInterval = 0
+    @ObservationIgnored var lastClickCount = 0
+    /// The click that last ticked a chip, so one click ticks once and a double-click whose first
+    /// click already ticked does not tick back.
+    @ObservationIgnored var tickedByClick: (id: UUID, at: TimeInterval)?
+    /// The box has keyboard focus; ⌘⇧T is caught only then.
+    @ObservationIgnored var hasFocus = false
+    /// The part of the box the panel shows, in window coordinates (top-left origin), as SwiftUI
+    /// lays it out. Right-clicks and clicks are judged against it.
+    @ObservationIgnored var visibleBox: CGRect = .null
+    /// Where the selection's first line sits in the box, top-left origin; set by `MemoMenuHost`,
+    /// which can ask the text view. Nil when it cannot tell.
+    @ObservationIgnored var selectionLineRect: (() -> CGRect?)?
+    /// The same line in window coordinates, top-left origin, for placing pops beside it.
+    @ObservationIgnored var selectionLineInWindow: (() -> CGRect?)?
+    /// The next text change is `[[` being put back after a closed search; it opens nothing.
+    @ObservationIgnored var skipsSearchTrigger = false
+    /// Bumped to put keyboard focus back in the box after a pop closes.
+    var focusRequest = 0
     @ObservationIgnored private var pending: Task<Void, Never>?
-    @ObservationIgnored private let book: MemoBook
+    @ObservationIgnored let book: MemoBook
     /// The highlighter ⌘⇧H puts on. Remembered across launches.
     var lastHighlight = Palette(rawValue: UserDefaults.standard.string(forKey: "memoLastHighlight") ?? "") ?? .yellow {
         didSet { UserDefaults.standard.set(lastHighlight.rawValue, forKey: "memoLastHighlight") }
@@ -34,11 +55,15 @@ final class MemoDraft {
         text = stored ?? AttributedString()
         saved = text
         selection = AttributedTextSelection()
+        // Chips show their ToDo as it is now; a change found here is saved like any other edit.
+        refreshChips()
     }
 
     /// After typing stops for half a second the memo is saved.
     func textChanged() {
         keepCodeBlocksWhole()
+        keepChipsWhole()
+        catchSearchTrigger()
         guard text != saved else { return }
         pending?.cancel()
         pending = Task { [weak self] in
@@ -111,7 +136,16 @@ final class MemoDraft {
     /// A code block takes whole lines: every line the selection touches.
     func toggleCode() {
         let on = !isCode
-        let lines = lineRanges(of: selectedRanges)
+        var lines = lineRanges(of: selectedRanges)
+        // Off takes the line breaks around the lines too, so no code is left for a later edit to
+        // spread back over them.
+        if !on {
+            let characters = text.characters
+            for line in lines.ranges {
+                if line.lowerBound > characters.startIndex { lines.insert(characters.index(before: line.lowerBound), within: characters) }
+                if line.upperBound < characters.endIndex { lines.insert(line.upperBound, within: characters) }
+            }
+        }
         text.transform(updating: &selection) { text in
             text[lines][MemoAttributes.Code.self] = on ? true : nil
             if on { text[lines][MemoAttributes.Highlight.self] = nil }
@@ -146,9 +180,11 @@ final class MemoDraft {
     /// A line with any code in it is code throughout, so letters typed at the start of a code
     /// line join the block instead of sitting in it as plain text.
     private func keepCodeBlocksWhole() {
-        let all = text.startIndex..<text.endIndex
+        // Not mid-syllable: widening would break the composition up; the finished letter comes next.
+        if isComposing { return }
         var partial = RangeSet<AttributedString.Index>()
-        for line in lineRanges(of: [all]).ranges where !line.isEmpty {
+        // Line by line: widening the whole text at once would read the memo as one long line.
+        for line in MemoTodoLines.lines(in: text) where !line.isEmpty {
             let flags = text[line].runs[MemoAttributes.Code.self].map { $0.0 == true }
             if flags.contains(true), flags.contains(false) { partial.insert(contentsOf: line) }
         }
@@ -159,7 +195,7 @@ final class MemoDraft {
         }
     }
 
-    private var selectedRanges: [Range<AttributedString.Index>] {
+    var selectedRanges: [Range<AttributedString.Index>] {
         switch selection.indices(in: text) {
         case .insertionPoint(let index): [index..<index]
         case .ranges(let ranges): Array(ranges.ranges)
@@ -196,7 +232,12 @@ enum MemoStyle {
     static let lineHeight: CGFloat = 26
     static let boxHeight: CGFloat = 170
 
-    static func font(bold: Bool, italic: Bool, code: Bool, math: Bool, script: MemoScript?) -> Font {
+    /// A chip's box letter: larger than the text, so it is easy to hit.
+    static let boxSize: CGFloat = 20
+
+    static func font(bold: Bool, italic: Bool, code: Bool, math: Bool, script: MemoScript?, box: Bool = false) -> Font {
+        // In the memo's own face, only larger.
+        if box { return .system(size: boxSize) }
         var size = code ? 13 : math ? 16 : Self.size
         if script != nil { size = (size * 0.7).rounded() }
         var font: Font = code ? .system(size: size, design: .monospaced) : math ? .system(size: size, design: .serif) : .system(size: size)
@@ -213,8 +254,20 @@ enum MemoStyle {
         }
     }
 
-    static func ground(code: Bool, highlight: Palette?) -> Color? {
-        code ? Tokens.shadeSoft : highlight?.tint
+    static func ground(code: Bool, highlight: Palette?, todo: MemoTodo? = nil) -> Color? {
+        if code { return Tokens.shadeSoft }
+        // A highlighter laid over a chip shows; otherwise the chip's own grey.
+        return highlight?.tint ?? (todo != nil ? Tokens.chip : nil)
+    }
+
+    /// A chip's letters once its ToDo is done: soft and struck through.
+    static func ink(_ palette: Palette?, todo: MemoTodo?) -> Color? {
+        todo?.isDone == true ? Tokens.inkSoft : palette?.ink
+    }
+
+    /// The title only: the box letter shows its tick unstruck.
+    static func strike(_ todo: MemoTodo?, box: Bool = false) -> Text.LineStyle? {
+        todo?.isDone == true && !box ? .single : nil
     }
 
     /// The memo with SwiftUI's own attributes filled in, for drawing it as plain `Text`.
@@ -223,10 +276,13 @@ enum MemoStyle {
         for run in text.runs {
             let code = run[MemoAttributes.Code.self] == true
             let script = run[MemoAttributes.Script.self]
+            let box = run[MemoAttributes.TodoBox.self] == true
             text[run.range].font = font(bold: run[MemoAttributes.Bold.self] == true, italic: run[MemoAttributes.Italic.self] == true,
-                                        code: code, math: run[MemoAttributes.Math.self] == true, script: script)
-            text[run.range].foregroundColor = run[MemoAttributes.Ink.self]?.ink
-            text[run.range].backgroundColor = ground(code: code, highlight: run[MemoAttributes.Highlight.self])
+                                        code: code, math: run[MemoAttributes.Math.self] == true, script: script, box: box)
+            let todo = run[MemoAttributes.Todo.self]
+            text[run.range].foregroundColor = ink(run[MemoAttributes.Ink.self], todo: todo)
+            text[run.range].backgroundColor = ground(code: code, highlight: run[MemoAttributes.Highlight.self], todo: todo)
+            text[run.range].strikethroughStyle = strike(todo, box: box)
             text[run.range].baselineOffset = baselineOffset(script)
         }
         return text
@@ -241,6 +297,7 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
         let foregroundColor: AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute
         let backgroundColor: AttributeScopes.SwiftUIAttributes.BackgroundColorAttribute
         let baselineOffset: AttributeScopes.SwiftUIAttributes.BaselineOffsetAttribute
+        let strikethroughStyle: AttributeScopes.SwiftUIAttributes.StrikethroughStyleAttribute
         let memo: AttributeScopes.MemoScope
     }
 
@@ -249,6 +306,7 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
         InkFromFormatting()
         GroundFromFormatting()
         BaselineFromFormatting()
+        StrikeFromFormatting()
     }
 
     private struct FontFromFormatting: AttributedTextValueConstraint {
@@ -259,7 +317,7 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
             container[AttributeKey.self] = MemoStyle.font(
                 bold: container[MemoAttributes.Bold.self] == true, italic: container[MemoAttributes.Italic.self] == true,
                 code: container[MemoAttributes.Code.self] == true, math: container[MemoAttributes.Math.self] == true,
-                script: container[MemoAttributes.Script.self])
+                script: container[MemoAttributes.Script.self], box: container[MemoAttributes.TodoBox.self] == true)
         }
     }
 
@@ -268,7 +326,7 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
         typealias AttributeKey = AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute
 
         func constrain(_ container: inout Attributes) {
-            container[AttributeKey.self] = container[MemoAttributes.Ink.self]?.ink
+            container[AttributeKey.self] = MemoStyle.ink(container[MemoAttributes.Ink.self], todo: container[MemoAttributes.Todo.self])
         }
     }
 
@@ -277,7 +335,8 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
         typealias AttributeKey = AttributeScopes.SwiftUIAttributes.BackgroundColorAttribute
 
         func constrain(_ container: inout Attributes) {
-            container[AttributeKey.self] = MemoStyle.ground(code: container[MemoAttributes.Code.self] == true, highlight: container[MemoAttributes.Highlight.self])
+            container[AttributeKey.self] = MemoStyle.ground(code: container[MemoAttributes.Code.self] == true, highlight: container[MemoAttributes.Highlight.self],
+                                                            todo: container[MemoAttributes.Todo.self])
         }
     }
 
@@ -287,6 +346,15 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
 
         func constrain(_ container: inout Attributes) {
             container[AttributeKey.self] = MemoStyle.baselineOffset(container[MemoAttributes.Script.self])
+        }
+    }
+
+    private struct StrikeFromFormatting: AttributedTextValueConstraint {
+        typealias Scope = MemoFormatting.Scope
+        typealias AttributeKey = AttributeScopes.SwiftUIAttributes.StrikethroughStyleAttribute
+
+        func constrain(_ container: inout Attributes) {
+            container[AttributeKey.self] = MemoStyle.strike(container[MemoAttributes.Todo.self], box: container[MemoAttributes.TodoBox.self] == true)
         }
     }
 }
@@ -304,6 +372,8 @@ struct MemoEditor: View {
     @Environment(\.undoManager) private var undoManager
     /// The box's top within the panel's scroll view, to put the bar where it fits.
     @State private var top: CGFloat = 0
+    /// The selected line in the box, for putting the bar beside it.
+    @State private var line: CGRect?
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -339,19 +409,25 @@ struct MemoEditor: View {
         }
         .frame(maxWidth: .infinity, minHeight: MemoStyle.boxHeight, maxHeight: MemoStyle.boxHeight, alignment: .topLeading)
         .clipped()
+        .background { if !isRenderingSnapshot { MemoMenuHost(draft: draft) } }
+        .onGeometryChange(for: CGRect.self) { proxy in
+            let local = CGRect(origin: .zero, size: proxy.size)
+            let shown = proxy.bounds(of: .scrollView).map { local.intersection($0) } ?? local
+            let frame = proxy.frame(in: .global)
+            return shown.offsetBy(dx: frame.minX, dy: frame.minY)
+        } action: { draft.visibleBox = $0 }
         .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
-        .overlay(alignment: barAbove ? .topLeading : .bottomLeading) {
+        .overlay(alignment: .topLeading) {
             if showsBar {
-                let above = barAbove
-                MemoFormatBar(draft: draft)
-                    .alignmentGuide(above ? .top : .bottom) { d in above ? d[.bottom] + 6 : d[.top] - 6 }
+                MemoFormatBar(draft: draft).offset(y: barY)
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { top = $0 }
         // Under the box the bar would hang past the end of the scroll content, where clicks do not
         // reach it; the room is made inside the content instead.
-        .padding(.bottom, showsBar && !barAbove ? MemoFormatBar.height + 6 : 0)
+        .padding(.bottom, showsBar ? max(0, barY + MemoFormatBar.height - MemoStyle.boxHeight) : 0)
         .focusedValue(\.memoDraft, focused ? draft : nil)
+        .onChange(of: focused, initial: true) { draft.hasFocus = focused }
         .onChange(of: period, initial: true) {
             draft.open(period)
             // The text view stays the same across days; its undo steps belong to the memo it left.
@@ -359,13 +435,26 @@ struct MemoEditor: View {
             Task { @MainActor in undoManager?.removeAllActions() }
         }
         .onChange(of: draft.text) { draft.textChanged() }
+        .onChange(of: draft.selection) {
+            draft.selectionChanged()
+            // After the text view has laid the new selection out.
+            Task { @MainActor in line = draft.selectionLineRect?() }
+        }
+        .onChange(of: draft.focusRequest) { focused = true }
         .onDisappear { draft.flush() }
     }
 
     private var showsBar: Bool { focused && draft.hasSelectedText }
 
-    /// Over the box when the scroll view shows enough room above it, otherwise under it.
-    private var barAbove: Bool { top > MemoFormatBar.height + 12 }
+    /// The bar's top within the box. Beside the selected line: over it where the panel shows
+    /// enough room, otherwise under it. Without the line's place, over or under the whole box.
+    private var barY: CGFloat {
+        let height = MemoFormatBar.height
+        guard let line, line.maxY > 0, line.minY < MemoStyle.boxHeight else {
+            return top > height + 12 ? -height - 6 : MemoStyle.boxHeight + 6
+        }
+        return top + line.minY > height + 12 ? line.minY - height - 6 : line.maxY + 6
+    }
 }
 
 /// Bold, italic, code block, formula and raised/lowered letters, then text colour and
@@ -488,6 +577,11 @@ struct MemoCommands: Commands {
                 Button("형광펜 (\((draft?.lastHighlight ?? .yellow).name))") { draft?.repeatHighlight() }
                     .keyboardShortcut("h", modifiers: [.command, .shift])
                 Button("서식 지우기") { draft?.clearFormatting() }
+                Divider()
+                Button("할 일로 만들기…") { draft?.askToMakeTodos() }
+                    .keyboardShortcut("t", modifiers: [.command, .shift])
+                Button("할 일 가져오기…") { draft?.askToLinkTodo() }
+                Button("할 일 체크") { draft?.toggleChipAtCaret() }
             }
             .disabled(draft == nil)
         }

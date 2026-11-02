@@ -42,6 +42,30 @@ public enum MemoAttributes {
         public typealias Value = Palette
         public static let name = "simplify.memo.highlight"
     }
+
+    /// A ToDo chip: `□ 제목` letters that stand for the ToDo with this id (stage 6).
+    public enum Todo: CodableAttributedStringKey {
+        public typealias Value = MemoTodo
+        public static let name = "simplify.memo.todo"
+    }
+
+    /// The box letter at the front of a chip, drawn larger so it is easy to click.
+    public enum TodoBox: CodableAttributedStringKey {
+        public typealias Value = Bool
+        public static let name = "simplify.memo.todobox"
+    }
+}
+
+/// Which ToDo a chip stands for, and whether it was done when the chip was last drawn. The ToDo
+/// itself is the truth; chips are brought up to date whenever the memo opens.
+public struct MemoTodo: Codable, Hashable, Sendable {
+    public var id: UUID
+    public var isDone: Bool
+
+    public init(id: UUID, isDone: Bool) {
+        self.id = id
+        self.isDone = isDone
+    }
 }
 
 public enum MemoScript: String, Codable, Hashable, Sendable {
@@ -57,6 +81,8 @@ public extension AttributeScopes {
         public let script: MemoAttributes.Script
         public let ink: MemoAttributes.Ink
         public let highlight: MemoAttributes.Highlight
+        public let todo: MemoAttributes.Todo
+        public let todoBox: MemoAttributes.TodoBox
     }
 
     var memo: MemoScope.Type { MemoScope.self }
@@ -72,7 +98,9 @@ public extension AttributeDynamicLookup {
 ///
 /// `{"v":1,"runs":[{"t":"견적서","b":true,"c":"red","h":"yellow"},{"t":" 보내기"}]}`
 /// Colours are palette names; a name this version does not know is dropped, as is any other
-/// attribute. Neighbouring runs with the same formatting are joined.
+/// attribute. Neighbouring runs with the same formatting are joined. A ToDo chip's run carries
+/// `"td"` (the ToDo's id) and `"tx":true` once done, and its box letter `"tb":true`; older
+/// versions ignore these and keep the text.
 public enum MemoText {
     static let version = 1
 
@@ -129,6 +157,9 @@ public enum MemoText {
         var s: String?
         var c: String?
         var h: String?
+        var td: String?
+        var tx: Bool?
+        var tb: Bool?
 
         init(text: String, from run: AttributedString.Runs.Run) {
             t = text
@@ -140,10 +171,14 @@ public enum MemoText {
             c = run[MemoAttributes.Ink.self]?.rawValue
             // A code block has its own shaded ground.
             h = k == true ? nil : run[MemoAttributes.Highlight.self]?.rawValue
+            let todo = run[MemoAttributes.Todo.self]
+            td = todo?.id.uuidString
+            tx = todo?.isDone == true ? true : nil
+            tb = todo != nil && run[MemoAttributes.TodoBox.self] == true ? true : nil
         }
 
         func sameFormatting(as other: Run) -> Bool {
-            b == other.b && i == other.i && k == other.k && m == other.m && s == other.s && c == other.c && h == other.h
+            b == other.b && i == other.i && k == other.k && m == other.m && s == other.s && c == other.c && h == other.h && td == other.td && tx == other.tx && tb == other.tb
         }
 
         var attributed: AttributedString {
@@ -155,6 +190,8 @@ public enum MemoText {
             container[MemoAttributes.Script.self] = s.flatMap(MemoScript.init(rawValue:))
             container[MemoAttributes.Ink.self] = c.flatMap(Palette.init(rawValue:))
             if k != true { container[MemoAttributes.Highlight.self] = h.flatMap(Palette.init(rawValue:)) }
+            container[MemoAttributes.Todo.self] = td.flatMap(UUID.init(uuidString:)).map { MemoTodo(id: $0, isDone: tx == true) }
+            if tb == true, container[MemoAttributes.Todo.self] != nil { container[MemoAttributes.TodoBox.self] = true }
             return AttributedString(t, attributes: container)
         }
     }

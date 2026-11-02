@@ -2,7 +2,7 @@ import SwiftUI
 import SimplifyKit
 
 /// The moulded panel beside the month: the chosen day, its week, or its month.
-/// Events come from the calendar cache, memos from the diary store; ToDos (stage 6) are still empty.
+/// Events come from the calendar cache, memos and ToDos from the diary store.
 struct DayPanel: View {
     @Bindable var model: AppModel
     let calendars: CalendarController
@@ -23,6 +23,8 @@ struct DayPanel: View {
                     Spacer()
                     if period.scope == .week {
                         Text(period.rangeText).font(.system(size: 11, weight: .medium)).foregroundStyle(.inkSoft)
+                    } else if period.scope == .month {
+                        Text(monthMeta(period)).font(.system(size: 11, weight: .medium)).foregroundStyle(.inkSoft)
                     } else if period.scope == .day && period.contains(model.today) {
                         Text("오늘")
                             .font(.system(size: 11, weight: .semibold))
@@ -42,7 +44,15 @@ struct DayPanel: View {
                     ForEach(sections(for: period.scope), id: \.title) { section in
                         VStack(alignment: .leading, spacing: 8) {
                             SectionRule(section.title) {
-                                if let action = section.action {
+                                if section.kind == .todos, let action = section.action {
+                                    Button(action) {
+                                        // Lines typed a moment ago are in the store before the list is read.
+                                        memos.draft.flush()
+                                        memos.todos.pop = .importer(period)
+                                    }
+                                        .buttonStyle(DrawnButtonStyle(.text))
+                                        .help("다른 날의 할 일과 메모 속 할 일 줄을 가져와요")
+                                } else if let action = section.action {
                                     Button(action) {}.buttonStyle(DrawnButtonStyle(.text)).disabled(true).help("준비 중이에요")
                                 }
                             }
@@ -55,9 +65,7 @@ struct DayPanel: View {
                             } else if section.kind == .memo {
                                 MemoEditor(draft: memos.draft, period: period, title: section.title, placeholder: section.empty)
                             } else {
-                                Text(section.empty)
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(.inkSoft)
+                                TodoList(period: period, model: model, memos: memos)
                             }
                         }
                     }
@@ -67,6 +75,19 @@ struct DayPanel: View {
             }
         }
         .mouldedFrame()
+        .overlay { PanelPopLayer(model: model, memos: memos) }
+        // A ToDo ticked or renamed anywhere redraws its chips in the open memo.
+        .onChange(of: memos.todos.revision) { memos.draft.refreshChips() }
+        // Every pop is about the period on screen (the memo's lines, a place in its letters).
+        .onChange(of: period) { memos.todos.pop = nil }
+    }
+
+    /// `일정 16 · 할 일 4/9`: the month's events, and its ToDos finished out of all.
+    private func monthMeta(_ month: Period) -> String {
+        var ids = Set<String>()
+        for day in month.days { (calendars.slots[day] ?? []).forEach { ids.insert($0.occurrence.eventID) } }
+        let tally = memos.todos.tally(for: month)
+        return "일정 \(ids.count) · 할 일 \(tally.done)/\(tally.total)"
     }
 
     private struct Section {

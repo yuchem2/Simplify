@@ -56,4 +56,21 @@ struct RemindersTests {
         changed[0].isCompleted = true
         #expect(RemindersProvider.changes(for: changed, syncToken: first.nextSyncToken).isFullFetch)
     }
+
+    /// After the ring ticks a reminder off, the next read must count as a change and carry it.
+    @Test func tickingOffIsReadBackAsAChange() throws {
+        let due = DateComponents(year: 2026, month: 11, day: 2)
+        let open = ReminderItem(id: "r9", title: "우유", due: due, isCompleted: false)
+        var done = open
+        done.isCompleted = true
+        let before = try #require(open.snapshot(sourceID: "s", calendar: cal))
+        let after = try #require(done.snapshot(sourceID: "s", calendar: cal))
+        let first = RemindersProvider.changes(for: [before], syncToken: nil)
+        let second = RemindersProvider.changes(for: [after], syncToken: first.nextSyncToken)
+        #expect(second.isFullFetch)
+        #expect(second.nextSyncToken != first.nextSyncToken)
+        guard case .upsert(let event) = try #require(second.changes.first) else { Issue.record("expected an upsert"); return }
+        #expect(event.isCompleted)
+        #expect(event.id == before.id, "same reminder, same event")
+    }
 }

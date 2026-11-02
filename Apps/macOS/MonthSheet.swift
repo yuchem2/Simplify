@@ -39,6 +39,7 @@ struct MonthSheet: View {
                                 DayCell(day: day, model: model, calendars: calendars, inMonth: grid.isInMonth(day),
                                         slots: calendars.slots[day] ?? [], lanes: lanes, sources: calendars.sources,
                                         isHoliday: calendars.holidayDays.contains(day), hasMemo: memos.has(Period(containing: day, scope: .day, calendar: model.calendar)),
+                                        todoCount: memos.todos.remaining(on: day, calendar: model.calendar),
                                         height: height, textSize: model.cellTextSize) {
                                     // After the click's other handlers: an event click or a double-click opens the
                                     // event popover in the same click, and then the panel and focus stay as they are.
@@ -99,6 +100,8 @@ private struct DayCell: View {
     let sources: [String: CalendarController.Source]
     let isHoliday: Bool
     let hasMemo: Bool
+    /// Unfinished ToDos on the day, shown as ✓N at the end of the date line.
+    let todoCount: Int
     let height: CGFloat
     let textSize: AppModel.CellTextSize
     let onSelect: () -> Void
@@ -121,6 +124,10 @@ private struct DayCell: View {
                         // The disc's left edge sits 4 pt before the date line, well inside the selection.
                         .padding(.leading, isToday ? -4 : 0)
                     if hasMemo { MemoMark() }
+                    if todoCount > 0 {
+                        Spacer(minLength: 0)
+                        TodoCount(todoCount)
+                    }
                 }
                 let (shown, hidden) = visibleRows
                 ForEach(Array(shown.enumerated()), id: \.offset) { _, slot in
@@ -188,6 +195,7 @@ private struct DayCell: View {
         if isToday { text += ", 오늘" }
         if !slots.isEmpty { text += ", 일정 \(slots.count)개" }
         if hasMemo { text += ", 메모 있음" }
+        if todoCount > 0 { text += ", 남은 할 일 \(todoCount)개" }
         return text
     }
 }
@@ -246,14 +254,27 @@ private struct EventRow: View {
 }
 
 /// The mark in front of an event's title: a square in its calendar's colour, or a ring for a reminder.
+/// Clicking a reminder's ring ticks it off (or back on) in the Reminders app.
 struct EventMark: View {
     let occurrence: EventOccurrence
     let source: CalendarController.Source?
     let size: CGFloat
+    @Environment(\.toggleReminder) private var toggleReminder
 
     var body: some View {
         if source?.isReminderList == true {
-            ReminderMark(source?.palette.ink, size: size, isCompleted: occurrence.isCompleted)
+            let ring = ReminderMark(source?.palette.ink, size: size, isCompleted: occurrence.isCompleted)
+            if let toggleReminder, source?.isReadOnly != true {
+                Button { toggleReminder(occurrence) } label: {
+                    // A few points of slack around the ring, so a small one is still easy to hit.
+                    ring.padding(3).contentShape(Rectangle()).padding(-3)
+                }
+                .buttonStyle(.plain)
+                .help(occurrence.isCompleted ? "완료 취소" : "완료로 표시")
+                .accessibilityLabel(occurrence.isCompleted ? "\(occurrence.title) 완료 취소" : "\(occurrence.title) 완료로 표시")
+            } else {
+                ring
+            }
         } else {
             Mark(source?.palette.ink, size: size)
         }
@@ -274,4 +295,19 @@ struct BandOutline: Shape {
         if !open.leading { path.addLine(to: CGPoint(x: r.minX, y: r.minY)) }
         return path
     }
+}
+
+/// Ticks a reminder off or back on from its ring. Set once on the window and never replaced, so
+/// any two count as equal and setting it never redraws what reads it.
+struct ReminderToggle: Equatable {
+    let run: (EventOccurrence) -> Void
+
+    func callAsFunction(_ occurrence: EventOccurrence) { run(occurrence) }
+
+    static func == (lhs: ReminderToggle, rhs: ReminderToggle) -> Bool { true }
+}
+
+extension EnvironmentValues {
+    /// Nil where reminder rings only show.
+    @Entry var toggleReminder: ReminderToggle?
 }

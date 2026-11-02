@@ -7,10 +7,18 @@ import SwiftData
 /// until a paid developer account exists.
 public enum SimplifyStore {
     public static func makeContainer(inMemory: Bool = false) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: SchemaV1.self)
-        let configuration = inMemory
-            ? ModelConfiguration("Diary", schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
-            : ModelConfiguration("Diary", schema: schema, url: try storeURL(), cloudKitDatabase: .none)
+        try makeContainer(url: inMemory ? nil : storeURL())
+    }
+
+    /// The diary store at `url`, or in memory for nil. Older files are brought up to the current
+    /// schema on opening.
+    static func makeContainer(url: URL?) throws -> ModelContainer {
+        let schema = Schema(versionedSchema: SchemaV2.self)
+        let configuration = if let url {
+            ModelConfiguration("Diary", schema: schema, url: url, cloudKitDatabase: .none)
+        } else {
+            ModelConfiguration("Diary", schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        }
         return try ModelContainer(for: schema, migrationPlan: SimplifyMigrationPlan.self, configurations: configuration)
     }
 

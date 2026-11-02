@@ -308,6 +308,26 @@ final class CalendarController {
         }
     }
 
+    /// Ticks a reminder off (or back on) in the Reminders app from its ring, shows the change at
+    /// once, then reads the lists again. Nil when it worked, otherwise what to tell the person.
+    func setReminderDone(_ occurrence: EventOccurrence, _ isDone: Bool) async -> String? {
+        guard let event = snapshotsByID[occurrence.eventID], sources[event.sourceID]?.isReminderList == true else { return nil }
+        do {
+            try await reminders.setCompleted(isDone, reminderID: event.remoteID)
+        } catch {
+            return (error as? CalendarSyncError)?.message ?? "미리알림을 바꾸지 못했어요."
+        }
+        snapshots = snapshots.map { snapshot in
+            guard snapshot.id == event.id else { return snapshot }
+            var changed = snapshot
+            changed.isCompleted = isDone
+            return changed
+        }
+        rebuildSlots()
+        await syncReminders()
+        return nil
+    }
+
     private func provider(for accountID: String) throws -> any CalendarProvider {
         switch accounts.first(where: { $0.id == accountID })?.provider ?? .google {
         case .google:
