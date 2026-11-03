@@ -262,8 +262,6 @@ enum MemoStyle {
     static let lineHeight: CGFloat = TextStyle.memo.lineHeight
     /// The memo's least height, when the panel has less left for it.
     static let minHeight: CGFloat = 170
-    /// The longest line, so a wide panel's memo still reads as a column.
-    static let measure: CGFloat = 760
     /// Where the text view draws its first letter inside its own frame; the placeholder and the
     /// snapshot's text sit that much further in, so they line up with typed text.
     static let textViewInset = CGSize(width: 5, height: 4)
@@ -396,7 +394,7 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
 }
 
 /// The memo, written straight on the panel's paper under its section rule: no box, the text's left
-/// edge on the rule's, lines no longer than `MemoStyle.measure`. It fills `height` (what the panel
+/// edge on the rule's, lines as wide as the panel. It fills `height` (what the panel
 /// has left) and scrolls inside itself; the format bar shows over or under the picked line while
 /// letters are picked. Keyboard focus shows as the caret and the section rule's spine weight.
 struct MemoEditor: View {
@@ -440,8 +438,6 @@ struct MemoEditor: View {
                     .focused($focused)
                     .disabled(draft.isUnreadable)
                     .padding(.leading, -MemoStyle.textViewInset.width)
-                    // On the text view itself: it takes the whole width it is offered otherwise.
-                    .frame(maxWidth: MemoStyle.measure, alignment: .leading)
                     .accessibilityLabel(title)
                     .accessibilityHint(placeholder)
                     .accessibilityAction(.showMenu) { draft.showMenu?() }
@@ -456,7 +452,6 @@ struct MemoEditor: View {
                     .accessibilityHidden(true)
             }
         }
-        .frame(maxWidth: MemoStyle.measure, alignment: .topLeading)
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .topLeading)
         // Past the end of the lines, or beside a short memo in a wide panel: still the memo.
         .contentShape(Rectangle())
