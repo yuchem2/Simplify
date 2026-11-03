@@ -1,0 +1,98 @@
+{
+  "fill-specializations" : [
+    {
+      "value" : {
+        "solid" : "srgb:0.98431,0.98039,0.96863,1.00000"
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "solid" : "srgb:0.16471,0.16078,0.15294,1.00000"
+      }
+    }
+  ],
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name-specializations" : [
+            {
+              "value" : "red-light.png"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "red-dark.png"
+            }
+          ],
+          "name" : "red"
+        },
+        {
+          "glass" : true,
+          "image-name-specializations" : [
+            {
+              "value" : "ink-light.png"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "ink-dark.png"
+            }
+          ],
+          "name" : "ink"
+        }
+      ],
+      "name" : "Ink",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    },
+    {
+      "layers" : [
+        {
+          "glass" : false,
+          "hidden-specializations" : [
+            {
+              "value" : false
+            },
+            {
+              "appearance" : "tinted",
+              "value" : true
+            }
+          ],
+          "image-name-specializations" : [
+            {
+              "value" : "faces-light.png"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "faces-dark.png"
+            }
+          ],
+          "name" : "faces"
+        }
+      ],
+      "name" : "Faces",
+      "shadow" : {
+        "kind" : "none",
+        "opacity" : 0.5
+      },
+      "specular" : false,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "macOS"
+    ]
+  }
+}

@@ -68,6 +68,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.yoom.simplify
+        # Apps/macOS/AppIcon.icon (Icon Composer), made by design/icon/make-icon.swift.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
   SimplifyWidgets:
     type: app-extension

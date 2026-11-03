@@ -482,6 +482,14 @@ Simplify는 한 장의 종이에 잉크로 줄을 그은 장부처럼 보이는 
 ### Dark D1 "흑연"
 다크는 검정이 아니라 따뜻한 회갈색이에요. 벽 `wall-dark`, 종이 `paper-dark`, 주말 `raised-dark`에 밝은 잉크 `ink-dark`. 같은 규칙(등줄, 주 가로줄, 잉크 채움 선택)이 그대로 뒤집혀요. 고른 세그먼트와 주 버튼은 밝은 잉크 채움 + 흑연색 글자예요.
 
+## App Icon (I4 "잉크 장부")
+
+- **구성:** 왼쪽에 월 달력 한 장, 오른쪽에 등줄 자리에 선 연필 한 자루. 요일 표식 7개(일요일만 공휴일 빨강), 요일 줄은 등줄 굵기, 다섯 주 잉크 가로줄, 일·토 주말 면, 둘째 주 수요일 칸 위쪽의 오늘 막대. 글자는 없어요. 824 그리드 좌표를 1024 정사각에 꽉 채워 그리고, 둥근 모서리는 시스템이 깎아요. 시트의 그림은 좌우 여백이 96·130으로 왼쪽에 치우쳐 있어서, 앱 아이콘은 모양은 그대로 두고 전체를 오른쪽으로 17 옮겨 가운데에 맞췄어요(1024px에서 좌우 140px).
+- **색:** 라이트 종이 `#FBFAF7` · 잉크 `#1A1A1A` · 주말 면 `#EAE8E2` · 빨강 `#B3332A`. 다크(흑연) 종이 `#2A2927` · 잉크 `#ECEBE6` · 주말 면 `#33312E` · 빨강 `#FF8A7A`. 다크와 잉크는 토큰(`paper`/`ink`/`raised`)과 같고, 라이트 종이·주말 면은 시안 시트 값 그대로라 토큰(`#FFFFFF`/`#F7F7F5`)보다 한 단계 짙게 썼어요. 빨강은 `red-ink`.
+- **레이어:** Icon Composer 문서 `Apps/macOS/AppIcon.icon`. 바탕(종이)은 문서 fill, 그 위에 `Faces` 그룹(주말 면, 유리 없음), 맨 앞 `Ink` 그룹(`ink` 줄·오늘 막대·연필, 연필의 종이색 줄은 구멍 / `red` 일요일 표식, 둘 다 Liquid Glass). 라이트·다크는 레이어 그림을 따로 넣고, 클리어·틴트에서는 주말 면을 숨겨 잉크만 유리로 보여요.
+- **작은 크기:** `.icon`은 크기별 그림을 받지 않아서 시스템이 같은 그림을 줄여요. 16pt에서는 주 가로줄이 옅은 회색이 되고 연필·오늘 막대·요일 줄이 남아요. 시안 렌더러의 작은 크기 단순화(detail 0·1)는 시트에서만 쓰여요.
+- **원본:** `design/icon/make-icon.swift`가 레이어 PNG와 `icon.json`을 다시 만들어요(`swift design/icon/make-icon.swift .`). `AppIcon.icon` 폴더를 통째로 다시 쓰니, Icon Composer에서 직접 고치지 말고 이 스크립트를 고쳐요. `--check <폴더>`는 가운데 맞춤 이동을 뺀 레이어를 겹쳐 시안 렌더러 `design/icon/render5.swift`의 I4 그림(`icon-I4-{light,dark}-fullbleed.png`)과 같은지 봐요. 그 PNG는 `~/Dev/personal/mockup/simplify/icon/`에 있고, `swift design/icon/render5.swift <폴더> <GowunBatang-Bold.ttf>`로 다시 만들 수 있어요. 디자인 철학은 `design/icon/philosophy.md`.
+
 ## Do's and Don'ts
 
 ### Do:
