@@ -15,13 +15,18 @@ final class MemoBook {
     /// The last widget change already read, so coming to the front only rereads after a new one.
     @ObservationIgnored private var seenOutsideChange: Date?
     /// Held so an in-memory store (tests, snapshots) lives as long as the book.
-    @ObservationIgnored private let container: ModelContainer
+    @ObservationIgnored let container: ModelContainer
     /// The panel's memo box; one window, one box.
     @ObservationIgnored private(set) lazy var draft = MemoDraft(book: self)
     /// The ToDos, kept in the same store; memo chips stand for them.
     let todos: TodoBook
     /// Copies saved memos into the 메모 app; nil for books that are not the app's own.
     @ObservationIgnored private let mirror: NotesMirror?
+    /// Called after this Mac changes the store (a memo, a ToDo, a widget's tick), so another
+    /// device can be told (`DeviceSync`).
+    @ObservationIgnored var onLocalChange: (() -> Void)? {
+        didSet { todos.onChange = onLocalChange }
+    }
 
     init(container: ModelContainer, isSaved: Bool, mirror: NotesMirror? = nil) {
         self.container = container
@@ -41,6 +46,26 @@ final class MemoBook {
         let changed = SharedSettings.diaryChangedAt(in: SharedSettings.defaults)
         guard force || changed != seenOutsideChange else { return }
         seenOutsideChange = changed
+        readAfresh()
+        onLocalChange?()
+    }
+
+    /// Another device's changes were written to the store (`DeviceSync`): read it afresh, show the
+    /// open memo's new text (and its chips' ToDos), and copy the changed memos to the 메모 app.
+    /// `notes` holds the `SyncKey.note` of each changed memo.
+    func takeSynced(notes: Set<String>, todosChanged: Bool, calendar: Calendar) {
+        readAfresh()
+        let periods = notes.compactMap { key -> Period? in
+            let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let scope = PeriodScope(rawValue: parts[0]) else { return nil }
+            return Period(key: parts[1], scope: scope, calendar: calendar)
+        }
+        if let open = draft.period, periods.contains(where: { $0.key == open.key && $0.scope == open.scope }) { draft.storedChanged() }
+        if todosChanged { draft.refreshChips() }
+        periods.forEach { mirror?.memoSaved($0) }
+    }
+
+    private func readAfresh() {
         let fresh = ModelContext(container)
         fresh.autosaveEnabled = context.autosaveEnabled
         context = fresh
@@ -78,6 +103,7 @@ final class MemoBook {
             keys.remove(period.key)
         }
         mirror?.memoSaved(period)
+        onLocalChange?()
         return true
     }
 

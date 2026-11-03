@@ -90,14 +90,22 @@ struct MainView: View {
         .task { calendars.startAutoSync() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             memos.draft.flush()
+            DeviceSync.shared.flushOnQuit()
             WidgetRefresh.flush()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             calendars.appBecameActive()
             // A ToDo ticked in a widget.
             memos.reloadIfChangedElsewhere()
+            // Other devices' changes.
+            DeviceSync.shared.appBecameActive()
         }
         .task { SharedSettings.observeDiaryChanges { memos.reloadIfChangedElsewhere(force: true) } }
+        .task {
+            // Not for the snapshot runs, which bring their own books.
+            guard ProcessInfo.processInfo.environment["SIMPLIFY_SNAPSHOT"] == nil else { return }
+            DeviceSync.shared.attach(memos: memos, model: model, calendars: calendars)
+        }
         .onOpenURL { url in
             memos.reloadIfChangedElsewhere()
             model.open(url)

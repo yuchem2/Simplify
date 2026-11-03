@@ -145,6 +145,7 @@ public enum Todos {
     public static func setDone(_ id: UUID, _ isDone: Bool, in context: ModelContext) throws {
         guard let item = try item(id, in: context), item.isDone != isDone else { return }
         item.isDone = isDone
+        item.updatedAt = SyncStamp.after(item.updatedAt)
         try context.save()
     }
 
@@ -153,19 +154,21 @@ public enum Todos {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, let item = try item(id, in: context), item.title != title else { return }
         item.title = title
+        item.updatedAt = SyncStamp.after(item.updatedAt)
         try context.save()
     }
 
     public static func setLabel(_ id: UUID, _ label: Palette?, in context: ModelContext) throws {
         guard let item = try item(id, in: context), item.colorLabel != label?.rawValue else { return }
         item.colorLabel = label?.rawValue
+        item.updatedAt = SyncStamp.after(item.updatedAt)
         try context.save()
     }
 
     /// ⌫ on a row: a link only leaves that period; the ToDo's own row deletes it everywhere.
     public static func remove(_ entry: TodoEntry, in context: ModelContext) throws {
         if let linkID = entry.linkID {
-            try context.fetch(FetchDescriptor<TodoLink>(predicate: #Predicate { $0.id == linkID })).forEach(context.delete)
+            try context.fetch(FetchDescriptor<TodoLink>(predicate: #Predicate { $0.id == linkID })).forEach { deleteLink($0, in: context) }
         } else {
             try delete(entry.todoID, in: context)
         }
@@ -173,8 +176,11 @@ public enum Todos {
     }
 
     public static func delete(_ id: UUID, in context: ModelContext) throws {
-        try context.fetch(FetchDescriptor<TodoItem>(predicate: #Predicate { $0.id == id })).forEach(context.delete)
-        try context.fetch(FetchDescriptor<TodoLink>(predicate: #Predicate { $0.todoID == id })).forEach(context.delete)
+        for item in try context.fetch(FetchDescriptor<TodoItem>(predicate: #Predicate { $0.id == id })) {
+            context.delete(item)
+            SyncStamp.bury(.todo, item.id.uuidString, at: SyncStamp.after(item.updatedAt), in: context)
+        }
+        try context.fetch(FetchDescriptor<TodoLink>(predicate: #Predicate { $0.todoID == id })).forEach { deleteLink($0, in: context) }
         try context.save()
     }
 
@@ -200,23 +206,25 @@ public enum Todos {
         let order = try endOrder(of: target, in: context)
         if let linkID = entry.linkID {
             let link = try context.fetch(FetchDescriptor<TodoLink>(predicate: #Predicate { $0.id == linkID })).first
-            if alreadyThere != nil {
-                link.map(context.delete)
-            } else {
-                link?.scopeRaw = target.scope.rawValue
-                link?.periodKey = target.key
-                link?.order = order
+            if let link, alreadyThere != nil {
+                deleteLink(link, in: context)
+            } else if let link {
+                link.scopeRaw = target.scope.rawValue
+                link.periodKey = target.key
+                link.order = order
+                link.updatedAt = SyncStamp.after(link.updatedAt)
             }
         } else if let item = try item(entry.todoID, in: context) {
             // A link into the target becomes the home itself.
             if let existing = alreadyThere, let linkID = existing.linkID {
-                try context.fetch(FetchDescriptor<TodoLink>(predicate: #Predicate { $0.id == linkID })).forEach(context.delete)
+                try context.fetch(FetchDescriptor<TodoLink>(predicate: #Predicate { $0.id == linkID })).forEach { deleteLink($0, in: context) }
                 item.order = existing.order
             } else {
                 item.order = order
             }
             item.scopeRaw = target.scope.rawValue
             item.periodKey = target.key
+            item.updatedAt = SyncStamp.after(item.updatedAt)
         }
         try context.save()
     }
@@ -255,11 +263,19 @@ public enum Todos {
     }
 
     private static func setOrder(of entry: TodoEntry, to value: Double, in context: ModelContext) throws {
-        if let linkID = entry.linkID {
-            try context.fetch(FetchDescriptor<TodoLink>(predicate: #Predicate { $0.id == linkID })).first?.order = value
-        } else {
-            try item(entry.todoID, in: context)?.order = value
+        if let linkID = entry.linkID, let link = try context.fetch(FetchDescriptor<TodoLink>(predicate: #Predicate { $0.id == linkID })).first {
+            link.order = value
+            link.updatedAt = SyncStamp.after(link.updatedAt)
+        } else if entry.linkID == nil, let item = try item(entry.todoID, in: context) {
+            item.order = value
+            item.updatedAt = SyncStamp.after(item.updatedAt)
         }
+    }
+
+    /// Deletes a link and leaves its tombstone.
+    private static func deleteLink(_ link: TodoLink, in context: ModelContext) {
+        context.delete(link)
+        SyncStamp.bury(.link, link.id.uuidString, at: SyncStamp.after(link.updatedAt), in: context)
     }
 
     private static func items(ids: Set<UUID>, in context: ModelContext) throws -> [UUID: TodoItem] {

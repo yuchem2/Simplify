@@ -60,6 +60,9 @@ targets:
         com.apple.security.automation.apple-events: true
         com.apple.security.temporary-exception.apple-events:
           - com.apple.Notes
+        # 설정 › 일반 › iCloud Drive로 기기끼리 맞추기: the folder picked there, kept across launches.
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.files.bookmarks.app-scope: true
         com.apple.security.application-groups:
           - $(APP_GROUP_ID)
     settings:

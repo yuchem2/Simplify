@@ -29,15 +29,21 @@ public enum Memos {
             break
         case (let note?, nil):
             context.delete(note)
+            SyncStamp.bury(.note, SyncKey.note(scope: period.scope, periodKey: period.key), at: SyncStamp.after(note.updatedAt, now: now), in: context)
         case (nil, let body?):
             let note = DiaryNote(period: period)
             note.body = body
-            note.updatedAt = now
+            // After the period's last deletion, even one stamped ahead by a faster clock elsewhere,
+            // so the new memo is not taken for the deleted one.
+            let key = SyncKey.note(scope: period.scope, periodKey: period.key)
+            let kind = SyncKind.note.rawValue
+            let deleted = try context.fetch(FetchDescriptor<SyncTombstone>(predicate: #Predicate { $0.kindRaw == kind && $0.key == key }))
+            note.updatedAt = deleted.map(\.deletedAt).max().map { SyncStamp.after($0, now: now) } ?? now
             context.insert(note)
         case (let note?, let body?):
             if note.body != body {
                 note.body = body
-                note.updatedAt = now
+                note.updatedAt = SyncStamp.after(note.updatedAt, now: now)
             }
         }
         if context.hasChanges { try context.save() }

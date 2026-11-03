@@ -80,7 +80,7 @@ final class CalendarController {
     /// Ticked-off reminders stay on the calendar, struck through (설정 › 일반). Remembered across launches.
     var showsCompletedReminders: Bool {
         didSet {
-            defaults.set(showsCompletedReminders, forKey: SharedSettings.showsCompletedReminders)
+            SyncedSettings.set(.bool(showsCompletedReminders), forKey: SharedSettings.showsCompletedReminders, in: defaults)
             rebuildSlots()
             WidgetRefresh.request()
         }
@@ -556,7 +556,17 @@ final class CalendarController {
 
     /// The calendar new events start in (설정 › 일반), or nil for the one saved to last.
     var preferredNewEventSource: String? {
-        didSet { defaults.set(preferredNewEventSource, forKey: NewEventCalendar.preferredKey) }
+        didSet { SyncedSettings.set(preferredNewEventSource.map(SettingValue.string), forKey: NewEventCalendar.preferredKey, in: defaults) }
+    }
+
+    /// Another device's settings arrived (`DeviceSync`): reminders, the new event's calendar and
+    /// the calendars' colours as stored now.
+    func takeSyncedSettings() {
+        let completed = defaults.bool(forKey: SharedSettings.showsCompletedReminders)
+        if completed != showsCompletedReminders { showsCompletedReminders = completed }
+        let preferred = defaults.string(forKey: NewEventCalendar.preferredKey)
+        if preferred != preferredNewEventSource { preferredNewEventSource = preferred }
+        reload()
     }
 
     /// The calendar a new event starts in: the one chosen in 설정 while it can still be written,

@@ -96,20 +96,27 @@ public enum CalendarStyles {
         return (try? JSONDecoder().decode([String: CalendarStyle].self, from: data)) ?? [:]
     }
 
-    /// Stores `style` for a calendar; an empty one removes it.
+    /// Stores `style` for a calendar; an empty one removes it. The other devices follow (stage 9).
     public static func set(_ style: CalendarStyle, for sourceID: String, in defaults: UserDefaults) {
         var styles = all(in: defaults)
-        styles[sourceID] = style.isEmpty ? nil : style
+        let kept = style.isEmpty ? nil : style
+        guard styles[sourceID] != kept else { return }
+        styles[sourceID] = kept
         save(styles, in: defaults)
+        SyncedSettings.stamp(SyncedSettings.stylePrefix + sourceID, in: defaults)
     }
 
-    /// Forgets the styles of an account's calendars, when it is disconnected.
+    /// Forgets the styles of an account's calendars, when it is disconnected. Only on this device:
+    /// accounts are each device's own, so another device that still has the account keeps them,
+    /// and they come back here with the next sync, ready for when it is connected again.
     public static func remove(account accountID: String, in defaults: UserDefaults) {
-        let styles = all(in: defaults).filter { !$0.key.hasPrefix(accountID + "|") }
-        save(styles, in: defaults)
+        let styles = all(in: defaults)
+        let gone = styles.keys.filter { $0.hasPrefix(accountID + "|") }
+        save(styles.filter { !gone.contains($0.key) }, in: defaults)
+        SyncedSettings.forgetStamps(gone.map { SyncedSettings.stylePrefix + $0 }, in: defaults)
     }
 
-    private static func save(_ styles: [String: CalendarStyle], in defaults: UserDefaults) {
+    static func save(_ styles: [String: CalendarStyle], in defaults: UserDefaults) {
         if styles.isEmpty { defaults.removeObject(forKey: key) } else { defaults.set(try? JSONEncoder().encode(styles), forKey: key) }
     }
 }

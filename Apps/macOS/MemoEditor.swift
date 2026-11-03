@@ -87,6 +87,25 @@ final class MemoDraft {
         if book.save(text, for: period) { saved = text }
     }
 
+    /// The stored memo changed underneath (another device's text arrived after this box was
+    /// saved): show what is stored. Text added at the end keeps the caret where it was.
+    func storedChanged() {
+        guard let period else { return }
+        let stored = book.text(for: period)
+        isUnreadable = stored == nil
+        let fresh = stored ?? AttributedString()
+        if fresh != text {
+            text.transform(updating: &selection) { text in
+                if fresh.characters.starts(with: text.characters) {
+                    let end = fresh.characters.index(fresh.startIndex, offsetBy: text.characters.count)
+                    text.append(fresh[end...])
+                }
+                if text != fresh { text = fresh }
+            }
+        }
+        saved = text
+    }
+
     // MARK: Formatting
 
     /// Some letters are picked, not just a caret.

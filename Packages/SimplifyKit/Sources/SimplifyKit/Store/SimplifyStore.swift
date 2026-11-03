@@ -13,7 +13,7 @@ public enum SimplifyStore {
     /// The diary store at `url`, or in memory for nil. Older files are brought up to the current
     /// schema on opening.
     static func makeContainer(url: URL?) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: SchemaV2.self)
+        let schema = Schema(versionedSchema: SchemaV3.self)
         let configuration = if let url {
             ModelConfiguration("Diary", schema: schema, url: url, cloudKitDatabase: .none)
         } else {

@@ -61,13 +61,13 @@ final class AppModel {
     /// Timed events in day cells start with their time (설정 › 일반). On unless turned off. Kept in
     /// the App Group's defaults since stage 7; the widgets' cells are too narrow and leave it aside.
     var showsCellTimes = SharedSettings.showsCellTimes(in: SharedSettings.defaults) {
-        didSet { SharedSettings.defaults.set(showsCellTimes, forKey: SharedSettings.showsCellTimes) }
+        didSet { SyncedSettings.set(.bool(showsCellTimes), forKey: SharedSettings.showsCellTimes, in: SharedSettings.defaults) }
     }
 
     /// Calendar marks take their calendar's shape too (설정 › 일반). Off unless turned on; shared with the widgets.
     var showsPatterns = SharedSettings.showsPatterns(in: SharedSettings.defaults) {
         didSet {
-            SharedSettings.defaults.set(showsPatterns, forKey: SharedSettings.showsPatterns)
+            SyncedSettings.set(.bool(showsPatterns), forKey: SharedSettings.showsPatterns, in: SharedSettings.defaults)
             WidgetRefresh.request()
         }
     }
@@ -77,7 +77,7 @@ final class AppModel {
         get { calendar.firstWeekday == WeekStart.monday.rawValue ? .monday : .sunday }
         set {
             guard newValue != weekStart else { return }
-            SharedSettings.defaults.set(newValue.rawValue, forKey: SharedSettings.firstWeekday)
+            SyncedSettings.set(.int(newValue.rawValue), forKey: SharedSettings.firstWeekday, in: SharedSettings.defaults)
             rebuildCalendar()
             WidgetRefresh.request()
         }
@@ -239,6 +239,16 @@ final class AppModel {
     /// Called when the date changes while the app is open.
     func refreshToday(now: Date = .now) {
         today = calendar.startOfDay(for: now)
+    }
+
+    /// Another device's settings arrived (`DeviceSync`): show what is stored now.
+    func takeSyncedSettings() {
+        let defaults = SharedSettings.defaults
+        let times = SharedSettings.showsCellTimes(in: defaults)
+        if times != showsCellTimes { showsCellTimes = times }
+        let patterns = SharedSettings.showsPatterns(in: defaults)
+        if patterns != showsPatterns { showsPatterns = patterns }
+        if SharedSettings.firstWeekday(in: defaults) != calendar.firstWeekday { rebuildCalendar() }
     }
 
     /// Called when the system time zone changes: keeps the same calendar dates (the 26th stays

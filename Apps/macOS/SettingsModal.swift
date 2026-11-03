@@ -209,6 +209,9 @@ struct SettingsModal: View {
             SectionRule("메모").padding(.top, Metrics.spaceM)
             NotesMirrorRow()
 
+            SectionRule("기기").padding(.top, Metrics.spaceM)
+            DeviceSyncRow()
+
             SectionRule("시작").padding(.top, Metrics.spaceM)
             LoginItemRow()
         }

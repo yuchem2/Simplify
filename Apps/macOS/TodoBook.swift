@@ -20,6 +20,8 @@ final class TodoBook {
     /// memo still had focus. Nil puts the pop at the top of the panel.
     @ObservationIgnored var popAnchor: CGRect?
     @ObservationIgnored private var context: ModelContext
+    /// Called after every change, for `DeviceSync`.
+    @ObservationIgnored var onChange: (() -> Void)?
     private static let log = Logger(subsystem: "dev.yoom.simplify", category: "todos")
 
     init(context: ModelContext) {
@@ -117,6 +119,7 @@ final class TodoBook {
         let counts = (try? Todos.remaining(in: context)) ?? remaining
         if counts != remaining { remaining = counts }
         WidgetRefresh.request()
+        onChange?()
     }
 }
 
