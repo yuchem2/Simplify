@@ -58,9 +58,10 @@ final class AppModel {
         }
     }
 
-    /// Timed events in day cells start with their time (설정 › 일반). On unless turned off.
-    var showsCellTimes = UserDefaults.standard.object(forKey: "showsCellTimes") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(showsCellTimes, forKey: "showsCellTimes") }
+    /// Timed events in day cells start with their time (설정 › 일반). On unless turned off. Kept in
+    /// the App Group's defaults since stage 7; the widgets' cells are too narrow and leave it aside.
+    var showsCellTimes = SharedSettings.showsCellTimes(in: SharedSettings.defaults) {
+        didSet { SharedSettings.defaults.set(showsCellTimes, forKey: SharedSettings.showsCellTimes) }
     }
 
     enum CalendarView: String, Hashable, CaseIterable {
@@ -195,6 +196,14 @@ final class AppModel {
 
     func goToToday() {
         select(today)
+    }
+
+    /// A widget was clicked (`simplify://day/…`): that day, in the panel's day page.
+    func open(_ url: URL) {
+        refreshToday()
+        guard !isModalOpen, let day = DayLink.day(from: url, calendar: calendar) else { return }
+        select(day)
+        panelScope = .day
     }
 
     /// Called when the date changes while the app is open.

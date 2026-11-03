@@ -11,6 +11,8 @@ struct SimplifyApp: App {
 
     init() {
         SimplifyFonts.register()
+        // Settings the widgets follow moved to the App Group in stage 7.
+        SharedSettings.migrate(from: .standard, to: SharedSettings.defaults)
         var isSaved = true
         do {
             container = try SimplifyStore.makeContainer()
@@ -40,6 +42,8 @@ struct SimplifyApp: App {
         .windowToolbarStyle(.unified(showsTitle: false))
         // Open the window on every launch, even when restoration finds nothing to bring back.
         .defaultLaunchBehavior(.presented)
+        // Widget links (simplify://day/…) come to this one window.
+        .handlesExternalEvents(matching: [DayLink.scheme])
         .modelContainer(container)
         .commands {
             MemoCommands()

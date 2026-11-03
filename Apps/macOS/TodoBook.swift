@@ -19,12 +19,24 @@ final class TodoBook {
     /// The memo line a memo pop belongs to, in window coordinates (top-left origin), read while the
     /// memo still had focus. Nil puts the pop at the top of the panel.
     @ObservationIgnored var popAnchor: CGRect?
-    @ObservationIgnored private let context: ModelContext
+    @ObservationIgnored private var context: ModelContext
     private static let log = Logger(subsystem: "dev.yoom.simplify", category: "todos")
 
     init(context: ModelContext) {
         self.context = context
         remaining = (try? Todos.remaining(in: context)) ?? [:]
+    }
+
+    /// The store was changed by another process (a widget): read it through `fresh` from now on,
+    /// since a context keeps the values it already loaded.
+    func use(_ fresh: ModelContext) {
+        context = fresh
+        // Pops hold ToDos read through the old context.
+        pop = nil
+        selectedRow = nil
+        revision += 1
+        let counts = (try? Todos.remaining(in: context)) ?? remaining
+        if counts != remaining { remaining = counts }
     }
 
     // MARK: Reading
@@ -104,6 +116,7 @@ final class TodoBook {
         revision += 1
         let counts = (try? Todos.remaining(in: context)) ?? remaining
         if counts != remaining { remaining = counts }
+        WidgetRefresh.request()
     }
 }
 

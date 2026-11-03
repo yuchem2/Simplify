@@ -89,9 +89,17 @@ struct MainView: View {
         .task { calendars.startAutoSync() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             memos.draft.flush()
+            WidgetRefresh.flush()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             calendars.appBecameActive()
+            // A ToDo ticked in a widget.
+            memos.reloadIfChangedElsewhere()
+        }
+        .task { SharedSettings.observeDiaryChanges { memos.reloadIfChangedElsewhere(force: true) } }
+        .onOpenURL { url in
+            memos.reloadIfChangedElsewhere()
+            model.open(url)
         }
         // The day-change notification can arrive off the main thread.
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in
@@ -99,6 +107,7 @@ struct MainView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange).receive(on: RunLoop.main)) { _ in
             model.timeZoneDidChange()
+            WidgetRefresh.request()
         }
         #if DEBUG
         .task { Snapshot.runIfRequested(model: model, calendars: calendars, memos: memos) }

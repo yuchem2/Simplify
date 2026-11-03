@@ -11,7 +11,9 @@ final class MemoBook {
     /// False when the diary store would not open and memos only live in memory this run.
     let isSaved: Bool
     private(set) var keys: Set<String> = []
-    @ObservationIgnored private let context: ModelContext
+    @ObservationIgnored private var context: ModelContext
+    /// The last widget change already read, so coming to the front only rereads after a new one.
+    @ObservationIgnored private var seenOutsideChange: Date?
     /// Held so an in-memory store (tests, snapshots) lives as long as the book.
     @ObservationIgnored private let container: ModelContainer
     /// The panel's memo box; one window, one box.
@@ -25,6 +27,21 @@ final class MemoBook {
         self.isSaved = isSaved
         todos = TodoBook(context: context)
         keys = (try? Memos.keys(in: context)) ?? []
+        seenOutsideChange = SharedSettings.diaryChangedAt(in: SharedSettings.defaults)
+    }
+
+    /// A widget ticked a ToDo since the last look: read the store afresh. Memo letters not yet
+    /// saved stay in the box; they are saved through the new context. `force` skips the check, for
+    /// the widget's own notice, which can arrive before its note in the shared defaults does.
+    func reloadIfChangedElsewhere(force: Bool = false) {
+        let changed = SharedSettings.diaryChangedAt(in: SharedSettings.defaults)
+        guard force || changed != seenOutsideChange else { return }
+        seenOutsideChange = changed
+        let fresh = ModelContext(container)
+        fresh.autosaveEnabled = context.autosaveEnabled
+        context = fresh
+        todos.use(fresh)
+        keys = (try? Memos.keys(in: fresh)) ?? keys
     }
 
     func has(_ period: Period) -> Bool {

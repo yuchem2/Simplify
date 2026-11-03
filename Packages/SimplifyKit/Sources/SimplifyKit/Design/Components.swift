@@ -737,14 +737,17 @@ public extension View {
 /// The small widget's date: a filled oval in the nest tone with today's number in the display face.
 public struct DateOval: View {
     var day: Int
+    var fill: Color
 
-    public init(day: Int) {
+    /// `fill` changes only where the system draws the widget in one tone (accented, vibrant).
+    public init(day: Int, fill: Color = .widgetNest) {
         self.day = day
+        self.fill = fill
     }
 
     public var body: some View {
         ZStack {
-            Ellipse().fill(.widgetNest).frame(width: 76, height: 62)
+            Ellipse().fill(fill).frame(width: 76, height: 62)
             Text("\(day)").textStyle(.bigDate)
         }
         .frame(width: 84, height: 72)

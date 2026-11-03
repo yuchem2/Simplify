@@ -56,8 +56,12 @@ final class CalendarController {
         case failed(String)
     }
 
-    private(set) var accounts: [Account] = []
-    private(set) var sources: [String: Source] = [:]
+    private(set) var accounts: [Account] = [] {
+        didSet { if accounts.isEmpty != oldValue.isEmpty { WidgetRefresh.request() } }
+    }
+    private(set) var sources: [String: Source] = [:] {
+        didSet { if sources != oldValue { WidgetRefresh.request() } }
+    }
     private(set) var status: Status = .noAccounts
     private(set) var addState: AddState = .idle
     /// The kind of account `addState` is about.
@@ -65,8 +69,9 @@ final class CalendarController {
     /// Ticked-off reminders stay on the calendar, struck through (설정 › 일반). Remembered across launches.
     var showsCompletedReminders: Bool {
         didSet {
-            defaults.set(showsCompletedReminders, forKey: "showsCompletedReminders")
+            defaults.set(showsCompletedReminders, forKey: SharedSettings.showsCompletedReminders)
             rebuildSlots()
+            WidgetRefresh.request()
         }
     }
     /// Occurrences overlapping the days on screen, and the same by day.
@@ -109,7 +114,11 @@ final class CalendarController {
     private var shownDays: [Date] = []
     /// The visible calendars' events with unsent changes on top; a month change only re-expands them.
     private var snapshots: [EventSnapshot] = [] {
-        didSet { snapshotsByID = Dictionary(snapshots.map { ($0.id, $0) }) { first, _ in first } }
+        didSet {
+            snapshotsByID = Dictionary(snapshots.map { ($0.id, $0) }) { first, _ in first }
+            // The widgets read the same cache and unsent changes; a sync that changed nothing leaves them be.
+            if snapshots != oldValue { WidgetRefresh.request() }
+        }
     }
     private var snapshotsByID: [String: EventSnapshot] = [:]
     /// The same, as the cache has them.
@@ -129,14 +138,15 @@ final class CalendarController {
     /// Kept so "다시 시도" after a failed reconnect signs in to the same account.
     private var lastLoginHint: String?
 
+    /// Shared with the widgets (App Group), so they follow the same setting.
     private let defaults: UserDefaults
 
     init(container: ModelContainer, calendar: Calendar, tokens: TokenStore = KeychainTokenStore(),
-         credentials: CalDAVCredentialStore = KeychainCredentialStore(), defaults: UserDefaults = .standard,
+         credentials: CalDAVCredentialStore = KeychainCredentialStore(), defaults: UserDefaults = SharedSettings.defaults,
          writer: EventWriter = EventWriter()) {
         self.defaults = defaults
         self.writer = writer
-        showsCompletedReminders = defaults.bool(forKey: "showsCompletedReminders")
+        showsCompletedReminders = defaults.bool(forKey: SharedSettings.showsCompletedReminders)
         self.container = container
         self.calendar = calendar
         self.tokens = tokens
@@ -305,6 +315,8 @@ final class CalendarController {
             remindersSyncPending = false
             await sync(account.id)
             reload()
+            // A reminder ticked here was already drawn before the cache had it; the widgets read the cache.
+            WidgetRefresh.request()
         }
     }
 

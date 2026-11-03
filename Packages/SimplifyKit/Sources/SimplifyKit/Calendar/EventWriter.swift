@@ -37,6 +37,13 @@ public actor EventWriter {
         }
     }
 
+    /// The queue as saved, for readers outside the app (widgets). Leaves an unreadable file alone.
+    public static func storedWrites(fileURL: URL? = nil) -> [PendingWrite] {
+        guard let url = fileURL ?? (try? SimplifyStore.storeURL(named: "PendingWrites.json")),
+              let data = try? Data(contentsOf: url) else { return [] }
+        return (try? JSONDecoder().decode([PendingWrite].self, from: data)) ?? []
+    }
+
     public func create(_ draft: EventDraft, in source: RemoteCalendar.Reference, accountID: String,
                        provider: any CalendarProvider, calendar: Calendar) async throws -> Outcome {
         await acquire(accountID)

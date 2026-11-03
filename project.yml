@@ -14,7 +14,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    CURRENT_PROJECT_VERSION: "3"
     CODE_SIGN_STYLE: Automatic
     # Personal Team (Xcode › Settings › Accounts)
     DEVELOPMENT_TEAM: RCKK92UBYM
@@ -44,6 +44,10 @@ targets:
         SimplifyAppGroup: $(APP_GROUP_ID)
         GoogleClientID: $(GOOGLE_CLIENT_ID)
         NSRemindersFullAccessUsageDescription: 마감일이 있는 미리알림을 달력에 보여 주려고 해요.
+        # simplify://day/yyyy-MM-dd opens that day; the widgets link to it.
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.yoom.simplify.day
+            CFBundleURLSchemes: [simplify]
     entitlements:
       path: Apps/macOS/Simplify.entitlements
       properties:

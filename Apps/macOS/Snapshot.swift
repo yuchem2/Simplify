@@ -2,6 +2,7 @@
 import AppKit
 import SwiftData
 import SwiftUI
+import WidgetKit
 import SimplifyKit
 
 /// Debug-only: renders the main window to PNGs and quits, for checking the layout without
@@ -61,6 +62,7 @@ enum Snapshot {
             renderMemos(model: model, calendars: shown)
             renderTodos(model: model, calendars: shown)
             renderComponents()
+            renderWidgets(model: model)
         }
         NSApp.terminate(nil)
     }
@@ -322,6 +324,66 @@ enum Snapshot {
         let size = CGSize(width: 960, height: 520)
         render(gallery, name: "components", appearance: .aqua, scheme: .light, size: size)
         render(gallery, name: "components-dark", appearance: .darkAqua, scheme: .dark, size: size)
+    }
+
+    /// The three widgets on a desk, in each way the system draws them, plus empty states and a ticked ToDo.
+    /// One-tone modes are drawn with the widgets' own one-tone colours over a tinted desk; the system's
+    /// own tinting of accented parts is not reproduced.
+    private static func renderWidgets(model: AppModel) {
+        let calendar = model.calendar
+        let now = calendar.date(byAdding: DateComponents(hour: 13, minute: 20), to: model.today)!
+        let sample = WidgetData.sample(now: now, calendar: calendar)
+        var ticked = sample
+        let key = DayKey.key(now, calendar: calendar)
+        ticked.todos?[key]?[0].isDone = true
+        func moment(_ data: WidgetData) -> WidgetMoment { WidgetMoment(data: data, date: now, calendar: calendar) }
+        func surface(_ view: some View, mode: WidgetRenderingMode) -> some View {
+            view.background(mode == .fullColor ? AnyShapeStyle(Color.widgetSurface) : AnyShapeStyle(.white.opacity(0.16)),
+                            in: RoundedRectangle(cornerRadius: Metrics.radiusWidget, style: .continuous))
+        }
+        // The sizes this Mac gives the widgets (chronod's log); other screens may give a little more.
+        // The extra-large one is 704 × 344 here.
+        func set(_ data: WidgetData, mode: WidgetRenderingMode, sizes: [Int] = [0, 1, 2]) -> some View {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .top, spacing: 20) {
+                    if sizes.contains(0) { surface(SmallWidgetView(moment(data), renderingMode: mode).frame(width: 164, height: 164), mode: mode) }
+                    if sizes.contains(1) { surface(MediumWidgetView(moment(data), renderingMode: mode).frame(width: 344, height: 164), mode: mode) }
+                }
+                if sizes.contains(2) {
+                    surface(ExtraLargeWidgetView(moment(data), renderingMode: mode, linksDays: false).frame(width: 704, height: 344), mode: mode)
+                }
+            }
+        }
+        func desk(_ content: some View, tint: [Color]? = nil) -> some View {
+            content.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(tint.map { AnyShapeStyle(LinearGradient(colors: $0, startPoint: .topLeading, endPoint: .bottomTrailing)) }
+                            ?? AnyShapeStyle(Color.wall))
+        }
+        let size = CGSize(width: 752, height: 600)
+        render(desk(set(sample, mode: .fullColor)), name: "widgets-light", appearance: .aqua, scheme: .light, size: size)
+        render(desk(set(sample, mode: .fullColor)), name: "widgets-dark", appearance: .darkAqua, scheme: .dark, size: size)
+        render(desk(set(sample, mode: .accented), tint: [Color(red: 0.24, green: 0.37, blue: 0.61), Color(red: 0.17, green: 0.25, blue: 0.4)]),
+               name: "widgets-accented", appearance: .darkAqua, scheme: .dark, size: size)
+        render(desk(set(sample, mode: .vibrant), tint: [Color(red: 0.42, green: 0.35, blue: 0.29), Color(red: 0.14, green: 0.16, blue: 0.17)]),
+               name: "widgets-vibrant", appearance: .darkAqua, scheme: .dark, size: size)
+        render(desk(set(ticked, mode: .fullColor, sizes: [2])), name: "widgets-ticked", appearance: .aqua, scheme: .light,
+               size: CGSize(width: 752, height: 392))
+        var noEvents = sample
+        noEvents.events = noEvents.events.filter { !calendar.isDate($0.start, inSameDayAs: now) }
+        noEvents.todos = [:]
+        let empties = VStack(alignment: .leading, spacing: 20) {
+            set(WidgetData(state: .noAccounts, todos: sample.todos), mode: .fullColor)
+            set(noEvents, mode: .fullColor, sizes: [0, 1])
+            set(WidgetData(state: .unavailable, todos: nil), mode: .fullColor, sizes: [0, 1])
+        }
+        render(desk(empties), name: "widgets-empty", appearance: .aqua, scheme: .light, size: CGSize(width: 752, height: 1000))
+        // A month of six weeks (August 2026) leaves the ledger its smallest rows.
+        let august = calendar.date(from: DateComponents(year: 2026, month: 8, day: 12, hour: 13, minute: 20))!
+        render(desk(ExtraLargeWidgetView(WidgetMoment(data: .sample(now: august, calendar: calendar), date: august, calendar: calendar),
+                                         renderingMode: .fullColor, linksDays: false)
+                        .frame(width: 704, height: 344).widgetSurface()),
+               name: "widgets-six-weeks", appearance: .aqua, scheme: .light, size: CGSize(width: 752, height: 392))
+        render(desk(empties), name: "widgets-empty-dark", appearance: .darkAqua, scheme: .dark, size: CGSize(width: 752, height: 1000))
     }
 
     private static func render(_ view: some View, name: String, appearance: NSAppearance.Name, scheme: ColorScheme, size: CGSize = CGSize(width: 1260, height: 800)) {
