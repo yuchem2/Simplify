@@ -35,6 +35,8 @@
 	<string>$(GOOGLE_CLIENT_ID)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Simplify에 쓴 메모를 메모 앱의 Simplify 폴더에도 같은 내용으로 써 두려고 해요.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>마감일이 있는 미리알림을 달력에 보여 주려고 해요.</string>
 	<key>SimplifyAppGroup</key>

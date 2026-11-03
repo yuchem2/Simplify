@@ -20,14 +20,18 @@ final class MemoBook {
     @ObservationIgnored private(set) lazy var draft = MemoDraft(book: self)
     /// The ToDos, kept in the same store; memo chips stand for them.
     let todos: TodoBook
+    /// Copies saved memos into the 메모 app; nil for books that are not the app's own.
+    @ObservationIgnored private let mirror: NotesMirror?
 
-    init(container: ModelContainer, isSaved: Bool) {
+    init(container: ModelContainer, isSaved: Bool, mirror: NotesMirror? = nil) {
         self.container = container
         context = container.mainContext
         self.isSaved = isSaved
+        self.mirror = mirror
         todos = TodoBook(context: context)
         keys = (try? Memos.keys(in: context)) ?? []
         seenOutsideChange = SharedSettings.diaryChangedAt(in: SharedSettings.defaults)
+        mirror?.book = self
     }
 
     /// A widget ticked a ToDo since the last look: read the store afresh. Memo letters not yet
@@ -54,6 +58,16 @@ final class MemoBook {
         return MemoText.decodeIfReadable(note.body)
     }
 
+    /// Like `text(for:)`, but also nil when the store cannot be read, for the 메모 app's copy,
+    /// which a passing read error must not delete.
+    func storedText(for period: Period) -> AttributedString? {
+        do {
+            return MemoText.decodeIfReadable(try Memos.note(for: period, in: context)?.body)
+        } catch {
+            return nil
+        }
+    }
+
     /// False when the store refused the write; the editor keeps the text and tries again.
     func save(_ text: AttributedString, for period: Period) -> Bool {
         guard let hasMemo = try? Memos.save(text, for: period, in: context) else { return false }
@@ -63,7 +77,14 @@ final class MemoBook {
         } else if !hasMemo, keys.contains(period.key) {
             keys.remove(period.key)
         }
+        mirror?.memoSaved(period)
         return true
+    }
+
+    /// Every period with a memo, for 지금 모두 보내기.
+    func periodsWithMemos(calendar: Calendar = .simplify) -> [Period] {
+        let notes = (try? context.fetch(FetchDescriptor<DiaryNote>())) ?? []
+        return notes.compactMap { Period(key: $0.periodKey, scope: $0.scope, calendar: calendar) }
     }
 
     /// The stored note's id, for a ToDo made from it.

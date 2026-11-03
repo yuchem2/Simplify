@@ -44,6 +44,7 @@ targets:
         SimplifyAppGroup: $(APP_GROUP_ID)
         GoogleClientID: $(GOOGLE_CLIENT_ID)
         NSRemindersFullAccessUsageDescription: 마감일이 있는 미리알림을 달력에 보여 주려고 해요.
+        NSAppleEventsUsageDescription: Simplify에 쓴 메모를 메모 앱의 Simplify 폴더에도 같은 내용으로 써 두려고 해요.
         # simplify://day/yyyy-MM-dd opens that day; the widgets link to it.
         CFBundleURLTypes:
           - CFBundleURLName: dev.yoom.simplify.day
@@ -55,6 +56,10 @@ targets:
         com.apple.security.network.client: true
         # EventKit (the Mac's reminders) inside the sandbox and the hardened runtime.
         com.apple.security.personal-information.calendars: true
+        # 설정 › 일반 › Apple 메모에도 쓰기: AppleScript to the 메모 app only.
+        com.apple.security.automation.apple-events: true
+        com.apple.security.temporary-exception.apple-events:
+          - com.apple.Notes
         com.apple.security.application-groups:
           - $(APP_GROUP_ID)
     settings:

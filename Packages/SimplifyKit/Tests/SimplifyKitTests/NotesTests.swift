@@ -1,0 +1,131 @@
+import Foundation
+import Testing
+@testable import SimplifyKit
+
+/// Copies of memos in the 메모 app: names, the HTML body, and what this Mac remembers about them.
+struct NotesTests {
+    private let calendar = Calendar.simplify(firstWeekday: 1)
+
+    private func styled(_ string: String, _ build: (inout AttributeContainer) -> Void = { _ in }) -> AttributedString {
+        var container = AttributeContainer()
+        build(&container)
+        return AttributedString(string, attributes: container)
+    }
+
+    private func date(_ y: Int, _ m: Int, _ d: Int) -> Date {
+        calendar.date(from: DateComponents(year: y, month: m, day: d))!
+    }
+
+    /// The body's lines after the name.
+    private func lines(_ text: AttributedString) throws -> [String] {
+        Array(try #require(NotesHTML.body(name: "이름", text: text)).components(separatedBy: "\n").dropFirst())
+    }
+
+    @Test func notesAreNamedAfterTheirPeriod() {
+        let day = date(2026, 11, 3)
+        #expect(NotesHTML.noteName(for: Period(containing: day, scope: .day, calendar: calendar)) == "2026년 11월 3일 (화)")
+        #expect(NotesHTML.noteName(for: Period(containing: day, scope: .week, calendar: calendar)) == "2026년 11월 1주차 (11.1 – 11.7)")
+        #expect(NotesHTML.noteName(for: Period(containing: day, scope: .month, calendar: calendar)) == "2026년 11월")
+        // Monday weeks: the week holding 3 November starts on the 2nd.
+        let monday = Calendar.simplify(firstWeekday: 2)
+        #expect(NotesHTML.noteName(for: Period(containing: day, scope: .week, calendar: monday)) == "2026년 11월 1주차 (11.2 – 11.8)")
+        // A week across the year end takes the year of the month it is named after.
+        #expect(NotesHTML.noteName(for: Period(containing: date(2027, 1, 1), scope: .week, calendar: calendar)) == "2026년 12월 4주차 (12.27 – 1.2)")
+    }
+
+    @Test func theNameIsTheFirstLineAndEachLineItsOwnDiv() throws {
+        let html = try #require(NotesHTML.body(name: "2026년 11월", text: styled("장보기\n\n우유")))
+        #expect(html == "<div><h1>2026년 11월</h1></div>\n<div>장보기</div>\n<div><br></div>\n<div>우유</div>")
+    }
+
+    @Test func blankMemosHaveNoBody() {
+        #expect(NotesHTML.body(name: "이름", text: AttributedString()) == nil)
+        #expect(NotesHTML.body(name: "이름", text: styled(" \n\n  ")) == nil)
+    }
+
+    @Test func blankLinesAroundTheMemoAreDropped() throws {
+        #expect(try lines(styled("\n\n할 일\n\n")) == ["<div>할 일</div>"])
+    }
+
+    @Test func eachFormattingHasItsTag() throws {
+        #expect(try lines(styled("굵게") { $0[MemoAttributes.Bold.self] = true }) == ["<div><b>굵게</b></div>"])
+        #expect(try lines(styled("기울임") { $0[MemoAttributes.Italic.self] = true }) == ["<div><i>기울임</i></div>"])
+        #expect(try lines(styled("2") { $0[MemoAttributes.Script.self] = .raised }) == ["<div><sup>2</sup></div>"])
+        #expect(try lines(styled("0") { $0[MemoAttributes.Script.self] = .lowered }) == ["<div><sub>0</sub></div>"])
+        #expect(try lines(styled("let x = 1") { $0[MemoAttributes.Code.self] = true }) == ["<div><tt>let x = 1</tt></div>"])
+        #expect(try lines(styled("E=mc") { $0[MemoAttributes.Math.self] = true }) == ["<div><i>E=mc</i></div>"])
+        #expect(try lines(styled("빨강") { $0[MemoAttributes.Ink.self] = .red }) == ["<div><span style=\"color: #b3332a\">빨강</span></div>"])
+        #expect(try lines(styled("노랑") { $0[MemoAttributes.Highlight.self] = .yellow })
+            == ["<div><span style=\"background-color: #faf0c4\">노랑</span></div>"])
+    }
+
+    @Test func formattingStacksAndMixesWithinALine() throws {
+        var text = styled("견적서") { $0[MemoAttributes.Bold.self] = true; $0[MemoAttributes.Italic.self] = true; $0[MemoAttributes.Ink.self] = .blue; $0[MemoAttributes.Highlight.self] = .pink }
+        text += styled(" 보내기")
+        #expect(try lines(text) == ["<div><span style=\"color: #2a5fc4; background-color: #f9e0e9\"><b><i>견적서</i></b></span> 보내기</div>"])
+    }
+
+    @Test func formattingCarriesAcrossLineBreaks() throws {
+        let text = styled("첫 줄\n둘째 줄") { $0[MemoAttributes.Bold.self] = true }
+        #expect(try lines(text) == ["<div><b>첫 줄</b></div>", "<div><b>둘째 줄</b></div>"])
+    }
+
+    @Test func codeBlocksTakeNoHighlighter() throws {
+        let text = styled("x") { $0[MemoAttributes.Code.self] = true; $0[MemoAttributes.Highlight.self] = .green }
+        #expect(try lines(text) == ["<div><tt>x</tt></div>"])
+    }
+
+    @Test func todoChipsBecomeBoxLetters() throws {
+        let id = UUID()
+        var text = styled("오늘 ")
+        text += MemoChips.chip(id: id, title: "견적서 보내기", isDone: false)
+        text += styled("\n")
+        text += MemoChips.chip(id: UUID(), title: "장보기", isDone: true)
+        #expect(try lines(text) == ["<div>오늘 ☐ 견적서 보내기</div>", "<div>☑ 장보기</div>"])
+    }
+
+    @Test func lettersAreEscaped() throws {
+        let text = styled("<script>alert(\"x\" & 'y')</script>")
+        #expect(try lines(text) == ["<div>&lt;script&gt;alert(&quot;x&quot; &amp; &#39;y&#39;)&lt;/script&gt;</div>"])
+        let named = try #require(NotesHTML.body(name: "<b>&", text: styled("a")))
+        #expect(named.hasPrefix("<div><h1>&lt;b&gt;&amp;</h1></div>"))
+    }
+
+    @Test func indentsAndRunsOfSpacesSurvive() throws {
+        #expect(try lines(styled("  a  b")) == ["<div>&nbsp;&nbsp;a &nbsp;b</div>"])
+        // A space ending one run and starting the next still counts as a run of spaces.
+        var text = styled("a ") { $0[MemoAttributes.Bold.self] = true }
+        text += styled(" b")
+        #expect(try lines(text) == ["<div><b>a </b>&nbsp;b</div>"])
+    }
+
+    /// The colours written into notes are the palette's light values in `design/tokens.json`.
+    @Test func coloursMatchTheDesignTokens() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appending(path: "../../../../design/tokens.json").standardized
+        // Aliases (`"value": "ink"`) have no light value of their own and are skipped.
+        let json = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let tokens = try #require((json["color"] as? [String: Any])?["tokens"] as? [[String: Any]])
+        var light: [String: String] = [:]
+        for token in tokens {
+            if let name = token["name"] as? String, let value = (token["value"] as? [String: Any])?["light"] as? String {
+                light[name] = value.lowercased()
+            }
+        }
+        for palette in Palette.allCases {
+            #expect(NotesHTML.lightInk(palette) == light["\(palette.rawValue)-ink"], "\(palette)")
+            #expect(NotesHTML.lightTint(palette) == light["\(palette.rawValue)-tint"], "\(palette)")
+        }
+    }
+
+    @Test func idsAndPendingKeysAreKeptPerMac() throws {
+        let defaults = try #require(UserDefaults(suiteName: "NotesTests-\(UUID())"))
+        #expect(SharedSettings.notesNoteIDs(in: defaults).isEmpty)
+        #expect(SharedSettings.notesPending(in: defaults).isEmpty)
+        SharedSettings.setNotesNoteIDs(["2026-11-03": "x-coredata://note/p1"], in: defaults)
+        SharedSettings.setNotesPending(["2026-11", "2026-W45"], in: defaults)
+        #expect(SharedSettings.notesNoteIDs(in: defaults) == ["2026-11-03": "x-coredata://note/p1"])
+        #expect(SharedSettings.notesPending(in: defaults) == ["2026-11", "2026-W45"])
+        #expect(defaults.bool(forKey: SharedSettings.mirrorsToNotes) == false)
+    }
+}

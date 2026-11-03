@@ -13,6 +13,13 @@ public enum SharedSettings {
     public static let showsPatterns = "showsPalettePatterns"
     /// The weekday weeks start on, as `Calendar.firstWeekday`: 1 Sunday (the default) or 2 Monday (stage 8).
     public static let firstWeekday = "firstWeekday"
+    /// Memos are copied into the 메모 app's "Simplify" folder as they are saved. Off unless turned on.
+    /// This Mac's own choice, like the two below: another Mac keeps its own.
+    public static let mirrorsToNotes = "mirrorsToNotes"
+    /// Each period key's note id in this Mac's 메모 app, so its copy is found again even renamed.
+    static let notesNoteIDs = "notesNoteIDs"
+    /// Period keys whose copy has not reached the 메모 app yet.
+    static let notesPending = "notesPending"
     /// When a widget last changed the diary store, so the app knows to read it again.
     static let diaryChangedAt = "diaryChangedAt"
 
@@ -44,6 +51,24 @@ public enum SharedSettings {
     /// Sunday unless Monday was chosen; anything else stored there reads as Sunday.
     public static func firstWeekday(in defaults: UserDefaults) -> Int {
         defaults.integer(forKey: firstWeekday) == 2 ? 2 : 1
+    }
+
+    // MARK: Copies in the 메모 app
+
+    public static func notesNoteIDs(in defaults: UserDefaults) -> [String: String] {
+        defaults.dictionary(forKey: notesNoteIDs) as? [String: String] ?? [:]
+    }
+
+    public static func setNotesNoteIDs(_ ids: [String: String], in defaults: UserDefaults) {
+        defaults.set(ids, forKey: notesNoteIDs)
+    }
+
+    public static func notesPending(in defaults: UserDefaults) -> Set<String> {
+        Set(defaults.stringArray(forKey: notesPending) ?? [])
+    }
+
+    public static func setNotesPending(_ keys: Set<String>, in defaults: UserDefaults) {
+        defaults.set(keys.sorted(), forKey: notesPending)
     }
 
     // MARK: Diary changes from widgets

@@ -22,7 +22,7 @@ struct SimplifyApp: App {
             container = try! SimplifyStore.makeContainer(inMemory: true)
             isSaved = false
         }
-        _memos = State(initialValue: MemoBook(container: container, isSaved: isSaved))
+        _memos = State(initialValue: MemoBook(container: container, isSaved: isSaved, mirror: isSaved ? .shared : nil))
         let cache = SimplifyStore.openCache()
         let model = AppModel()
         _model = State(initialValue: model)

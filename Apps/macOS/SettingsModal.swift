@@ -206,6 +206,9 @@ struct SettingsModal: View {
             }
             .toggleStyle(DrawnCheckboxStyle())
 
+            SectionRule("메모").padding(.top, Metrics.spaceM)
+            NotesMirrorRow()
+
             SectionRule("시작").padding(.top, Metrics.spaceM)
             LoginItemRow()
         }
@@ -1002,6 +1005,47 @@ private struct LoginItemRow: View {
             failure = on ? "로그인 항목에 넣지 못했어요. 시스템 설정 › 일반 › 로그인 항목에서 넣어 주세요." : "로그인 항목에서 빼지 못했어요."
         }
         status = SMAppService.mainApp.status
+    }
+}
+
+/// 설정 › 일반 › 메모: copies of memos in the 메모 app's Simplify folder (`NotesMirror`).
+private struct NotesMirrorRow: View {
+    @Bindable private var mirror = NotesMirror.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Metrics.spaceS) {
+            HStack(spacing: Metrics.spaceL) {
+                Toggle(isOn: $mirror.isOn) {
+                    VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
+                        Text("Apple 메모에도 쓰기").textStyle(.item)
+                        Text("메모를 저장할 때마다 메모 앱의 Simplify 폴더에 같은 내용을 써요. 메모 앱에서 고친 내용은 다음에 쓸 때 덮어써요.")
+                            .textStyle(.small)
+                            .foregroundStyle(.inkSoft)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(DrawnCheckboxStyle())
+                Spacer()
+                Button("지금 모두 보내기") { mirror.sendAll() }
+                    .buttonStyle(DrawnButtonStyle())
+                    .disabled(!mirror.isOn || mirror.status == .sending)
+            }
+            if mirror.isOn, let note {
+                Label(note, systemImage: "exclamationmark.triangle")
+                    .textStyle(.small)
+                    .foregroundStyle(Tokens.error)
+                    // Under the label's words, past the checkbox.
+                    .padding(.leading, 16 + Metrics.spaceM)
+            }
+        }
+    }
+
+    private var note: String? {
+        switch mirror.status {
+        case .denied: "시스템 설정 › 개인정보 보호 및 보안 › 자동화에서 허락해 주세요."
+        case .failed: "메모 앱에 쓰지 못했어요. 다음에 다시 써 볼게요."
+        case .idle, .sending: nil
+        }
     }
 }
 
