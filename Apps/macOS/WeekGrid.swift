@@ -50,7 +50,7 @@ struct WeekGrid: View {
         .frame(minWidth: MonthSheet.minCellSize.width * 7, minHeight: MonthSheet.minCellSize.height * 6)
         .padding(.horizontal, Metrics.spaceXxl)
         .padding(.bottom, Metrics.spaceXxl)
-        .calendarKeys(model: model, calendars: calendars, focused: $focused)
+        .calendarKeys(model: model, calendars: calendars, focused: $focused, leavesFocus: memos.draft.hasFocus)
     }
 
     static func weekdayName(_ day: Date, calendar: Calendar) -> String {

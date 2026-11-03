@@ -20,8 +20,14 @@ final class MemoDraft {
     /// The click that last ticked a chip, so one click ticks once and a double-click whose first
     /// click already ticked does not tick back.
     @ObservationIgnored var tickedByClick: (id: UUID, at: TimeInterval)?
-    /// The box has keyboard focus; ⌘⇧T is caught only then.
-    @ObservationIgnored var hasFocus = false
+    /// The memo has keyboard focus; ⌘⇧T and ⌃⌘T are caught only then, and its section rule thickens.
+    var hasFocus = false
+    /// The day chosen in the calendar: a week or month memo's timeline line names it when today is
+    /// outside the memo's period.
+    @ObservationIgnored var chosenDay: Date?
+    /// Draws the rules and timeline lines again after the letters, the caret or the focus changed;
+    /// set by `MemoMenuHost`, which can reach the text view.
+    @ObservationIgnored var redrawLines: (() -> Void)?
     /// The part of the box the panel shows, in window coordinates (top-left origin), as SwiftUI
     /// lays it out. Right-clicks and clicks are judged against it.
     @ObservationIgnored var visibleBox: CGRect = .null
@@ -254,7 +260,10 @@ final class MemoDraft {
 enum MemoStyle {
     static let size: CGFloat = TextStyle.memo.size
     static let lineHeight: CGFloat = TextStyle.memo.lineHeight
-    static let boxHeight: CGFloat = 170
+    /// The memo's least height, when the panel has less left for it.
+    static let minHeight: CGFloat = 170
+    /// The longest line, so a wide panel's memo still reads as a column.
+    static let measure: CGFloat = 760
     /// Where the text view draws its first letter inside its own frame; the placeholder and the
     /// snapshot's text sit that much further in, so they line up with typed text.
     static let textViewInset = CGSize(width: 5, height: 4)
@@ -386,35 +395,41 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
     }
 }
 
-/// The memo box: a fixed 170 pt box that scrolls inside itself, with the format bar over or
-/// under it while letters are picked.
+/// The memo, written straight on the panel's paper under its section rule: no box, the text's left
+/// edge on the rule's, lines no longer than `MemoStyle.measure`. It fills `height` (what the panel
+/// has left) and scrolls inside itself; the format bar shows over or under the picked line while
+/// letters are picked. Keyboard focus shows as the caret and the section rule's spine weight.
 struct MemoEditor: View {
     @Bindable var draft: MemoDraft
     let period: Period
+    /// The day chosen in the calendar, for the date a week or month memo's timeline line names.
+    let chosenDay: Date
+    let height: CGFloat
     /// The section name, for VoiceOver.
     let title: String
     let placeholder: String
     @FocusState private var focused: Bool
     @Environment(\.isRenderingSnapshot) private var isRenderingSnapshot
     @Environment(\.undoManager) private var undoManager
-    /// The box's top within the panel's scroll view, to put the bar where it fits.
+    /// The memo's top within the panel's scroll view, to put the bar where it fits.
     @State private var top: CGFloat = 0
-    /// The selected line in the box, for putting the bar beside it.
+    /// The selected line in the memo, for putting the bar beside it.
     @State private var line: CGRect?
-    @State private var hovering = false
 
+    /// Where typed letters start: the text view's own inset is taken back on the left, so the
+    /// first letter stands on the section rule's edge.
     private var textInset: EdgeInsets {
-        EdgeInsets(top: Metrics.spaceS + MemoStyle.textViewInset.height, leading: Metrics.spaceM + MemoStyle.textViewInset.width,
-                   bottom: Metrics.spaceS + MemoStyle.textViewInset.height, trailing: Metrics.spaceM + MemoStyle.textViewInset.width)
+        EdgeInsets(top: MemoStyle.textViewInset.height, leading: 0, bottom: MemoStyle.textViewInset.height, trailing: 0)
     }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             if isRenderingSnapshot {
                 // ImageRenderer cannot draw the AppKit text view.
-                Text(MemoStyle.rendered(draft.text))
-                    .lineHeight(.exact(points: MemoStyle.lineHeight))
+                MemoPrint(text: draft.text)
                     .padding(textInset)
+                    .frame(maxHeight: .infinity, alignment: .topLeading)
+                    .clipped()
             } else {
                 TextEditor(text: $draft.text, selection: $draft.selection)
                     .attributedTextFormattingDefinition(MemoFormatting())
@@ -424,8 +439,9 @@ struct MemoEditor: View {
                     .scrollContentBackground(.hidden)
                     .focused($focused)
                     .disabled(draft.isUnreadable)
-                    .padding(.horizontal, Metrics.spaceM)
-                    .padding(.vertical, Metrics.spaceS)
+                    .padding(.leading, -MemoStyle.textViewInset.width)
+                    // On the text view itself: it takes the whole width it is offered otherwise.
+                    .frame(maxWidth: MemoStyle.measure, alignment: .leading)
                     .accessibilityLabel(title)
                     .accessibilityHint(placeholder)
                     .accessibilityAction(.showMenu) { draft.showMenu?() }
@@ -440,34 +456,35 @@ struct MemoEditor: View {
                     .accessibilityHidden(true)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: MemoStyle.boxHeight, maxHeight: MemoStyle.boxHeight, alignment: .topLeading)
-        .clipped()
+        .frame(maxWidth: MemoStyle.measure, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .topLeading)
+        // Past the end of the lines, or beside a short memo in a wide panel: still the memo.
+        .contentShape(Rectangle())
+        .onTapGesture { if !draft.isUnreadable { focused = true } }
         .background { if !isRenderingSnapshot { MemoMenuHost(draft: draft) } }
-        .background(hovering && !focused && !draft.isUnreadable ? Color.hover : Color.paper)
-        .onHover { hovering = $0 }
         .onGeometryChange(for: CGRect.self) { proxy in
             let local = CGRect(origin: .zero, size: proxy.size)
             let shown = proxy.bounds(of: .scrollView).map { local.intersection($0) } ?? local
             let frame = proxy.frame(in: .global)
             return shown.offsetBy(dx: frame.minX, dy: frame.minY)
         } action: { draft.visibleBox = $0 }
-        .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
-        .focusRing(focused)
         .overlay(alignment: .topLeading) {
             if showsBar {
                 MemoFormatBar(draft: draft).offset(y: barY)
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { top = $0 }
-        // Under the box the bar would hang past the end of the scroll content, where clicks do not
+        // Under the memo the bar would hang past the end of the scroll content, where clicks do not
         // reach it; the room is made inside the content instead.
-        .padding(.bottom, showsBar ? max(0, barY + MemoFormatBar.height - MemoStyle.boxHeight) : 0)
+        .padding(.bottom, showsBar ? max(0, barY + MemoFormatBar.height - height) : 0)
         .focusedValue(\.memoDraft, focused ? draft : nil)
         .onChange(of: focused, initial: true) {
             draft.hasFocus = focused
             // Once the text view has become first responder.
             if focused { Task { @MainActor in draft.inkTextView?() } }
+            draft.redrawLines?()
         }
+        .onChange(of: chosenDay, initial: true) { draft.chosenDay = chosenDay }
         // The week's first day counts too: periods equal across calendars still open again under the new one.
         .onChange(of: [period.key, "\(period.start.timeIntervalSinceReferenceDate)", "\(period.calendar.firstWeekday)"], initial: true) {
             draft.open(period)
@@ -475,26 +492,34 @@ struct MemoEditor: View {
             // After the text view has taken the new text, so that swap is not left as a step either.
             Task { @MainActor in undoManager?.removeAllActions() }
         }
-        .onChange(of: draft.text) { draft.textChanged() }
+        .onChange(of: draft.text) {
+            draft.textChanged()
+            draft.redrawLines?()
+        }
         .onChange(of: draft.selection) {
             draft.selectionChanged()
+            draft.redrawLines?()
             // After the text view has laid the new selection out.
             Task { @MainActor in line = draft.selectionLineRect?() }
         }
         .onChange(of: draft.focusRequest) { focused = true }
-        .onDisappear { draft.flush() }
+        .onDisappear {
+            draft.flush()
+            // A folded panel takes the memo away without a focus change.
+            draft.hasFocus = false
+        }
     }
 
     private var showsBar: Bool { focused && draft.hasSelectedText }
 
-    /// The bar's top within the box. Beside the selected line: over it where the panel shows
-    /// enough room, otherwise under it. Without the line's place, over or under the whole box.
+    /// The bar's top within the memo. Beside the selected line: over it where the panel shows
+    /// enough room, otherwise under it. Without the line's place, over the memo or at its foot.
     private var barY: CGFloat {
-        let height = MemoFormatBar.height
-        guard let line, line.maxY > 0, line.minY < MemoStyle.boxHeight else {
-            return top > height + Metrics.spaceL ? -height - Metrics.spaceS : MemoStyle.boxHeight + Metrics.spaceS
+        let barHeight = MemoFormatBar.height
+        guard let line, line.maxY > 0, line.minY < height else {
+            return top > barHeight + Metrics.spaceL ? -barHeight - Metrics.spaceS : height - barHeight - Metrics.spaceS
         }
-        return top + line.minY > height + Metrics.spaceL ? line.minY - height - Metrics.spaceS : line.maxY + Metrics.spaceS
+        return top + line.minY > barHeight + Metrics.spaceL ? line.minY - barHeight - Metrics.spaceS : line.maxY + Metrics.spaceS
     }
 }
 
@@ -515,6 +540,10 @@ struct MemoFormatBar: View {
                 style("x²", "위첨자", "⌃⌘=", isOn: draft.shared(MemoAttributes.Script.self) == .raised, font: TextStyle.small.font) { draft.toggleScript(.raised) }
                 style("x₂", "아래첨자", "⌃⌘-", isOn: draft.shared(MemoAttributes.Script.self) == .lowered, font: TextStyle.small.font) { draft.toggleScript(.lowered) }
                 Spacer(minLength: Metrics.spaceM)
+                Button("시각") { draft.insertTime() }
+                    .buttonStyle(DrawnButtonStyle(.text))
+                    .focusable(false)
+                    .help("시각 넣기 (⌃⌘T)")
                 Button("지우기") { draft.clearFormatting() }
                     .buttonStyle(DrawnButtonStyle(.text))
                     .focusable(false)
@@ -642,6 +671,9 @@ struct MemoCommands: Commands {
                     .keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("할 일 가져오기…") { draft?.askToLinkTodo() }
                 Button("할 일 체크") { draft?.toggleChipAtCaret() }
+                Divider()
+                Button("시각 넣기") { draft?.insertTime() }
+                    .keyboardShortcut("t", modifiers: [.command, .control])
             }
             .disabled(draft == nil)
         }

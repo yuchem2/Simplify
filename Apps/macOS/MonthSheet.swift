@@ -17,6 +17,10 @@ struct MonthSheet: View {
     static let sheetPadding = Metrics.spaceXxl
     /// Below this a cell leaves out start times, so titles still show.
     static let timedCellWidth: CGFloat = 96
+    /// Below this, the calendar near its narrowest (the spine dragged, or the smallest windows), a
+    /// cell shows its timed events as a row of colour marks and its bands without titles; titles
+    /// above it shorten as they must.
+    static let dotCellWidth: CGFloat = 68
     /// Where a date number starts inside its cell; the weekday labels share the same edge.
     static let dateInset = EdgeInsets(top: Metrics.spaceXs, leading: Metrics.spaceM, bottom: Metrics.spaceXs, trailing: Metrics.spaceM)
 
@@ -48,7 +52,8 @@ struct MonthSheet: View {
                                         todoCount: memos.todos.remaining(on: day, calendar: model.calendar),
                                         height: height, textSize: model.cellTextSize,
                                         // A narrow cell has room for the title or the time, not both: the title wins.
-                                        showsTimes: model.showsCellTimes && width >= Self.timedCellWidth) {
+                                        showsTimes: model.showsCellTimes && width >= Self.timedCellWidth,
+                                        marksOnly: width < Self.dotCellWidth) {
                                     // After the click's other handlers: an event click or a double-click opens the
                                     // event popover in the same click, and then the panel and focus stay as they are.
                                     Task { @MainActor in
@@ -71,7 +76,7 @@ struct MonthSheet: View {
         }
         .padding(.horizontal, Self.sheetPadding)
         .padding(.bottom, Metrics.spaceXxl)
-        .calendarKeys(model: model, calendars: calendars, focused: $focused)
+        .calendarKeys(model: model, calendars: calendars, focused: $focused, leavesFocus: memos.draft.hasFocus)
     }
 }
 
@@ -106,6 +111,7 @@ private struct DayCell: View {
     let height: CGFloat
     let textSize: AppModel.CellTextSize
     let showsTimes: Bool
+    let marksOnly: Bool
     let onSelect: () -> Void
     @State private var hovering = false
 
@@ -131,21 +137,11 @@ private struct DayCell: View {
                 }
                 let (shown, hidden) = visibleRows
                 ForEach(Array(shown.enumerated()), id: \.offset) { _, slot in
-                    if let slot {
-                        let anchor = EventAnchor.row(slot.occurrence.id, day: day, in: .month)
-                        EventRow(slot: slot, source: sources[slot.occurrence.sourceID], textSize: textSize,
-                                 time: showsTimes ? cellTime(slot) : nil,
-                                 // A band repeats its title at the start of each row of the grid.
-                                 showsTitle: !slot.continuesFromPrevious || model.calendar.component(.weekday, from: day) == model.calendar.firstWeekday,
-                                 isSelected: model.selectedEventID == slot.occurrence.id)
-                            .unsentOutline(calendars.isUnsent(slot.occurrence))
-                            // Days of the next or last month step back with their date.
-                            .opacity(inMonth ? 1 : Metrics.opacityOutOfMonth)
-                            .eventAnchor(anchor)
-                            .opensEvent(slot.occurrence, day: day, anchor: anchor, model: model, calendars: calendars)
+                    if marksOnly, let slot, !isLined(slot) {
+                        // The timed events as one row of marks, where the first of them was.
+                        markRow
                     } else {
-                        // A row kept for a band that runs on other days of the week.
-                        Color.clear.frame(height: textSize.rowHeight - 2)
+                        row(slot)
                     }
                 }
                 if hidden > 0 {
@@ -188,14 +184,70 @@ private struct DayCell: View {
         .accessibilityAddTraits(model.isSelected(day) ? .isSelected : [])
     }
 
+    @ViewBuilder
+    private func row(_ slot: OccurrenceBuilder.Slot?) -> some View {
+        if let slot {
+            let anchor = EventAnchor.row(slot.occurrence.id, day: day, in: .month)
+            EventRow(slot: slot, source: sources[slot.occurrence.sourceID], textSize: textSize,
+                     time: showsTimes ? cellTime(slot) : nil,
+                     // A band repeats its title at the start of each row of the grid; a cell too
+                     // narrow for words keeps the band's colour only.
+                     showsTitle: (!slot.continuesFromPrevious || model.calendar.component(.weekday, from: day) == model.calendar.firstWeekday)
+                        && (!marksOnly || sources[slot.occurrence.sourceID]?.isHoliday == true),
+                     isSelected: model.selectedEventID == slot.occurrence.id)
+                .unsentOutline(calendars.isUnsent(slot.occurrence))
+                // Days of the next or last month step back with their date.
+                .opacity(inMonth ? 1 : Metrics.opacityOutOfMonth)
+                .eventAnchor(anchor)
+                .opensEvent(slot.occurrence, day: day, anchor: anchor, model: model, calendars: calendars)
+        } else {
+            // A row kept for a band that runs on other days of the week.
+            Color.clear.frame(height: textSize.rowHeight - 2)
+        }
+    }
+
+    /// Bands and holidays keep their own rows in a narrow cell; the rest become marks.
+    private func isLined(_ slot: OccurrenceBuilder.Slot) -> Bool {
+        slot.occurrence.isBand || sources[slot.occurrence.sourceID]?.isHoliday == true
+    }
+
+    /// A narrow cell's timed events and reminders, as marks side by side; each still opens its event.
+    private var markRow: some View {
+        HStack(spacing: Metrics.spaceXxs) {
+            ForEach(slots.filter { !isLined($0) }, id: \.occurrence.id) { slot in
+                let anchor = EventAnchor.row(slot.occurrence.id, day: day, in: .month)
+                EventMark(occurrence: slot.occurrence, source: sources[slot.occurrence.sourceID], size: textSize.markSize)
+                    .padding(Metrics.spaceXxs / 2)
+                    .background { if model.selectedEventID == slot.occurrence.id { Rectangle().fill(Tokens.selection) } }
+                    .opacity(inMonth ? 1 : Metrics.opacityOutOfMonth)
+                    .eventAnchor(anchor)
+                    .opensEvent(slot.occurrence, day: day, anchor: anchor, model: model, calendars: calendars)
+                    .accessibilityLabel(slot.occurrence.title)
+            }
+        }
+        .frame(height: textSize.rowHeight - 2, alignment: .leading)
+        // As wide as the cell, however many marks: the rest are cut off rather than widening the day.
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .clipped()
+    }
+
     /// As many rows as the cell fits, empty band rows included; when some are left over, the last
-    /// row says how many events (not empty rows) did not fit.
+    /// row says how many events (not empty rows) did not fit. A narrow cell's marks take one row.
     private var visibleRows: ([OccurrenceBuilder.Slot?], Int) {
-        let rows = lanes?.rows(slots) ?? slots.map(Optional.some)
+        var rows = lanes?.rows(slots) ?? slots.map(Optional.some)
+        if marksOnly, let first = slots.first(where: { !isLined($0) }) {
+            rows = rows.filter { slot in slot.map { isLined($0) || $0.occurrence.id == first.occurrence.id } ?? true }
+        }
         let space = height - MonthSheet.dateInset.top - MonthSheet.dateInset.bottom - 24 - 2
         let fits = max(1, Int(space / textSize.rowHeight))
         guard rows.count > fits else { return (rows, 0) }
-        return (Array(rows.prefix(fits - 1)), rows.dropFirst(fits - 1).count { $0 != nil })
+        // A cut-off row of marks stands for every event in it.
+        let marked = marksOnly ? slots.count { !isLined($0) } : 1
+        let left = rows.dropFirst(fits - 1).reduce(0) { count, slot in
+            guard let slot else { return count }
+            return count + (marksOnly && !isLined(slot) ? marked : 1)
+        }
+        return (Array(rows.prefix(fits - 1)), left)
     }
 
     /// `09:30` for a timed event; nothing for a reminder due on a day without a time.

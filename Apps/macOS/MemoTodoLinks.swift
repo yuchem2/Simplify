@@ -292,6 +292,7 @@ struct MemoMenuHost: NSViewRepresentable {
     final class HostView: NSView {
         var draft: MemoDraft?
         private var monitor: Any?
+        private let styler = MemoLineStyler()
 
         // Top-left origin, like the box it measures.
         override var isFlipped: Bool { true }
@@ -304,17 +305,22 @@ struct MemoMenuHost: NSViewRepresentable {
             draft?.selectionLineInWindow = { [weak self] in self?.selectionLineInWindow() }
             draft?.inkTextView = { [weak self] in self?.inkTextView() }
             draft?.showMenu = { [weak self] in self?.showMenuUnderSelection() }
+            draft?.redrawLines = { [weak self] in self?.redrawLines() }
+            // Once the text view is in the window beside this view.
+            Task { @MainActor [weak self] in self?.redrawLines() }
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown, .keyDown]) { [weak self] event in
                 let handled = MainActor.assumeIsolated { () -> Bool in
                     guard let self, let window = self.window, event.window === window, let draft = self.draft else { return false }
                     switch event.type {
                     case .keyDown:
-                        // ⌘⇧T while the memo is being written; ahead of the text view and the menus.
+                        // ⌘⇧T and ⌃⌘T while the memo is being written; ahead of the text view and the menus.
                         // By the key's place, not its letter: with a Korean input source T types ㅅ.
-                        guard draft.hasFocus, draft.book.todos.pop == nil, event.keyCode == Self.keyT,
-                              event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function]) == [.command, .shift]
-                        else { return false }
-                        draft.askToMakeTodos()
+                        guard draft.hasFocus, draft.book.todos.pop == nil, event.keyCode == Self.keyT else { return false }
+                        switch event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function]) {
+                        case [.command, .shift]: draft.askToMakeTodos()
+                        case [.command, .control]: draft.insertTime()
+                        default: return false
+                        }
                         return true
                     case .leftMouseDown:
                         if self.isInBox(event) {
@@ -359,6 +365,39 @@ struct MemoMenuHost: NSViewRepresentable {
         func stop() {
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
+        }
+
+        /// Finds the memo's text view (the one on the part of the panel the memo takes) and has the
+        /// styler draw its rules and timeline lines as they are now.
+        @MainActor
+        private func redrawLines() {
+            guard let window, let content = window.contentView, let draft else { return }
+            if !styler.isAttached {
+                guard let textView = memoTextView(in: content, box: draft.visibleBox) else {
+                    // The memo's place may not be measured yet (the panel just came back): once more after this pass.
+                    Task { @MainActor [weak self] in
+                        guard let self, !self.styler.isAttached, let draft = self.draft,
+                              let textView = self.memoTextView(in: content, box: draft.visibleBox) else { return }
+                        self.styler.attach(to: textView)
+                    }
+                    return
+                }
+                styler.attach(to: textView)
+            }
+            styler.update()
+        }
+
+        @MainActor
+        private func memoTextView(in view: NSView, box: CGRect) -> NSTextView? {
+            if let textView = view as? NSTextView, !textView.isFieldEditor, let content = window?.contentView {
+                let frame = content.convert((textView.enclosingScrollView ?? textView).bounds, from: textView.enclosingScrollView ?? textView)
+                let top = content.isFlipped ? frame : CGRect(x: frame.minX, y: content.bounds.height - frame.maxY, width: frame.width, height: frame.height)
+                return top.intersects(box) ? textView : nil
+            }
+            for subview in view.subviews {
+                if let found = memoTextView(in: subview, box: box) { return found }
+            }
+            return nil
         }
 
         /// The menu under the selection's line, or at the box's top left.
@@ -411,6 +450,7 @@ struct MemoMenuHost: NSViewRepresentable {
             var entries: [InkMenuEntry] = [
                 .submenu("할 일로 만들기", isEnabled: !lines.isEmpty, targets),
                 .item("할 일 가져오기…") { draft.askToLinkTodo() },
+                .item("시각 넣기", detail: "⌃⌘T") { draft.insertTime() },
             ]
             if let chip = draft.chipAtCaret, let item = draft.book.todos.item(chip.todo.id) {
                 entries.append(.item(item.isDone ? "체크 풀기" : "체크하기") { draft.toggleChipAtCaret() })

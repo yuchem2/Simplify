@@ -18,6 +18,10 @@ enum Snapshot {
             captureWindow(model: model)
             return
         }
+        if mode == "memo-live" {
+            captureLiveMemo(model: model)
+            return
+        }
         if mode == "resize" {
             measureResize(model: model)
             return
@@ -60,6 +64,7 @@ enum Snapshot {
             model.isSettingsOpen = false
             renderEventPopovers(model: model, calendars: shown, memos: memos)
             renderMemos(model: model, calendars: shown)
+            renderPanelModes(model: model, calendars: shown)
             renderTodos(model: model, calendars: shown)
             renderComponents()
             renderWidgets(model: model)
@@ -147,6 +152,86 @@ enum Snapshot {
                name: "memo-formatbar", appearance: .aqua, scheme: .light, size: CGSize(width: 400, height: 200))
         render(ZStack { Color.wall; MemoFormatBar(draft: memos.draft).padding(40) }.frame(width: 400, height: 200),
                name: "memo-formatbar-dark", appearance: .darkAqua, scheme: .dark, size: CGSize(width: 400, height: 200))
+    }
+
+    /// The panel hidden, normal and wide in both themes, with a long work log (rules and timeline
+    /// lines) in today's memo; then an empty memo, the memo being written, and the narrowest calendar.
+    private static func renderPanelModes(model: AppModel, calendars: CalendarController) {
+        let memos = sampleMemos(calendar: model.calendar, isSaved: true)
+        let kept = (model.isPanelHidden, model.isPanelWide, model.panelWidth, model.miniMonthWidth, model.panelScope)
+        model.select(model.today)
+        model.panelScope = .day
+        memos.draft.open(model.panelPeriod)
+        memos.draft.text = longMemo(today: model.today, calendar: model.calendar)
+        let size = CGSize(width: 1440, height: 900)
+        func both(_ name: String) {
+            render(MainView(model: model, calendars: calendars, memos: memos), name: name, appearance: .aqua, scheme: .light, size: size)
+            render(MainView(model: model, calendars: calendars, memos: memos), name: name + "-dark", appearance: .darkAqua, scheme: .dark, size: size)
+        }
+        model.panelMode = .normal
+        both("panel-normal")
+        model.panelMode = .wide
+        both("panel-wide")
+        model.panelScope = .week
+        memos.draft.open(model.panelPeriod)
+        render(MainView(model: model, calendars: calendars, memos: memos), name: "panel-wide-week", appearance: .aqua, scheme: .light, size: size)
+        model.panelScope = .month
+        memos.draft.open(model.panelPeriod)
+        render(MainView(model: model, calendars: calendars, memos: memos), name: "panel-wide-month", appearance: .aqua, scheme: .light, size: size)
+        model.panelScope = .day
+        memos.draft.open(model.panelPeriod)
+        memos.draft.text = longMemo(today: model.today, calendar: model.calendar)
+        model.panelMode = .hidden
+        both("panel-hidden")
+        // The memo being written: its rule at the spine's weight.
+        model.panelMode = .wide
+        memos.draft.hasFocus = true
+        render(MainView(model: model, calendars: calendars, memos: memos), name: "memo-focus", appearance: .aqua, scheme: .light, size: size)
+        memos.draft.hasFocus = false
+        // An empty memo, under its placeholder.
+        let empty = Period(containing: model.calendar.date(byAdding: .day, value: 5, to: model.today)!, scope: .day, calendar: model.calendar)
+        model.select(empty.start)
+        memos.draft.open(model.panelPeriod)
+        model.panelMode = .normal
+        render(MainView(model: model, calendars: calendars, memos: memos), name: "memo-empty", appearance: .aqua, scheme: .light, size: size)
+        // The spine dragged to the calendar's narrowest: titles give way to colour marks. The month
+        // alone at that width, since a rendered window never learns its own width.
+        model.select(model.today)
+        let narrowest = CGSize(width: MainView.calendarMinWidth, height: 640)
+        render(MonthSheet(model: model, calendars: calendars, memos: memos).padding(.top, Metrics.spaceXl).background(.paper),
+               name: "panel-dragged", appearance: .aqua, scheme: .light, size: narrowest)
+        let roomy = CGSize(width: MainView.calendarMinWidth + 7 * 20, height: 640)
+        render(MonthSheet(model: model, calendars: calendars, memos: memos).padding(.top, Metrics.spaceXl).background(.paper),
+               name: "panel-dragged-shorter", appearance: .aqua, scheme: .light, size: roomy)
+        (model.isPanelHidden, model.isPanelWide, model.panelWidth, model.miniMonthWidth, model.panelScope) = kept
+    }
+
+    /// A week's work log: a heading, bullet lines, rules typed as dashes, and timeline lines, some long enough to wrap.
+    private static func longMemo(today: Date, calendar: Calendar) -> AttributedString {
+        func stamp(_ days: Int, _ time: String) -> String {
+            let day = calendar.dateComponents([.month, .day], from: calendar.date(byAdding: .day, value: days, to: today)!)
+            return String(format: "%02d.%02d ", day.month!, day.day!) + time
+        }
+        var bold = AttributeContainer()
+        bold[MemoAttributes.Bold.self] = true
+        var memo = AttributedString("이번 주 일정 및 수행", attributes: bold)
+        memo += AttributedString("""
+
+        계획
+        * 상품 등록 파트 목업을 기반으로 다른 챗봇 기능과 흐름이 같게 다듬기
+        * 전시 구성안 다듬기
+        ────────────────────────────────────────────────────────────────────
+        수행
+        ----------------------------------------
+        \(stamp(-1, "08:30")) 디자인 스킬을 로컬에 설치하고 데스크톱 에이전트를 함께 설치한 뒤 테스트해 보기
+        \(stamp(-1, "09:30")) 상품 등록 파트는 배포 전이라 작업하지 않고, 작업을 추적한 뒤 어떻게 진행할지 계획 다듬기
+        \(stamp(-1, "14:00-15:00")) 디자인 시스템 적용 회의 참여
+        \(stamp(0, "09:50")) 키 변경이 main에 적용된 것을 확인하고 실제 테스트 진행
+        \(stamp(0, "10:50")) 종합 테스트와 자체 리뷰를 마치고 develop에 머지한 뒤 배포 진행
+        ════════════════════
+        다음 주: 회고 정리
+        """)
+        return memo
     }
 
     /// Memos on today (with every kind of formatting), two other days, this week and this month,
@@ -278,6 +363,70 @@ enum Snapshot {
             capture("window-week-narrow")
             model.calendarView = original.0
             window.setFrame(original.1, display: false)
+            NSApp.terminate(nil)
+        }
+    }
+
+    /// `SIMPLIFY_SNAPSHOT=memo-live`: a second window with the sample events and memos and the real
+    /// text view (which ImageRenderer cannot draw), so the memo's rules and timeline lines show as
+    /// the editor draws them: normal, wide, dark, the caret on a rule, a time put in with ⌃⌘T's
+    /// action, and the spine dragged to the calendar's narrowest. Nothing is written to the real stores.
+    private static func captureLiveMemo(model: AppModel) {
+        Task { @MainActor in
+            let calendars = sampleController(calendar: model.calendar, days: model.grid.weeks.flatMap { $0 })
+            let memos = sampleMemos(calendar: model.calendar, isSaved: true)
+            let kept = (model.isPanelHidden, model.isPanelWide, model.panelWidth, model.miniMonthWidth, model.calendarView, model.theme)
+            model.calendarView = .month
+            model.panelMode = .normal
+            model.select(model.today)
+            model.panelScope = .day
+            let window = NSWindow(contentRect: NSRect(x: 80, y: 60, width: 1440, height: 900), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: MainView(model: model, calendars: calendars, memos: memos))
+            window.makeKeyAndOrderFront(nil)
+            try? await Task.sleep(for: .seconds(2))
+            memos.draft.text = longMemo(today: model.today, calendar: model.calendar)
+            @MainActor func capture(_ name: String) async {
+                try? await Task.sleep(for: .seconds(1))
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                guard let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+                view.cacheDisplay(in: view.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: FileManager.default.temporaryDirectory.appending(path: "snapshot-live-\(name).png"))
+            }
+            @MainActor func textView(_ view: NSView) -> NSTextView? {
+                if let found = view as? NSTextView, !found.isFieldEditor { return found }
+                for subview in view.subviews {
+                    if let found = textView(subview) { return found }
+                }
+                return nil
+            }
+            await capture("normal")
+            model.panelMode = .wide
+            await capture("wide")
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+            await capture("wide-dark")
+            NSApp.appearance = NSAppearance(named: .aqua)
+            if let content = window.contentView, let editor = textView(content) {
+                window.makeFirstResponder(editor)
+                let ruleLine = (editor.string as NSString).range(of: "────")
+                editor.setSelectedRange(NSRange(location: ruleLine.location + 2, length: 0))
+                await capture("rule-caret")
+                let last = (editor.string as NSString).range(of: "다음 주")
+                editor.setSelectedRange(NSRange(location: last.location, length: 0))
+                try? await Task.sleep(for: .seconds(0.5))
+                memos.draft.insertTime()
+                await capture("time")
+            }
+            window.makeFirstResponder(nil)
+            model.panelMode = .normal
+            model.panelWidth = 2000
+            await capture("dragged")
+            window.close()
+            // The view first: choosing it would fold a wide panel back.
+            model.calendarView = kept.4
+            (model.isPanelHidden, model.isPanelWide, model.panelWidth, model.miniMonthWidth) = (kept.0, kept.1, kept.2, kept.3)
+            kept.5.apply()
             NSApp.terminate(nil)
         }
     }

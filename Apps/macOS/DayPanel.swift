@@ -7,6 +7,18 @@ struct DayPanel: View {
     @Bindable var model: AppModel
     let calendars: CalendarController
     let memos: MemoBook
+    /// The scroll view's height, and the memo's top inside its content: the memo takes what is left.
+    @State private var viewport: CGFloat = 0
+    @State private var memoTop: CGFloat = 0
+
+    /// Beside the small month, whose list already shows the day's events.
+    private var isWide: Bool { model.isPanelWide && !model.isPanelHidden }
+
+    /// The memo runs to the panel's foot, and never shorter than it used to be: when events and
+    /// ToDos leave less, the whole panel scrolls instead.
+    private var memoHeight: CGFloat {
+        max(MemoStyle.minHeight, viewport - memoTop - Metrics.spaceXxl)
+    }
 
     var body: some View {
         let period = model.panelPeriod
@@ -43,7 +55,9 @@ struct DayPanel: View {
                 VStack(alignment: .leading, spacing: Metrics.spaceXxl) {
                     ForEach(sections(for: period.scope), id: \.title) { section in
                         VStack(alignment: .leading, spacing: Metrics.spaceM) {
-                            SectionRule(section.title) {
+                            // The memo being written thickens its rule to the spine's weight: with
+                            // no box around it, that and the caret are its keyboard focus.
+                            SectionRule(section.title, lineWidth: section.kind == .memo && memos.draft.hasFocus ? Metrics.lineSpine : Metrics.line) {
                                 if section.kind == .todos, let action = section.action {
                                     Button(action) {
                                         // Lines typed a moment ago are in the store before the list is read.
@@ -66,7 +80,9 @@ struct DayPanel: View {
                                     DayEvents(slots: calendars.slots[period.start] ?? [], day: period.start, model: model, calendars: calendars, calendar: model.calendar, empty: section.empty)
                                 }
                             } else if section.kind == .memo {
-                                MemoEditor(draft: memos.draft, period: period, title: section.title, placeholder: section.empty)
+                                MemoEditor(draft: memos.draft, period: period, chosenDay: model.selectedDay, height: memoHeight,
+                                           title: section.title, placeholder: section.empty)
+                                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.content)).minY } action: { memoTop = $0 }
                             } else {
                                 TodoList(period: period, model: model, memos: memos)
                             }
@@ -75,7 +91,9 @@ struct DayPanel: View {
                 }
                 .padding(.horizontal, Metrics.spaceXxl)
                 .padding(.bottom, Metrics.spaceXxl)
+                .coordinateSpace(.named(Self.content))
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewport = $0 }
         }
         .background(.paper)
         .overlay { PanelPopLayer(model: model, calendars: calendars, memos: memos) }
@@ -101,7 +119,14 @@ struct DayPanel: View {
         var kind: Kind
     }
 
+    private nonisolated static let content = "panelContent"
+
+    /// A wide panel leaves the events to the small month's list.
     private func sections(for scope: PeriodScope) -> [Section] {
+        isWide ? allSections(for: scope).filter { $0.kind != .events } : allSections(for: scope)
+    }
+
+    private func allSections(for scope: PeriodScope) -> [Section] {
         switch scope {
         case .day:
             [Section(title: "일정", action: "추가", empty: "이날은 일정이 없어요.", kind: .events),
@@ -158,7 +183,7 @@ private struct DayStripView: View {
 
 /// The chosen day's events: all-day first, then by time, each with its calendar. On today an ink
 /// line with the time sits between what is over and what is still to come.
-private struct DayEvents: View {
+struct DayEvents: View {
     let slots: [OccurrenceBuilder.Slot]
     let day: Date
     let model: AppModel
@@ -258,15 +283,23 @@ private struct NowLine: View {
     }
 }
 
-/// The week's events grouped by day, from its first day to its last.
-private struct WeekEvents: View {
+/// The week's events grouped by day, from its first day to its last. A month (beside a wide panel)
+/// leaves its days without events out, and says so when none has any.
+struct WeekEvents: View {
     let period: Period
     let model: AppModel
     let calendars: CalendarController
 
+    private var days: [Date] {
+        period.scope == .week ? period.days : period.days.filter { !(calendars.slots[$0] ?? []).isEmpty }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spaceS) {
-            ForEach(Array(period.days.enumerated()), id: \.element) { index, day in
+            if days.isEmpty {
+                Text("\(model.calendar.component(.month, from: period.start))월은 일정이 없어요.").textStyle(.item).foregroundStyle(.inkSoft)
+            }
+            ForEach(Array(days.enumerated()), id: \.element) { index, day in
                 let slots = calendars.slots[day] ?? []
                 let weekday = model.calendar.component(.weekday, from: day)
                 let red = weekday == 1 || calendars.holidayDays.contains(day)

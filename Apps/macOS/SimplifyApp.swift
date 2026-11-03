@@ -67,9 +67,16 @@ struct SimplifyApp: App {
                 Divider()
             }
             CommandGroup(after: .toolbar) {
-                Button(model.isPanelHidden ? "패널 보기" : "패널 숨기기") { model.isPanelHidden.toggle() }
-                    .keyboardShortcut("\\", modifiers: .command)
-                    .disabled(model.isModalOpen)
+                // The title bar's three panel segments. ⌘\ folds the panel and brings it back as it
+                // was; ⌘⇧\ goes between normal and wide.
+                Group {
+                    Toggle(AppModel.PanelMode.hidden.label, isOn: Binding(get: { model.isPanelHidden }, set: { model.isPanelHidden = $0 }))
+                        .keyboardShortcut("\\", modifiers: .command)
+                    Toggle(AppModel.PanelMode.normal.label, isOn: Binding(get: { model.panelMode == .normal }, set: { if $0 { model.panelMode = .normal } }))
+                    Toggle(AppModel.PanelMode.wide.label, isOn: Binding(get: { model.panelMode == .wide }, set: { _ in model.togglePanelWidth() }))
+                        .keyboardShortcut("\\", modifiers: [.command, .shift])
+                }
+                .disabled(model.isModalOpen)
             }
             MoveCommands(model: model)
         }
@@ -87,7 +94,7 @@ private struct MoveCommands: Commands {
             Group {
                 Button("오늘") { model.goToToday() }
                     .keyboardShortcut("t", modifiers: .command)
-                let unit = model.calendarView.unit
+                let unit = model.pageView.unit
                 Button("이전 \(unit)") { model.turnPage(by: -1) }
                     .keyboardShortcut(.leftArrow, modifiers: .command)
                 Button("다음 \(unit)") { model.turnPage(by: 1) }

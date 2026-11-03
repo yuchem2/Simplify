@@ -25,7 +25,7 @@ struct YearGrid: View {
                 ForEach(0..<rows, id: \.self) { row in
                     HStack(alignment: .top, spacing: spacingX) {
                         ForEach(0..<columns, id: \.self) { column in
-                            MiniMonth(month: row * columns + column + 1, model: model, calendars: calendars) { focused = true }
+                            YearMonth(month: row * columns + column + 1, model: model, calendars: calendars) { focused = true }
                                 .frame(width: width, height: height, alignment: .top)
                         }
                     }
@@ -42,7 +42,7 @@ struct YearGrid: View {
 }
 
 /// One month of the year: its name over an ink rule, weekday letters, and the dates.
-private struct MiniMonth: View {
+private struct YearMonth: View {
     let month: Int
     let model: AppModel
     let calendars: CalendarController

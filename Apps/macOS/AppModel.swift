@@ -12,9 +12,14 @@ final class AppModel {
     private(set) var selectedDay: Date
     private(set) var month: Period
     var panelScope: PeriodScope = .day
-    /// The month sheet, the week grid or the year. Remembered across launches.
+    /// The month sheet, the week grid or the year. Remembered across launches. Choosing one while
+    /// the panel shows wide brings the calendar back beside a normal panel; a folded wide panel
+    /// stays wide for when it comes back.
     var calendarView = CalendarView(rawValue: UserDefaults.standard.string(forKey: "calendarView") ?? "") ?? .month {
-        didSet { UserDefaults.standard.set(calendarView.rawValue, forKey: "calendarView") }
+        didSet {
+            UserDefaults.standard.set(calendarView.rawValue, forKey: "calendarView")
+            if isPanelWide, !isPanelHidden { isPanelWide = false }
+        }
     }
     /// The settings modal is up; the month underneath ignores keys and clicks.
     var isSettingsOpen = false
@@ -27,6 +32,61 @@ final class AppModel {
     /// The day panel is folded away so the month gets the whole window. Remembered across launches.
     var isPanelHidden = UserDefaults.standard.bool(forKey: "isPanelHidden") {
         didSet { UserDefaults.standard.set(isPanelHidden, forKey: "isPanelHidden") }
+    }
+    /// The panel takes the window beside a small month instead of the full calendar; kept while
+    /// it is folded away, so showing it again brings it back as it was. Remembered across launches.
+    var isPanelWide = UserDefaults.standard.bool(forKey: "isPanelWide") {
+        didSet { UserDefaults.standard.set(isPanelWide, forKey: "isPanelWide") }
+    }
+    /// The normal panel's width once the spine has been dragged; nil follows the window. Remembered
+    /// on this Mac only, like the rest of the window's state.
+    var panelWidth: CGFloat? = AppModel.storedWidth("panelWidth") {
+        didSet { UserDefaults.standard.set(panelWidth.map(Double.init), forKey: "panelWidth") }
+    }
+    /// The small month's column beside a wide panel; nil is its narrowest.
+    var miniMonthWidth: CGFloat? = AppModel.storedWidth("miniMonthWidth") {
+        didSet { UserDefaults.standard.set(miniMonthWidth.map(Double.init), forKey: "miniMonthWidth") }
+    }
+
+    private static func storedWidth(_ key: String) -> CGFloat? {
+        (UserDefaults.standard.object(forKey: key) as? Double).map { CGFloat($0) }
+    }
+
+    /// The title bar's three panel segments and the 보기 menu's three items.
+    var panelMode: PanelMode {
+        get { isPanelHidden ? .hidden : isPanelWide ? .wide : .normal }
+        set {
+            switch newValue {
+            case .hidden: isPanelHidden = true
+            case .normal: (isPanelHidden, isPanelWide) = (false, false)
+            case .wide: (isPanelHidden, isPanelWide) = (false, true)
+            }
+        }
+    }
+
+    /// ⌘⇧\: normal and wide in turn, showing a folded panel too.
+    func togglePanelWidth() {
+        panelMode = panelMode == .wide ? .normal : .wide
+    }
+
+    enum PanelMode: String, CaseIterable {
+        case hidden, normal, wide
+
+        var label: String {
+            switch self {
+            case .hidden: "패널 숨기기"
+            case .normal: "패널 보통"
+            case .wide: "패널 넓게"
+            }
+        }
+
+        var help: String {
+            switch self {
+            case .hidden: "패널 숨기기 (⌘\\)"
+            case .normal: "패널 보통 (⌘⇧\\)"
+            case .wide: "패널 넓게: 작은 달력과 할 일·메모 (⌘⇧\\)"
+            }
+        }
     }
     /// How large event titles are inside day cells (설정 › 일반). Remembered across launches.
     var cellTextSize = CellTextSize(rawValue: UserDefaults.standard.string(forKey: "cellTextSize") ?? "") ?? .medium {
@@ -215,9 +275,13 @@ final class AppModel {
         select(calendar.date(byAdding: .month, value: months, to: selectedDay)!)
     }
 
+    /// The calendar on screen for paging and the keys: the small month stands in for any of them
+    /// beside a wide panel.
+    var pageView: CalendarView { isPanelWide && !isPanelHidden ? .month : calendarView }
+
     /// One step of the view on screen: a month, a week keeping the same weekday, or a year keeping the date.
     func turnPage(by steps: Int) {
-        switch calendarView {
+        switch pageView {
         case .month: turnMonth(by: steps)
         case .week: moveSelection(byDays: 7 * steps)
         case .year: turnMonth(by: 12 * steps)

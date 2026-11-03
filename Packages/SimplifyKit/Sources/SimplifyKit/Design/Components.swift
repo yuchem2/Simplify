@@ -121,6 +121,49 @@ public struct SegmentedTabs<Value: Hashable>: View {
     }
 }
 
+/// The same square segments with a small picture in each instead of a word; the name is for
+/// VoiceOver and `help` for the pointer. The picture draws in the foreground style, so it turns to
+/// paper on the chosen (ink) segment.
+public struct IconSegments<Value: Hashable, Icon: View>: View {
+    public struct Option {
+        public var value: Value
+        public var label: String
+        public var help: String
+
+        public init(_ value: Value, label: String, help: String) {
+            self.value = value
+            self.label = label
+            self.help = help
+        }
+    }
+
+    let options: [Option]
+    @Binding var selection: Value
+    let icon: (Value) -> Icon
+
+    public init(_ options: [Option], selection: Binding<Value>, @ViewBuilder icon: @escaping (Value) -> Icon) {
+        self.options = options
+        _selection = selection
+        self.icon = icon
+    }
+
+    public var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(options.enumerated()), id: \.offset) { index, option in
+                if index > 0 { Rectangle().fill(.ink).frame(width: Metrics.line) }
+                let isOn = option.value == selection
+                Button { selection = option.value } label: { icon(option.value) }
+                    .buttonStyle(SegmentStyle(isOn: isOn, fills: false))
+                    .help(option.help)
+                    .accessibilityLabel(option.label)
+                    .accessibilityAddTraits(isOn ? .isSelected : [])
+            }
+        }
+        .fixedSize()
+        .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
+    }
+}
+
 private struct SegmentStyle: ButtonStyle {
     var isOn: Bool
     var fills: Bool
@@ -724,13 +767,16 @@ public struct MemoMark: View {
     }
 }
 
-/// A section name followed by an ink rule that runs to the trailing edge.
+/// A section name followed by an ink rule that runs to the trailing edge. `lineWidth` goes up to the
+/// spine's while what is under it has keyboard focus (the memo being written).
 public struct SectionRule<Trailing: View>: View {
     var title: String
+    var lineWidth: CGFloat
     var trailing: Trailing
 
-    public init(_ title: String, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
+    public init(_ title: String, lineWidth: CGFloat = Metrics.line, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
         self.title = title
+        self.lineWidth = lineWidth
         self.trailing = trailing()
     }
 
@@ -739,7 +785,8 @@ public struct SectionRule<Trailing: View>: View {
             Text(title)
                 .textStyle(.section)
                 .accessibilityAddTraits(.isHeader)
-            Rectangle().fill(.ink).frame(height: Metrics.line)
+            // The same room for either weight, so the line under it never moves.
+            Rectangle().fill(.ink).frame(height: lineWidth).frame(height: Metrics.lineSpine)
             trailing
         }
     }

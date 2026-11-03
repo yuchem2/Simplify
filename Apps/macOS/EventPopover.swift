@@ -141,8 +141,13 @@ extension AppModel {
         return true
     }
 
-    /// Where the keys' popover points: the month sheet or the week grid on screen.
-    private var calendarPlace: EventAnchor.Place { calendarView == .week ? .weekGrid : .month }
+    /// Where the keys' popover points: the month sheet or the week grid on screen, or the small
+    /// month's list beside a wide panel (which draws its rows as the panel's day list, or its week
+    /// list for a week or month).
+    private var calendarPlace: EventAnchor.Place {
+        if isPanelWide, !isPanelHidden { return panelScope == .day ? .panel : .week }
+        return calendarView == .week ? .weekGrid : .month
+    }
 
     private func selectedOccurrence(_ calendars: CalendarController) -> EventOccurrence? {
         (calendars.slots[selectedDay] ?? []).first { $0.occurrence.id == selectedEventID }?.occurrence
