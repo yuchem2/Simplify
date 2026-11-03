@@ -5,6 +5,7 @@ import SimplifyKit
 /// pass to. A click outside or Esc closes it.
 struct PanelPopLayer: View {
     let model: AppModel
+    let calendars: CalendarController
     let memos: MemoBook
     @State private var height: CGFloat = 0
 
@@ -61,7 +62,7 @@ struct PanelPopLayer: View {
                 }
             }
         case .pickDay(let purpose):
-            DayPop(purpose: purpose, model: model, memos: memos, close: close)
+            DayPop(purpose: purpose, model: model, calendars: calendars, memos: memos, close: close)
         }
     }
 
@@ -404,6 +405,7 @@ private struct TargetPop: View {
 private struct DayPop: View {
     let purpose: PanelPop.DayPurpose
     let model: AppModel
+    let calendars: CalendarController
     let memos: MemoBook
     let close: () -> Void
     @State private var day = Date.now
@@ -412,12 +414,12 @@ private struct DayPop: View {
         let calendar = model.calendar
         VStack(alignment: .leading, spacing: 0) {
             PopGroup(title: title)
-            DatePicker("날짜", selection: $day, displayedComponents: .date)
-                .datePickerStyle(.graphical)
-                .labelsHidden()
-                .environment(\.calendar, calendar)
-                .environment(\.locale, Locale(identifier: "ko_KR"))
-                .padding(.horizontal, Metrics.spaceXs)
+            // A click only picks the day: 그 주로 and 그 달로 below still take its week or month.
+            InkDatePicker(selection: $day, calendar: calendar, today: model.today, commitsOnClick: false, isHoliday: { calendars.holidayDays.contains($0) }) {
+                finish(Period(containing: day, scope: .day, calendar: calendar))
+            }
+            .padding(.horizontal, Metrics.spaceM)
+            .padding(.vertical, Metrics.spaceXs)
             PopFoot {
                 Button("그 주로") { finish(Period(containing: day, scope: .week, calendar: calendar)) }.buttonStyle(DrawnButtonStyle())
                 Button("그 달로") { finish(Period(containing: day, scope: .month, calendar: calendar)) }.buttonStyle(DrawnButtonStyle())

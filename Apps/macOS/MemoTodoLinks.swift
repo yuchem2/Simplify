@@ -146,6 +146,12 @@ extension MemoDraft {
         focusRequest += 1
     }
 
+    /// The right-click menu's 모두 선택.
+    func selectAll() {
+        selection = AttributedTextSelection(range: text.startIndex..<text.endIndex)
+        focusRequest += 1
+    }
+
     /// The chip the caret or selection starts in, for 서식 › 할 일 체크 and the right-click menu.
     var chipAtCaret: MemoChips.Chip? {
         guard let start = selectedRanges.first?.lowerBound else { return nil }
@@ -262,8 +268,8 @@ enum TodoTargets {
 }
 
 /// The memo box's right-click menu and ⌘⇧T. SwiftUI's text editor has no way to add items to
-/// its own menu, so a right-click inside the box opens this one: cut, copy and paste, then the
-/// ToDo items. It works on the selection as it is, so lines are picked first. The editor's own
+/// its own menu, so a right-click inside the box opens this ink menu instead: the ToDo items, then
+/// cut, copy, paste and the formats. It works on the selection as it is, so lines are picked first. The editor's own
 /// view is not an `NSTextView` one can look for, so the box is found by where it is on screen:
 /// a background view the size of the box, watching the window's events before anything else.
 struct MemoMenuHost: NSViewRepresentable {
@@ -296,6 +302,8 @@ struct MemoMenuHost: NSViewRepresentable {
             guard window != nil else { return }
             draft?.selectionLineRect = { [weak self] in self?.selectionLineRect() }
             draft?.selectionLineInWindow = { [weak self] in self?.selectionLineInWindow() }
+            draft?.inkTextView = { [weak self] in self?.inkTextView() }
+            draft?.showMenu = { [weak self] in self?.showMenuUnderSelection() }
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown, .keyDown]) { [weak self] event in
                 let handled = MainActor.assumeIsolated { () -> Bool in
                     guard let self, let window = self.window, event.window === window, let draft = self.draft else { return false }
@@ -316,7 +324,7 @@ struct MemoMenuHost: NSViewRepresentable {
                         return false
                     default:
                         guard self.isInBox(event), let menu = self.menu() else { return false }
-                        NSMenu.popUpContextMenu(menu, with: event, for: self)
+                        InkMenuPresenter.popUp(menu, at: window.convertPoint(toScreen: event.locationInWindow), in: window)
                         return true
                     }
                 }
@@ -353,6 +361,24 @@ struct MemoMenuHost: NSViewRepresentable {
             monitor = nil
         }
 
+        /// The menu under the selection's line, or at the box's top left.
+        @MainActor
+        private func showMenuUnderSelection() {
+            guard let window, let content = window.contentView, let draft, let menu = menu() else { return }
+            let line = selectionLineInWindow() ?? CGRect(x: draft.visibleBox.minX, y: draft.visibleBox.minY, width: 0, height: 0)
+            let corner = CGPoint(x: line.minX, y: content.isFlipped ? line.maxY : content.bounds.height - line.maxY)
+            InkMenuPresenter.popUp(menu, at: window.convertPoint(toScreen: content.convert(corner, to: nil)), in: window)
+        }
+
+        /// The memo's caret in ink and its selection in the grey of an active row, instead of the
+        /// system's accent colour. One-line fields keep the system's.
+        @MainActor
+        private func inkTextView() {
+            guard let draft, draft.hasFocus, let textView = window?.firstResponder as? NSTextView, !textView.isFieldEditor else { return }
+            textView.insertionPointColor = NSColor(Color.ink)
+            textView.selectedTextAttributes = [.backgroundColor: NSColor(Color.rowActive)]
+        }
+
         // A plain view: clicks go to the text view on top.
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -370,54 +396,37 @@ struct MemoMenuHost: NSViewRepresentable {
             return true
         }
 
+        /// 할 일로 만들기 › and the ToDo items, then editing and the formats the memo uses. The system's
+        /// spelling, substitutions, speech and services are left out; the red underlines stay.
         @MainActor
-        private func menu() -> NSMenu? {
+        private func menu() -> [InkMenuEntry]? {
             guard let draft, let period = draft.period, !draft.isUnreadable else { return nil }
-            let menu = NSMenu()
-            menu.autoenablesItems = false
             let hasSelection = draft.hasSelectedText
-            menu.addItem(ActionItem("잘라내기", key: "x", enabled: hasSelection) { draft.cutSelection() })
-            menu.addItem(ActionItem("복사하기", key: "c", enabled: hasSelection) { draft.copySelection() })
-            menu.addItem(ActionItem("붙여넣기", key: "v", enabled: NSPasteboard.general.string(forType: .string) != nil) { draft.paste() })
-            menu.addItem(.separator())
-
             let lines = draft.pickableLines
-            let make = NSMenuItem(title: "할 일로 만들기", action: nil, keyEquivalent: "")
-            make.isEnabled = !lines.isEmpty
-            let targets = NSMenu()
-            targets.autoenablesItems = false
-            for target in TodoTargets.choices(for: period) {
-                targets.addItem(ActionItem("\(target.name)  ·  \(target.detail)") { draft.makeTodos(fromLines: lines, in: target.period) })
-            }
-            targets.addItem(.separator())
-            targets.addItem(ActionItem("다른 날짜…") { draft.showPop(.pickDay(.makeTodos(lines: lines))) })
-            make.submenu = targets
-            menu.addItem(make)
-            menu.addItem(ActionItem("할 일 가져오기…") { draft.askToLinkTodo() })
+            let targets: [InkMenuEntry] = [.section("어디에 둘까요")]
+                + TodoTargets.choices(for: period).map { target in
+                    .item(target.name, detail: TodoNames.menuDetail(target.period)) { draft.makeTodos(fromLines: lines, in: target.period) }
+                }
+                + [.divider, .item("다른 날짜…") { draft.showPop(.pickDay(.makeTodos(lines: lines))) }]
+            var entries: [InkMenuEntry] = [
+                .submenu("할 일로 만들기", isEnabled: !lines.isEmpty, targets),
+                .item("할 일 가져오기…") { draft.askToLinkTodo() },
+            ]
             if let chip = draft.chipAtCaret, let item = draft.book.todos.item(chip.todo.id) {
-                menu.addItem(.separator())
-                menu.addItem(ActionItem(item.isDone ? "체크 풀기" : "체크하기") { draft.toggleChipAtCaret() })
+                entries.append(.item(item.isDone ? "체크 풀기" : "체크하기") { draft.toggleChipAtCaret() })
             }
-            return menu
-        }
-    }
-
-    /// A menu item that runs a closure.
-    @MainActor
-    final class ActionItem: NSMenuItem {
-        private let run: @MainActor () -> Void
-
-        init(_ title: String, key: String = "", enabled: Bool = true, run: @escaping @MainActor () -> Void) {
-            self.run = run
-            super.init(title: title, action: #selector(fire), keyEquivalent: key)
-            target = self
-            isEnabled = enabled
-        }
-
-        required init(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-        @objc private func fire() {
-            run()
+            entries += [
+                .divider,
+                .item("잘라내기", detail: "⌘X", isEnabled: hasSelection) { draft.cutSelection() },
+                .item("복사", detail: "⌘C", isEnabled: hasSelection) { draft.copySelection() },
+                .item("붙여넣기", detail: "⌘V", isEnabled: NSPasteboard.general.string(forType: .string) != nil) { draft.paste() },
+                .item("모두 선택", detail: "⌘A", isEnabled: !draft.text.characters.isEmpty) { draft.selectAll() },
+                .divider,
+                .item("굵게", detail: "⌘B", isEnabled: hasSelection) { draft.toggle(MemoAttributes.Bold.self) },
+                .item("기울임", detail: "⌘I", isEnabled: hasSelection) { draft.toggle(MemoAttributes.Italic.self) },
+                .item("서식 지우기", isEnabled: hasSelection) { draft.clearFormatting() },
+            ]
+            return entries
         }
     }
 }

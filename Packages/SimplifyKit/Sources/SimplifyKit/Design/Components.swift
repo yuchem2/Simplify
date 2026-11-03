@@ -156,21 +156,27 @@ private struct SegmentStyle: ButtonStyle {
 
 /// Buttons drawn as outlined boxes. `.primary` is filled with ink (one per screen), `.toggled` is a
 /// plain button shown switched on, `.text` is an underlined word. `.danger` and `.dangerText` (a red
-/// underlined word) do what cannot be undone: delete, drop edits, disconnect.
+/// underlined word) do what cannot be undone: delete, drop edits, disconnect. `active`: the menu or
+/// box the button opened is showing, so it stays grey (`rowActive`) until it closes.
 public struct DrawnButtonStyle: ButtonStyle {
     public enum Kind: Sendable { case plain, primary, toggled, text, dangerText, danger, icon }
     var kind: Kind
+    var active: Bool
 
-    public init(_ kind: Kind = .plain) { self.kind = kind }
+    public init(_ kind: Kind = .plain, active: Bool = false) {
+        self.kind = kind
+        self.active = active
+    }
 
     public func makeBody(configuration: Configuration) -> some View {
-        DrawnButtonBody(configuration: configuration, kind: kind)
+        DrawnButtonBody(configuration: configuration, kind: kind, active: active)
     }
 }
 
 private struct DrawnButtonBody: View {
     let configuration: ButtonStyleConfiguration
     let kind: DrawnButtonStyle.Kind
+    let active: Bool
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.isFocused) private var isFocused
     @State private var hovering = false
@@ -184,7 +190,7 @@ private struct DrawnButtonBody: View {
                     .underline()
                     .foregroundStyle(!isEnabled ? Color.inkFaint : kind == .dangerText ? Color.danger : Color.ink)
                     .padding(.horizontal, Metrics.spaceXxs)
-                    .background(hovering && isEnabled ? Color.hover : Color.clear)
+                    .background(active ? Color.rowActive : hovering && isEnabled ? Color.hover : Color.clear)
                     .opacity(configuration.isPressed ? 0.6 : 1)
                     // A taller target around the small word without changing the layout.
                     .contentShape(Rectangle().inset(by: -4))
@@ -231,8 +237,7 @@ private struct DrawnButtonBody: View {
     private func background(pressed: Bool) -> Color {
         if kind == .primary && isEnabled { return pressed || hovering ? Color.ink.opacity(Metrics.opacityPrimaryHover) : .ink }
         guard isEnabled else { return .paper }
-        if kind == .toggled { return .rowActive }
-        if pressed { return .rowActive }
+        if kind == .toggled || active || pressed { return .rowActive }
         return hovering ? .hover : .paper
     }
 }
@@ -360,9 +365,10 @@ public enum FieldKind: Sendable { case box, inline, title }
 
 public extension View {
     /// The one input look. Put it on a `.plain` TextField; pass whether it has keyboard focus and
-    /// whether its value is wrong. Disabled comes from the environment.
-    func drawnField(_ kind: FieldKind = .box, focused: Bool, error: Bool = false) -> some View {
-        modifier(DrawnField(kind: kind, focused: focused, error: error))
+    /// whether its value is wrong. Disabled comes from the environment. A box that opens a menu or
+    /// a date passes `active` while that is showing.
+    func drawnField(_ kind: FieldKind = .box, focused: Bool, error: Bool = false, active: Bool = false) -> some View {
+        modifier(DrawnField(kind: kind, focused: focused, error: error, active: active))
     }
 }
 
@@ -370,6 +376,7 @@ private struct DrawnField: ViewModifier {
     var kind: FieldKind
     var focused: Bool
     var error: Bool
+    var active: Bool
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovering = false
 
@@ -382,7 +389,7 @@ private struct DrawnField: ViewModifier {
                 .foregroundStyle(isEnabled ? Color.ink : Color.inkFaint)
                 .padding(.horizontal, Metrics.spaceM)
                 .frame(minHeight: 28)
-                .background(error ? Color.errorTint : !isEnabled ? Color.shadeSoft : hovering && !focused ? Color.hover : Color.paper)
+                .background(error ? Color.errorTint : !isEnabled ? Color.shadeSoft : active ? Color.rowActive : hovering && !focused ? Color.hover : Color.paper)
                 .overlay(Rectangle().strokeBorder(isEnabled ? Color.ink : Color.inkFaint, lineWidth: error ? Metrics.lineBox : Metrics.line))
                 .focusRing(focused)
                 .onHover { hovering = $0 }

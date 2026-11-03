@@ -64,6 +64,7 @@ enum Snapshot {
             renderComponents()
             renderWidgets(model: model)
             renderStageEight(model: model, calendars: shown, memos: memos)
+            renderMenus(model: model, calendars: shown)
         }
         NSApp.terminate(nil)
     }
@@ -650,6 +651,163 @@ private struct ComponentGallery: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.paper)
         .foregroundStyle(.ink)
+    }
+}
+
+// MARK: - Menus and pops
+
+extension Snapshot {
+    /// The ink menus, the box under a button and the date picker, opened beside what they belong
+    /// to, on the white wall and in graphite. The panels themselves are AppKit windows ImageRenderer
+    /// cannot draw, so their content is laid out here as the panel shows it.
+    fileprivate static func renderMenus(model: AppModel, calendars: CalendarController) {
+        let gallery = MenuGallery(model: model, calendars: calendars)
+        let size = CGSize(width: 1180, height: 860)
+        render(gallery, name: "menus", appearance: .aqua, scheme: .light, size: size)
+        render(gallery, name: "menus-dark", appearance: .darkAqua, scheme: .dark, size: size)
+        render(gallery.environment(\.showsPalettePatterns, true), name: "menus-patterns", appearance: .aqua, scheme: .light, size: size)
+    }
+}
+
+private struct MenuGallery: View {
+    let model: AppModel
+    let calendars: CalendarController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Metrics.spaceXxxl) {
+            HStack(alignment: .top, spacing: 48) {
+                board("1. 할 일 줄") { todoMenu }
+                board("2. 메모") { memoMenu }
+            }
+            HStack(alignment: .top, spacing: 40) {
+                board("3. 캘린더") { calendarMenu }
+                board("3. 시각") { timeMenu }
+                board("4. 날짜 고르기") { datePicker }
+                board("5. 버튼에 붙는 상자") { unsentPop }
+            }
+        }
+        .padding(Metrics.spaceXxxl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(.wall)
+        .foregroundStyle(.ink)
+    }
+
+    private func board(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: Metrics.spaceM) {
+            Text(title).textStyle(.section).foregroundStyle(.inkSoft)
+            content()
+        }
+    }
+
+    private static func noop() {}
+
+    // 1. The row stays grey while its menu is open; 색 라벨 is open with the cursor on 초록.
+    private var todoMenu: some View {
+        let labels: [InkMenuEntry] = [.item("없음", checked: false, action: Self.noop)]
+            + Palette.allCases.map { .item($0.name, swatch: InkMenuSwatch($0.ink, shape: $0.markShape), checked: $0 == .blue, action: Self.noop) }
+        let pass: [InkMenuEntry] = [.item("내일", detail: "11.4", action: Self.noop), .item("다음 주", detail: "11월 2주차", action: Self.noop),
+                                    .item("다음 달", detail: "12월", action: Self.noop), .divider,
+                                    .item("이번 주로", detail: "11월 1주차", action: Self.noop), .item("이번 달로", detail: "11월", action: Self.noop),
+                                    .divider, .item("다른 날짜…", action: Self.noop)]
+        let menu: [InkMenuEntry] = [.item("고치기", action: Self.noop), .submenu("색 라벨", labels), .submenu("넘기기", pass), .divider,
+                                    .item("지우기", isDanger: true, action: Self.noop)]
+        return HStack(alignment: .top, spacing: 40) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: Metrics.spaceM) {
+                    CheckBox(isOn: false)
+                    Text("장보기 목록 정리").textStyle(.item)
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, Metrics.spaceXs)
+                .selectableRow(chosen: false, active: true)
+                .frame(width: 220)
+                HStack(alignment: .top, spacing: -Metrics.spaceS) {
+                    InkMenuView(entries: menu, cursor: 1).fixedSize()
+                    InkMenuView(entries: labels, cursor: 5).fixedSize().padding(.top, InkMenuMetrics.itemHeight)
+                }
+                .padding(.leading, 110)
+            }
+            VStack(alignment: .leading, spacing: Metrics.spaceXs) {
+                Text("넘기기 ›").textStyle(.small).foregroundStyle(.inkSoft)
+                InkMenuView(entries: pass, cursor: 0).fixedSize()
+            }
+        }
+    }
+
+    // 2. Nothing picked: cut, copy and the formats are off.
+    private var memoMenu: some View {
+        let targets: [InkMenuEntry] = [.section("어디에 둘까요"), .item("이날", detail: "11.3", action: Self.noop),
+                                       .item("이번 주", detail: "11월 1주차", action: Self.noop), .item("이번 달", detail: "11월", action: Self.noop),
+                                       .divider, .item("다른 날짜…", action: Self.noop)]
+        let menu: [InkMenuEntry] = [.submenu("할 일로 만들기", targets), .item("할 일 가져오기…", action: Self.noop), .divider,
+                                    .item("잘라내기", detail: "⌘X", isEnabled: false, action: Self.noop),
+                                    .item("복사", detail: "⌘C", isEnabled: false, action: Self.noop),
+                                    .item("붙여넣기", detail: "⌘V", action: Self.noop), .item("모두 선택", detail: "⌘A", action: Self.noop), .divider,
+                                    .item("굵게", detail: "⌘B", isEnabled: false, action: Self.noop),
+                                    .item("기울임", detail: "⌘I", isEnabled: false, action: Self.noop),
+                                    .item("서식 지우기", isEnabled: false, action: Self.noop)]
+        return HStack(alignment: .top, spacing: -Metrics.spaceS) {
+            InkMenuView(entries: menu, cursor: 0).fixedSize()
+            InkMenuView(entries: targets, cursor: 1).fixedSize()
+        }
+    }
+
+    // 3. Under the button, at least as wide; grouped by account with the chosen calendar ticked.
+    private var calendarMenu: some View {
+        let groups = calendars.writableSources
+        let chosen = groups.first?.1.first
+        let entries: [InkMenuEntry] = groups.enumerated().flatMap { index, group in
+            (index > 0 ? [InkMenuEntry.divider] : []) + [.section("\(group.0.provider.label) · \(group.0.email)")]
+                + group.1.map { .item($0.name, swatch: InkMenuSwatch($0.look.ink, shape: $0.look.shape), checked: $0.id == chosen?.id, action: Self.noop) }
+        }
+        return VStack(alignment: .leading, spacing: 0) {
+            MenuLabel(text: chosen?.name ?? "캘린더", soft: "Google", mark: chosen?.look, isOpen: true).frame(width: 200)
+            InkMenuView(entries: entries, cursor: entries.firstIndex { $0.item?.checked == true }, minWidth: 200)
+                .fixedSize()
+                .padding(.top, -Metrics.line)
+        }
+    }
+
+    // 3. Nine lines with 오후 2:00 in the middle; the cursor sits on it as the menu opens.
+    private var timeMenu: some View {
+        let day = model.calendar.startOfDay(for: model.today)
+        let times = (0..<96).map { model.calendar.date(byAdding: .minute, value: $0 * 15, to: day)! }
+        let chosen = 56
+        let entries = times.enumerated().map { index, time in
+            InkMenuEntry.item(EventText.time(time, calendar: model.calendar), checked: index == chosen, action: Self.noop)
+        }
+        let scroll = CGFloat(chosen) * InkMenuMetrics.itemHeight + InkMenuMetrics.itemHeight / 2 - InkMenuMetrics.itemHeight * 9 / 2
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(EventText.time(times[chosen], calendar: model.calendar)).monospacedDigit().drawnField(.box, focused: false, active: true).fixedSize()
+            InkMenuView(entries: entries, cursor: chosen, minWidth: 0, maxItems: 9, scroll: scroll).fixedSize().padding(.top, -Metrics.line)
+        }
+    }
+
+    // 4. The picked day filled, today under its bar.
+    private var datePicker: some View {
+        let picked = model.calendar.date(byAdding: .day, value: 9, to: model.today)!
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(EventText.day(picked, calendar: model.calendar)).monospacedDigit().drawnField(.box, focused: false, active: true).fixedSize()
+            InkDatePicker(selection: .constant(picked), calendar: model.calendar, today: model.today, takesFocus: false,
+                          isHoliday: { calendars.holidayDays.contains($0) })
+                .padding(.horizontal, Metrics.spaceL)
+                .padding(.top, Metrics.spaceM)
+                .padding(.bottom, Metrics.spaceL)
+                .floatingFrame()
+                .padding(.top, -Metrics.line)
+        }
+    }
+
+    // 5. A안: the box hangs from the button, which stays grey while it is open.
+    private var unsentPop: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {} label: { Label("보내기 대기 2건", systemImage: "arrow.triangle.2.circlepath") }
+                .buttonStyle(DrawnButtonStyle(.text, active: true))
+                .fixedSize()
+            UnsentWritesList(calendars: calendars)
+                .floatingFrame()
+                .padding(.top, Metrics.spaceXs)
+        }
     }
 }
 #endif

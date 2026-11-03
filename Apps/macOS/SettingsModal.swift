@@ -11,8 +11,9 @@ struct SettingsModal: View {
     @Environment(\.webAuthenticationSession) private var webAuth
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var openURL
-    @Environment(\.showsPalettePatterns) private var showsPatterns
     @State private var page: Page = .accounts
+    @State private var isCalendarMenuOpen = false
+    @State private var isAddMenuOpen = false
     /// The account kind whose connect page is open, before anything has started.
     @State private var intro: CalendarProviderKind?
     @State private var appleID = ""
@@ -234,24 +235,22 @@ struct SettingsModal: View {
     private var newEventCalendarMenu: some View {
         let chosen = calendars.preferredNewEventSource.flatMap { calendars.isWritable($0) ? calendars.sources[$0] : nil }
         let shown = chosen ?? calendars.defaultSourceForNewEvent.flatMap { calendars.sources[$0] }
-        return Menu {
-            Toggle("마지막으로 쓴 캘린더", isOn: Binding(get: { chosen == nil }, set: { if $0 { calendars.preferredNewEventSource = nil } }))
-            ForEach(calendars.writableSources, id: \.0.id) { account, sources in
-                Section("\(account.provider.label) · \(account.email)") {
-                    ForEach(sources) { source in
-                        Toggle(isOn: Binding(get: { chosen?.id == source.id }, set: { if $0 { calendars.preferredNewEventSource = source.id } })) {
-                            Label { Text(source.name) } icon: { Image(nsImage: Swatch.image(source.look, patterned: showsPatterns)) }
-                        }
-                    }
-                }
-            }
-        } label: {
-            MenuLabel(text: chosen?.name ?? "마지막으로 쓴 캘린더", mark: shown?.look)
+        return Button { isCalendarMenuOpen = true } label: {
+            MenuLabel(text: chosen?.name ?? "마지막으로 쓴 캘린더", mark: shown?.look, isOpen: isCalendarMenuOpen)
         }
-        .menuStyle(.button)
         .buttonStyle(FocusOnlyStyle())
-        .menuIndicator(.hidden)
         .fixedSize()
+        .inkMenu(isPresented: $isCalendarMenuOpen) {
+            [.item("마지막으로 쓴 캘린더", checked: chosen == nil) { calendars.preferredNewEventSource = nil }]
+                + calendars.writableSources.flatMap { account, sources in
+                    [InkMenuEntry.divider, .section("\(account.provider.label) · \(account.email)")]
+                        + sources.map { source in
+                            .item(source.name, swatch: InkMenuSwatch(source.look.ink, shape: source.look.shape), checked: chosen?.id == source.id) {
+                                calendars.preferredNewEventSource = source.id
+                            }
+                        }
+                }
+        }
         .disabled(calendars.writableSources.isEmpty)
         .help(calendars.writableSources.isEmpty ? "일정을 쓸 수 있는 캘린더가 없어요" : "")
         .accessibilityLabel("기본 캘린더")
@@ -273,17 +272,16 @@ struct SettingsModal: View {
             HStack {
                 Text("로그인 정보는 이 Mac의 키체인에만 저장해요.").textStyle(.small).foregroundStyle(.inkSoft)
                 Spacer()
-                Menu {
-                    Button("Google") { intro = .google }
-                    Button("iCloud") { openICloudForm(appleID: nil) }
-                    Button("미리알림 (이 Mac)") { intro = .reminders }
-                        .disabled(calendars.accounts.contains { $0.provider == .reminders })
-                } label: {
+                Button { isAddMenuOpen = true } label: {
                     Label("계정 추가", systemImage: "plus")
                 }
-                .menuStyle(.button)
-                .buttonStyle(DrawnButtonStyle())
+                .buttonStyle(DrawnButtonStyle(active: isAddMenuOpen))
                 .fixedSize()
+                .inkMenu(isPresented: $isAddMenuOpen) {
+                    [.item("Google") { intro = .google },
+                     .item("iCloud") { openICloudForm(appleID: nil) },
+                     .item("미리알림 (이 Mac)", isEnabled: !calendars.accounts.contains { $0.provider == .reminders }) { intro = .reminders }]
+                }
             }
             .padding(.top, Metrics.spaceXs)
         }
@@ -666,7 +664,7 @@ private struct StyleButton: View {
         .help("색과 모양 고르기")
         .accessibilityLabel("\(source.name) 색과 모양")
         .accessibilityValue(label)
-        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+        .anchoredPop(isPresented: $isOpen) {
             StylePop(sourceID: source.id, provider: provider, calendars: calendars) { isOpen = false }
         }
     }

@@ -242,7 +242,8 @@ struct EventEditorView: View {
     let calendars: CalendarController
     @Bindable var editor: EventEditorModel
     @FocusState private var focus: Field?
-    @Environment(\.showsPalettePatterns) private var showsPatterns
+    @State private var isRepeatOpen = false
+    @State private var isCalendarOpen = false
 
     private enum Field: Hashable { case title, location, notes }
 
@@ -261,13 +262,14 @@ struct EventEditorView: View {
                         .labelsHidden()
                 }
                 row("시작") {
-                    DayField(day: editor.fields.start, calendar: editor.calendar) { editor.setStartDay($0) }
+                    DayField(day: editor.fields.start, calendar: editor.calendar, today: model.today, holidays: calendars.holidayDays) { editor.setStartDay($0) }
                     if !editor.fields.isAllDay {
                         TimeField(time: editor.fields.start, calendar: editor.calendar) { editor.setStart($0) }
                     }
                 }
                 row("끝") {
-                    DayField(day: editor.fields.isAllDay ? editor.lastDay : editor.fields.end, calendar: editor.calendar) { editor.setEndDay($0) }
+                    DayField(day: editor.fields.isAllDay ? editor.lastDay : editor.fields.end, calendar: editor.calendar, today: model.today,
+                             holidays: calendars.holidayDays) { editor.setEndDay($0) }
                     if !editor.fields.isAllDay {
                         TimeField(time: editor.fields.end, calendar: editor.calendar) { editor.fields.end = $0 }
                     }
@@ -325,40 +327,37 @@ struct EventEditorView: View {
         let choices = editor.initial.repeatChoice == .custom
             ? EventEditorModel.RepeatChoice.presets.filter { $0.preset != ownPreset } + [.custom]
             : EventEditorModel.RepeatChoice.presets
-        return Menu {
-            ForEach(choices, id: \.self) { choice in
-                Toggle(choice.label(start: start, calendar: editor.calendar), isOn: Binding(
-                    get: { editor.fields.repeatChoice == choice },
-                    set: { if $0 { editor.fields.repeatChoice = choice } }))
-            }
-        } label: {
-            MenuLabel(text: editor.fields.repeatChoice.label(start: start, calendar: editor.calendar))
+        return Button { isRepeatOpen = true } label: {
+            MenuLabel(text: editor.fields.repeatChoice.label(start: start, calendar: editor.calendar), isOpen: isRepeatOpen)
         }
-        .menuStyle(.button)
         .buttonStyle(FocusOnlyStyle())
-        .menuIndicator(.hidden)
         .fixedSize()
+        .inkMenu(isPresented: $isRepeatOpen) {
+            choices.map { choice in
+                .item(choice.label(start: start, calendar: editor.calendar), checked: editor.fields.repeatChoice == choice) {
+                    editor.fields.repeatChoice = choice
+                }
+            }
+        }
     }
 
     private var calendarMenu: some View {
         let source = calendars.sources[editor.fields.sourceID]
-        return Menu {
-            ForEach(calendars.writableSources, id: \.0.id) { account, sources in
-                Section("\(account.provider.label) · \(account.email)") {
-                    ForEach(sources) { source in
-                        Toggle(isOn: Binding(get: { editor.fields.sourceID == source.id },
-                                             set: { if $0 { editor.fields.sourceID = source.id } })) {
-                            Label { Text(source.name) } icon: { Image(nsImage: Swatch.image(source.look, patterned: showsPatterns)) }
+        return Button { isCalendarOpen = true } label: {
+            MenuLabel(text: source?.name ?? "캘린더", soft: source.flatMap(providerLabel), mark: source?.look, isOpen: isCalendarOpen)
+        }
+        .buttonStyle(FocusOnlyStyle())
+        .inkMenu(isPresented: $isCalendarOpen) {
+            calendars.writableSources.enumerated().flatMap { index, group in
+                let (account, sources) = group
+                return (index > 0 ? [InkMenuEntry.divider] : []) + [.section("\(account.provider.label) · \(account.email)")]
+                    + sources.map { source in
+                        .item(source.name, swatch: InkMenuSwatch(source.look.ink, shape: source.look.shape), checked: editor.fields.sourceID == source.id) {
+                            editor.fields.sourceID = source.id
                         }
                     }
-                }
             }
-        } label: {
-            MenuLabel(text: source?.name ?? "캘린더", soft: source.flatMap(providerLabel), mark: source?.look)
         }
-        .menuStyle(.button)
-        .buttonStyle(FocusOnlyStyle())
-        .menuIndicator(.hidden)
         // A changed event stays in its calendar; moving between calendars is not part of this stage.
         .disabled(!editor.isNew)
         .help(editor.isNew ? "" : "만든 뒤에는 캘린더를 옮길 수 없어요")
@@ -668,10 +667,12 @@ private struct ScopeOption: View {
 
 // MARK: - Pieces
 
-/// A date in a drawn box; a click opens a month to pick from.
+/// A date in a drawn box; a click opens a small ledger month under it.
 private struct DayField: View {
     let day: Date
     let calendar: Calendar
+    let today: Date
+    let holidays: Set<Date>
     let onPick: (Date) -> Void
     @State private var isPicking = false
 
@@ -679,56 +680,87 @@ private struct DayField: View {
         Button { isPicking = true } label: {
             Text(EventText.day(day, calendar: calendar))
                 .monospacedDigit()
-                .drawnField(.box, focused: false)
+                .drawnField(.box, focused: false, active: isPicking)
                 .contentShape(Rectangle())
         }
         // The box draws itself; the button adds the focus ring.
         .buttonStyle(FocusOnlyStyle())
         .fixedSize()
-        .popover(isPresented: $isPicking, arrowEdge: .bottom) {
-            DatePicker("날짜", selection: Binding(get: { day }, set: { onPick($0); isPicking = false }), displayedComponents: .date)
-                .datePickerStyle(.graphical)
-                .labelsHidden()
-                .environment(\.calendar, calendar)
-                .environment(\.locale, Locale(identifier: "ko_KR"))
-                .padding(Metrics.spaceM)
+        .anchoredPop(isPresented: $isPicking) {
+            DayPick(day: day, calendar: calendar, today: today, holidays: holidays) { picked in
+                onPick(picked)
+                isPicking = false
+            }
         }
     }
 }
 
-/// A time in a drawn box; a click lists the day in quarter hours.
+/// The month in DayField's box: the arrows move the day, Return or a click takes it.
+private struct DayPick: View {
+    let calendar: Calendar
+    let today: Date
+    let holidays: Set<Date>
+    let onPick: (Date) -> Void
+    @State private var day: Date
+
+    init(day: Date, calendar: Calendar, today: Date, holidays: Set<Date>, onPick: @escaping (Date) -> Void) {
+        self.calendar = calendar
+        self.today = today
+        self.holidays = holidays
+        self.onPick = onPick
+        _day = State(initialValue: day)
+    }
+
+    var body: some View {
+        InkDatePicker(selection: $day, calendar: calendar, today: today, isHoliday: { holidays.contains($0) }) { onPick(day) }
+            .padding(.horizontal, Metrics.spaceL)
+            .padding(.top, Metrics.spaceM)
+            .padding(.bottom, Metrics.spaceL)
+    }
+}
+
+/// A time in a drawn box; a click lists the day in quarter hours, nine at a time with the chosen
+/// one in the middle. Typing a time (`14`, `230`) moves the cursor to the nearest.
 private struct TimeField: View {
     let time: Date
     let calendar: Calendar
     let onPick: (Date) -> Void
+    @State private var isOpen = false
 
     var body: some View {
         let day = calendar.startOfDay(for: time)
         // By clock time, once each: on a daylight-saving day the skipped quarter hours map onto one moment.
         let options = (0..<96).compactMap { calendar.date(bySettingHour: $0 / 4, minute: $0 % 4 * 15, second: 0, of: day) }
             .reduce(into: [Date]()) { if $0.last != $1 { $0.append($1) } }
-        Menu {
-            ForEach(options, id: \.self) { option in
-                Toggle(EventText.time(option, calendar: calendar), isOn: Binding(get: { option == time }, set: { if $0 { onPick(option) } }))
-            }
-        } label: {
+        let minutes = options.map(minutesOfDay)
+        Button { isOpen = true } label: {
             Text(EventText.time(time, calendar: calendar))
                 .monospacedDigit()
-                .drawnField(.box, focused: false)
+                .drawnField(.box, focused: false, active: isOpen)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.button)
         .buttonStyle(FocusOnlyStyle())
-        .menuIndicator(.hidden)
         .fixedSize()
+        .inkMenu(isPresented: $isOpen, maxItems: 9, typeahead: { TimeTypeahead.nearest($0, in: minutes, near: minutesOfDay(time)) }) {
+            options.map { option in
+                .item(EventText.time(option, calendar: calendar), checked: option == time) { onPick(option) }
+            }
+        }
+    }
+
+    private func minutesOfDay(_ date: Date) -> Int {
+        let c = calendar.dateComponents([.hour, .minute], from: date)
+        return c.hour! * 60 + c.minute!
     }
 }
 
-/// What a menu shows when closed: a drawn box with a chevron. The menu's button adds the focus ring.
+/// What a menu shows when closed: a drawn box with a chevron, grey while its menu is open. The
+/// button around it adds the focus ring.
 struct MenuLabel: View {
     let text: String
     var soft: String?
     var mark: CalendarLook?
+    var isOpen = false
 
     var body: some View {
         HStack(spacing: Metrics.spaceS) {
@@ -738,42 +770,8 @@ struct MenuLabel: View {
             Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
         }
         .lineLimit(1)
-        .drawnField(.box, focused: false)
+        .drawnField(.box, focused: false, active: isOpen)
         .contentShape(Rectangle())
     }
 }
 
-/// Square colour swatches for menus, which only take images; with patterns on, the calendar's shape
-/// as `Mark` draws it.
-@MainActor
-enum Swatch {
-    private struct Key: Hashable { let look: CalendarLook; let patterned: Bool }
-    private static var cache: [Key: NSImage] = [:]
-
-    static func image(_ look: CalendarLook, patterned: Bool = false) -> NSImage {
-        let key = Key(look: look, patterned: patterned)
-        if let image = cache[key] { return image }
-        let shape = patterned ? look.shape : .square
-        let image = NSImage(size: NSSize(width: 10, height: 10), flipped: true) { rect in
-            let color = NSColor(look.ink)
-            if shape == .square {
-                color.setFill()
-                rect.fill()
-                NSColor.labelColor.setStroke()
-                NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5)).stroke()
-                return true
-            }
-            color.setFill()
-            color.setStroke()
-            if shape.isFilled { NSBezierPath(cgPath: shape.path(in: rect).cgPath).fill() }
-            if let edge = shape.edgeWidth(size: rect.width) {
-                let outline = NSBezierPath(rect: rect.insetBy(dx: edge / 2, dy: edge / 2))
-                outline.lineWidth = edge
-                outline.stroke()
-            }
-            return true
-        }
-        cache[key] = image
-        return image
-    }
-}

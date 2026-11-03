@@ -30,6 +30,10 @@ final class MemoDraft {
     @ObservationIgnored var selectionLineRect: (() -> CGRect?)?
     /// The same line in window coordinates, top-left origin, for placing pops beside it.
     @ObservationIgnored var selectionLineInWindow: (() -> CGRect?)?
+    /// Gives the focused text view the ink caret and a grey selection.
+    @ObservationIgnored var inkTextView: (() -> Void)?
+    /// Opens the right-click menu under the selection, for VoiceOver's 메뉴 보기.
+    @ObservationIgnored var showMenu: (() -> Void)?
     /// The next text change is `[[` being put back after a closed search; it opens nothing.
     @ObservationIgnored var skipsSearchTrigger = false
     /// Bumped to put keyboard focus back in the box after a pop closes.
@@ -405,6 +409,7 @@ struct MemoEditor: View {
                     .padding(.vertical, Metrics.spaceS)
                     .accessibilityLabel(title)
                     .accessibilityHint(placeholder)
+                    .accessibilityAction(.showMenu) { draft.showMenu?() }
             }
             if draft.text.characters.isEmpty {
                 Text(draft.isUnreadable ? "이 메모는 이 버전에서 열 수 없어요. 앱을 업데이트해 주세요." : placeholder)
@@ -439,7 +444,11 @@ struct MemoEditor: View {
         // reach it; the room is made inside the content instead.
         .padding(.bottom, showsBar ? max(0, barY + MemoFormatBar.height - MemoStyle.boxHeight) : 0)
         .focusedValue(\.memoDraft, focused ? draft : nil)
-        .onChange(of: focused, initial: true) { draft.hasFocus = focused }
+        .onChange(of: focused, initial: true) {
+            draft.hasFocus = focused
+            // Once the text view has become first responder.
+            if focused { Task { @MainActor in draft.inkTextView?() } }
+        }
         // The week's first day counts too: periods equal across calendars still open again under the new one.
         .onChange(of: [period.key, "\(period.start.timeIntervalSinceReferenceDate)", "\(period.calendar.firstWeekday)"], initial: true) {
             draft.open(period)

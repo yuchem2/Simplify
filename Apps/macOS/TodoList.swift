@@ -16,6 +16,8 @@ struct TodoList: View {
     @State private var editing: UUID?
     @State private var editTitle = ""
     @State private var dropTarget: UUID?
+    /// The row whose right-click menu is open: grey while it is.
+    @State private var menuRow: UUID?
     @FocusState private var focus: Field?
     @Environment(\.isRenderingSnapshot) private var isRenderingSnapshot
 
@@ -85,7 +87,8 @@ struct TodoList: View {
                 focus = nil
                 todos.selectedRow = entry.id
             }
-            .contextMenu { menu(entry) }
+            .inkContextMenu(isEnabled: !model.isModalOpen && todos.pop == nil,
+                            isOpen: Binding(get: { menuRow == entry.id }, set: { if $0 { menuRow = entry.id } else if menuRow == entry.id { menuRow = nil } })) { menu(entry) }
             .accessibilityElement(children: .combine)
             .accessibilityAction(named: entry.isLink ? "이 칸에서 빼기" : "지우기") { todos.remove(entry) }
     }
@@ -128,7 +131,7 @@ struct TodoList: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, Metrics.spaceXs)
-        .selectableRow(chosen: isChosen, active: isEditing)
+        .selectableRow(chosen: isChosen, active: isEditing || menuRow == entry.id)
     }
 
     /// Where else the ToDo shows, and the memo it came from.
@@ -162,33 +165,27 @@ struct TodoList: View {
         }
     }
 
-    @ViewBuilder
-    private func menu(_ entry: TodoEntry) -> some View {
-        Button("고치기") { startEditing(entry) }
-        Menu("색 라벨") {
-            Picker("색 라벨", selection: Binding(get: { entry.label }, set: { todos.setLabel(entry.todoID, $0) })) {
-                Text("없음").tag(Palette?.none)
-                ForEach(Palette.allCases, id: \.self) { palette in
-                    Text(palette.name).tag(Palette?.some(palette))
+    /// 고치기 · 색 라벨 › · 넘기기 › · 지우기 (or, for a linked row, 이 칸에서 빼기).
+    private func menu(_ entry: TodoEntry) -> [InkMenuEntry] {
+        let labels: [InkMenuEntry] = [.item("없음", checked: entry.label == nil) { todos.setLabel(entry.todoID, nil) }]
+            + Palette.allCases.map { palette in
+                .item(palette.name, swatch: InkMenuSwatch(palette.ink, shape: palette.markShape), checked: entry.label == palette) {
+                    todos.setLabel(entry.todoID, palette)
                 }
             }
-            .pickerStyle(.inline)
-            .labelsHidden()
+        var targets: [InkMenuEntry] = []
+        for group in TodoNames.passTargets(from: period) {
+            targets += group.map { target in .item(target.name, detail: TodoNames.menuDetail(target.period)) { todos.pass(entry, to: target.period) } }
+            targets.append(.divider)
         }
-        Menu("넘기기") {
-            let targets = TodoNames.passTargets(from: period)
-            ForEach(targets.indices, id: \.self) { group in
-                ForEach(targets[group]) { target in
-                    Button { todos.pass(entry, to: target.period) } label: {
-                        Text("\(target.name)  ·  \(target.detail)")
-                    }
-                }
-                Divider()
-            }
-            Button("다른 날짜…") { todos.pop = .pickDay(.pass(entry, from: period)) }
-        }
-        Divider()
-        Button(entry.isLink ? "이 칸에서 빼기" : "지우기") { todos.remove(entry) }
+        targets.append(.item("다른 날짜…") { todos.pop = .pickDay(.pass(entry, from: period)) })
+        return [
+            .item("고치기") { startEditing(entry) },
+            .submenu("색 라벨", labels),
+            .submenu("넘기기", targets),
+            .divider,
+            .item(entry.isLink ? "이 칸에서 빼기" : "지우기", isDanger: true) { todos.remove(entry) },
+        ]
     }
 
     // MARK: Adding and editing
@@ -274,6 +271,16 @@ enum TodoNames {
         case .day: return "\(c.month!)월 \(c.day!)일 · 하루"
         case .week: return "\(period.title) · 한 주"
         case .month: return "\(period.title) · 한 달"
+        }
+    }
+
+    /// The right column of a menu line: `11.4`, `11월 2주차`, `12월`.
+    static func menuDetail(_ period: Period) -> String {
+        let c = period.calendar.dateComponents([.month, .day], from: period.start)
+        switch period.scope {
+        case .day: return "\(c.month!).\(c.day!)"
+        case .week: return period.title
+        case .month: return "\(c.month!)월"
         }
     }
 

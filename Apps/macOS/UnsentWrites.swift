@@ -2,7 +2,8 @@ import SwiftUI
 import SimplifyKit
 
 /// Stands in the toolbar instead of the sync status while event changes have not reached their
-/// calendar: `보내기 대기 2건`, or with a warning sign `보내지 못한 일정 1건`. A click lists them.
+/// calendar: `보내기 대기 2건`, or with a warning sign `보내지 못한 일정 1건`. A click lists them in a
+/// box under it.
 struct UnsentWritesButton: View {
     let calendars: CalendarController
     @State private var isOpen = false
@@ -15,15 +16,15 @@ struct UnsentWritesButton: View {
                 .fontWeight(failed > 0 ? .semibold : .regular)
         }
         // Errors stay in ink: the warning sign and the weight tell them apart, red is for holidays and delete.
-        .buttonStyle(DrawnButtonStyle(.text))
+        .buttonStyle(DrawnButtonStyle(.text, active: isOpen))
         .help(calendars.isOffline ? "인터넷에 연결되면 저장돼요" : "보낼 변경 목록")
-        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+        .anchoredPop(isPresented: $isOpen) {
             UnsentWritesList(calendars: calendars)
         }
     }
 }
 
-private struct UnsentWritesList: View {
+struct UnsentWritesList: View {
     let calendars: CalendarController
 
     var body: some View {
@@ -39,7 +40,6 @@ private struct UnsentWritesList: View {
         }
         .padding(Metrics.spaceXl)
         .frame(width: 320, alignment: .leading)
-        .background(.paper)
     }
 
     private func row(_ write: PendingWrite) -> some View {

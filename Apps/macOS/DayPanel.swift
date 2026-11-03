@@ -78,7 +78,7 @@ struct DayPanel: View {
             }
         }
         .background(.paper)
-        .overlay { PanelPopLayer(model: model, memos: memos) }
+        .overlay { PanelPopLayer(model: model, calendars: calendars, memos: memos) }
         // A ToDo ticked or renamed anywhere redraws its chips in the open memo.
         .onChange(of: memos.todos.revision) { memos.draft.refreshChips() }
         // Every pop is about the period on screen (the memo's lines, a place in its letters).
