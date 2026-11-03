@@ -63,6 +63,7 @@ enum Snapshot {
             renderTodos(model: model, calendars: shown)
             renderComponents()
             renderWidgets(model: model)
+            renderStageEight(model: model, calendars: shown, memos: memos)
         }
         NSApp.terminate(nil)
     }
@@ -386,6 +387,78 @@ enum Snapshot {
         render(desk(empties), name: "widgets-empty-dark", appearance: .darkAqua, scheme: .dark, size: CGSize(width: 752, height: 1000))
     }
 
+    /// Stage 8: the settings pages in both themes, the colour pop, and the calendar and widgets with
+    /// weeks from Monday and patterns on. The two settings are put back as they were afterwards.
+    private static func renderStageEight(model: AppModel, calendars: CalendarController, memos: MemoBook) {
+        let weekStart = model.weekStart, patterns = model.showsPatterns
+        let stored = [SharedSettings.firstWeekday, SharedSettings.showsPatterns].map { ($0, SharedSettings.defaults.object(forKey: $0)) }
+        defer {
+            model.weekStart = weekStart
+            model.showsPatterns = patterns
+            // As stored before, unset ones unset again.
+            for (key, value) in stored { SharedSettings.defaults.set(value, forKey: key) }
+        }
+        func settings(_ page: SettingsModal.Page) -> some View {
+            // In the app the box sits inside MainView and takes its setting from there.
+            ZStack { MainView(model: model, calendars: calendars, memos: memos); SettingsModal(model: model, calendars: calendars, page: page) }
+                .environment(\.showsPalettePatterns, model.showsPatterns)
+        }
+        model.isSettingsOpen = true
+        render(settings(.general), name: "s8-general-dark", appearance: .darkAqua, scheme: .dark)
+        render(settings(.calendars), name: "s8-calendars", appearance: .aqua, scheme: .light)
+        render(ZStack { MainView(model: model, calendars: calendars, memos: memos); SettingsModal(model: model, calendars: calendars, intro: .google) },
+               name: "s8-google", appearance: .aqua, scheme: .light)
+        render(ZStack { MainView(model: model, calendars: calendars, memos: memos); SettingsModal(model: model, calendars: calendars, intro: .google) },
+               name: "s8-google-dark", appearance: .darkAqua, scheme: .dark)
+        model.isSettingsOpen = false
+        for name in ["개인", "운동"] {
+            guard let source = calendars.sources.values.first(where: { $0.name == name }) else { continue }
+            let pop = StylePop(sourceID: source.id, provider: .google, calendars: calendars) {}
+                .background(.paper).padding(Metrics.spaceXl).background(Color.wall)
+            let size = CGSize(width: 256, height: 470)
+            render(pop, name: "s8-pop-\(name == "개인" ? "picked" : "wheel")", appearance: .aqua, scheme: .light, size: size)
+            render(pop.environment(\.showsPalettePatterns, true), name: "s8-pop-\(name == "개인" ? "picked" : "wheel")-dark",
+                   appearance: .darkAqua, scheme: .dark, size: size)
+        }
+
+        model.weekStart = .monday
+        model.showsPatterns = true
+        calendars.show(days: model.shownDays, calendar: model.calendar)
+        model.isSettingsOpen = true
+        render(settings(.general), name: "s8-general-on", appearance: .aqua, scheme: .light)
+        render(settings(.calendars), name: "s8-calendars-on-dark", appearance: .darkAqua, scheme: .dark)
+        model.isSettingsOpen = false
+        render(MainView(model: model, calendars: calendars, memos: memos), name: "s8-monday", appearance: .aqua, scheme: .light)
+        render(MainView(model: model, calendars: calendars, memos: memos), name: "s8-monday-dark", appearance: .darkAqua, scheme: .dark)
+        model.panelScope = .week
+        render(MainView(model: model, calendars: calendars, memos: memos), name: "s8-monday-weekpanel", appearance: .aqua, scheme: .light)
+        model.panelScope = .day
+        let view = model.calendarView
+        model.calendarView = .week
+        render(MainView(model: model, calendars: calendars, memos: memos), name: "s8-monday-weekview", appearance: .aqua, scheme: .light)
+        model.calendarView = .year
+        calendars.show(days: model.shownDays, calendar: model.calendar)
+        render(MainView(model: model, calendars: calendars, memos: memos), name: "s8-monday-year", appearance: .aqua, scheme: .light)
+        model.calendarView = view
+        calendars.show(days: model.shownDays, calendar: model.calendar)
+
+        let calendar = model.calendar
+        let now = calendar.date(byAdding: DateComponents(hour: 13, minute: 20), to: model.today)!
+        var sample = WidgetData.sample(now: now, calendar: calendar)
+        sample.showsPatterns = true
+        let moment = WidgetMoment(data: sample, date: now, calendar: calendar)
+        let widgets = VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .top, spacing: 20) {
+                SmallWidgetView(moment, renderingMode: .fullColor).frame(width: 164, height: 164).widgetSurface()
+                MediumWidgetView(moment, renderingMode: .fullColor).frame(width: 344, height: 164).widgetSurface()
+            }
+            ExtraLargeWidgetView(moment, renderingMode: .fullColor, linksDays: false).frame(width: 704, height: 344).widgetSurface()
+        }
+        .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color.wall)
+        render(widgets, name: "s8-widgets", appearance: .aqua, scheme: .light, size: CGSize(width: 752, height: 600))
+        render(widgets, name: "s8-widgets-dark", appearance: .darkAqua, scheme: .dark, size: CGSize(width: 752, height: 600))
+    }
+
     private static func render(_ view: some View, name: String, appearance: NSAppearance.Name, scheme: ColorScheme, size: CGSize = CGSize(width: 1260, height: 800)) {
         NSAppearance(named: appearance)!.performAsCurrentDrawingAppearance {
             let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height).environment(\.colorScheme, scheme).environment(\.isRenderingSnapshot, true))
@@ -480,9 +553,13 @@ enum Snapshot {
         try! context.save()
 
         UserDefaults.standard.removePersistentDomain(forName: "dev.yoom.simplify.snapshot")
+        let defaults = UserDefaults(suiteName: "dev.yoom.simplify.snapshot")!
+        // Picked on this Mac (설정 › 캘린더): 개인 pink with a picked shape, 운동 a colour off the wheel.
+        CalendarStyles.set(CalendarStyle(palette: .pink, shape: .diamond), for: personal.id, in: defaults)
+        CalendarStyles.set(CalendarStyle(hex: "#3a8f6b"), for: fitness.id, in: defaults)
         let controller = CalendarController(container: container, calendar: calendar, tokens: KeychainTokenStore(service: "dev.yoom.simplify.snapshot"),
                                             credentials: KeychainCredentialStore(service: "dev.yoom.simplify.snapshot"),
-                                            defaults: UserDefaults(suiteName: "dev.yoom.simplify.snapshot")!,
+                                            defaults: defaults,
                                             writer: EventWriter(fileURL: FileManager.default.temporaryDirectory.appending(path: "snapshot-pending.json")))
         controller.show(days: days, calendar: calendar)
         return controller

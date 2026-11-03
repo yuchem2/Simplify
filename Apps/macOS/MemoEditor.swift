@@ -45,9 +45,10 @@ final class MemoDraft {
         self.book = book
     }
 
-    /// Saves what is open, then shows `period`'s memo.
+    /// Saves what is open, then shows `period`'s memo. The same period under another calendar (the
+    /// week's first day or the zone changed) opens again, so names worked out from it follow.
     func open(_ period: Period) {
-        guard period != self.period else { return }
+        guard period != self.period || period.calendar != self.period?.calendar else { return }
         flush()
         self.period = period
         let stored = book.text(for: period)
@@ -439,7 +440,8 @@ struct MemoEditor: View {
         .padding(.bottom, showsBar ? max(0, barY + MemoFormatBar.height - MemoStyle.boxHeight) : 0)
         .focusedValue(\.memoDraft, focused ? draft : nil)
         .onChange(of: focused, initial: true) { draft.hasFocus = focused }
-        .onChange(of: period, initial: true) {
+        // The week's first day counts too: periods equal across calendars still open again under the new one.
+        .onChange(of: [period.key, "\(period.start.timeIntervalSinceReferenceDate)", "\(period.calendar.firstWeekday)"], initial: true) {
             draft.open(period)
             // The text view stays the same across days; its undo steps belong to the memo it left.
             // After the text view has taken the new text, so that swap is not left as a step either.

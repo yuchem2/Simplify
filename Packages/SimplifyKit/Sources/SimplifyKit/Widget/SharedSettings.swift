@@ -9,6 +9,10 @@ public enum SharedSettings {
     /// Timed events in the app's day cells start with their time. On unless turned off. Shared since
     /// stage 7; the widgets' cells are too narrow for times and leave it aside.
     public static let showsCellTimes = "showsCellTimes"
+    /// Event marks take their calendar's shape besides its colour (stage 8). Off unless turned on.
+    public static let showsPatterns = "showsPalettePatterns"
+    /// The weekday weeks start on, as `Calendar.firstWeekday`: 1 Sunday (the default) or 2 Monday (stage 8).
+    public static let firstWeekday = "firstWeekday"
     /// When a widget last changed the diary store, so the app knows to read it again.
     static let diaryChangedAt = "diaryChangedAt"
 
@@ -31,6 +35,15 @@ public enum SharedSettings {
 
     public static func showsCellTimes(in defaults: UserDefaults) -> Bool {
         defaults.object(forKey: showsCellTimes) as? Bool ?? true
+    }
+
+    public static func showsPatterns(in defaults: UserDefaults) -> Bool {
+        defaults.bool(forKey: showsPatterns)
+    }
+
+    /// Sunday unless Monday was chosen; anything else stored there reads as Sunday.
+    public static func firstWeekday(in defaults: UserDefaults) -> Int {
+        defaults.integer(forKey: firstWeekday) == 2 ? 2 : 1
     }
 
     // MARK: Diary changes from widgets

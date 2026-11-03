@@ -98,7 +98,7 @@ public enum Todos {
     }
 
     /// Finished and total ToDos anywhere in a month: its own list, its days, and the weeks named
-    /// after it (a week belongs to the month of its Sunday). Each ToDo counts once.
+    /// after it (a week belongs to the month of its first day). Each ToDo counts once.
     public static func tally(for month: Period, in context: ModelContext) throws -> (done: Int, total: Int) {
         var keys: Set<String> = [month.key]
         for day in month.days {

@@ -1,9 +1,9 @@
 import Foundation
 
-/// The Sunday-first weeks that cover a month, as shown in the month view (4 to 6 rows).
+/// The weeks that cover a month, from the calendar's first weekday, as shown in the month view (4 to 6 rows).
 public struct MonthGrid: Sendable {
     public let month: Period
-    /// Each row holds seven days, Sunday to Saturday, at their start of day.
+    /// Each row holds seven days from the first weekday, at their start of day.
     public let weeks: [[Date]]
 
     public init(month date: Date, calendar: Calendar = .simplify) {

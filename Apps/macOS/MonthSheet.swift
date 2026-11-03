@@ -1,7 +1,7 @@
 import SwiftUI
 import SimplifyKit
 
-/// The month as a ledger on the window's paper, Sunday first: an ink rule under each week and no
+/// The month as a ledger on the window's paper, from the calendar's first weekday: an ink rule under each week and no
 /// column lines; weekends sit a step off the paper.
 struct MonthSheet: View {
     let model: AppModel
@@ -10,7 +10,6 @@ struct MonthSheet: View {
     /// The sheet holds keyboard focus so the arrow keys move the chosen day.
     @FocusState private var focused: Bool
 
-    private static let weekdays = ["일", "월", "화", "수", "목", "금", "토"]
     /// Smallest day cell; with six rows this sets the sheet's (and the window's) minimum size.
     /// Narrow enough that the month and the panel fit side by side on an 11-inch iPad's width (834 pt).
     static let minCellSize = CGSize(width: 64, height: 72)
@@ -25,11 +24,11 @@ struct MonthSheet: View {
         let grid = model.grid
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                ForEach(Self.weekdays, id: \.self) { name in
-                    Text(name)
+                ForEach(model.calendar.weekdaysInOrder, id: \.self) { weekday in
+                    Text(Calendar.weekdayName(weekday))
                         .textStyle(.meta)
                         .fontWeight(.semibold)
-                        .foregroundStyle(name == "일" ? Color.holiday : Color.inkSoft)
+                        .foregroundStyle(weekday == 1 ? Color.holiday : Color.inkSoft)
                         .padding(.leading, Self.dateInset.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -251,9 +250,10 @@ private struct EventRow: View {
     let showsTitle: Bool
     /// Picked with a click or Tab: drawn in ink.
     var isSelected = false
+    @Environment(\.showsPalettePatterns) private var showsPatterns
 
     var body: some View {
-        let palette = source?.palette ?? .grey
+        let look = source?.look ?? CalendarLook(.grey)
         let done = slot.occurrence.isCompleted
         let color = isSelected ? Color.onInk : EventTime.titleColor(slot.occurrence, source: source)
         let title = Text(slot.occurrence.title)
@@ -264,25 +264,32 @@ private struct EventRow: View {
         if source?.isHoliday == true {
             title.background { if isSelected { Rectangle().fill(.ink).padding(.horizontal, -2) } }
         } else if slot.occurrence.isBand, source?.isReminderList != true {
-            title
-                .opacity(showsTitle ? 1 : 0)
-                .padding(.leading, slot.continuesFromPrevious ? 6 : 9)
-                .padding(.trailing, 4)
-                .frame(maxWidth: .infinity, minHeight: textSize.rowHeight - 2, alignment: .leading)
-                .background(isSelected ? Color.ink : palette.tint)
-                .overlay(alignment: .leading) {
-                    if !slot.continuesFromPrevious {
-                        Rectangle().fill(palette.ink).frame(width: 6)
-                            .overlay(alignment: .trailing) { Rectangle().fill(.ink).frame(width: Metrics.line) }
-                    }
+            // With patterns on, the band starts with its calendar's shape in place of the colour cap.
+            let capped = !slot.continuesFromPrevious && !showsPatterns
+            HStack(spacing: Metrics.spaceXs) {
+                if showsPatterns, !slot.continuesFromPrevious {
+                    Mark(isSelected ? .onInk : look.ink, size: textSize.markSize, shape: look.shape)
                 }
-                .overlay {
-                    // Outline only the band's own ends, so it reads as one band across cells.
-                    BandOutline(open: (slot.continuesFromPrevious, slot.continuesToNext)).stroke(.ink, lineWidth: Metrics.line)
+                title
+            }
+            .opacity(showsTitle ? 1 : 0)
+            .padding(.leading, capped ? 9 : slot.continuesFromPrevious ? 6 : Metrics.spaceXs)
+            .padding(.trailing, 4)
+            .frame(maxWidth: .infinity, minHeight: textSize.rowHeight - 2, alignment: .leading)
+            .background(isSelected ? Color.ink : look.tint)
+            .overlay(alignment: .leading) {
+                if capped {
+                    Rectangle().fill(look.ink).frame(width: 6)
+                        .overlay(alignment: .trailing) { Rectangle().fill(.ink).frame(width: Metrics.line) }
                 }
-                // Run to the cell edges where the band continues.
-                .padding(.leading, slot.continuesFromPrevious ? -MonthSheet.dateInset.leading : -Metrics.spaceXs)
-                .padding(.trailing, slot.continuesToNext ? -MonthSheet.dateInset.trailing : 0)
+            }
+            .overlay {
+                // Outline only the band's own ends, so it reads as one band across cells.
+                BandOutline(open: (slot.continuesFromPrevious, slot.continuesToNext)).stroke(.ink, lineWidth: Metrics.line)
+            }
+            // Run to the cell edges where the band continues.
+            .padding(.leading, slot.continuesFromPrevious ? -MonthSheet.dateInset.leading : -Metrics.spaceXs)
+            .padding(.trailing, slot.continuesToNext ? -MonthSheet.dateInset.trailing : 0)
         } else {
             HStack(spacing: Metrics.spaceXs) {
                 EventMark(occurrence: slot.occurrence, source: source, size: textSize.markSize)
@@ -311,7 +318,7 @@ struct EventMark: View {
 
     var body: some View {
         if source?.isReminderList == true {
-            let ring = ReminderMark(source?.palette.ink, size: size, isCompleted: occurrence.isCompleted)
+            let ring = ReminderMark(source?.look.ink, size: size, isCompleted: occurrence.isCompleted)
             if let toggleReminder, source?.isReadOnly != true {
                 Button { toggleReminder(occurrence) } label: {
                     // A few points of slack around the ring, so a small one is still easy to hit.
@@ -324,7 +331,7 @@ struct EventMark: View {
                 ring
             }
         } else {
-            Mark(source?.palette.ink, size: size)
+            Mark(source?.look.ink, size: size, shape: source?.look.shape)
         }
     }
 }

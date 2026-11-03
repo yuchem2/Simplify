@@ -474,22 +474,131 @@ public struct NoticeBar: View {
 
 /// A small square in a calendar's or label's colour, outlined in ink. `nil` draws an empty box.
 /// Widgets pass `outlined: false`: there the colour stands alone.
+///
+/// A calendar's mark passes its `shape` too: with `showsPalettePatterns` on (설정 › 일반) it is
+/// drawn in that shape, so calendars read apart without telling colours apart.
 public struct Mark: View {
     var color: Color?
     var size: CGFloat
     var outlined: Bool
+    var shape: MarkShape?
+    @Environment(\.showsPalettePatterns) private var showsPatterns
 
-    public init(_ color: Color?, size: CGFloat = 10, outlined: Bool = true) {
+    public init(_ color: Color?, size: CGFloat = 10, outlined: Bool = true, shape: MarkShape? = nil) {
         self.color = color
         self.size = size
         self.outlined = outlined
+        self.shape = shape
     }
 
     public var body: some View {
-        Rectangle()
-            .fill(color ?? .clear)
-            // A thinner edge on small marks leaves more of the colour showing.
-            .overlay { if outlined { Rectangle().strokeBorder(.ink, lineWidth: size <= 9 ? Metrics.line : Metrics.lineMark) } }
+        if showsPatterns, let shape, shape != .square {
+            MarkShapeView(shape: shape, color: color ?? .ink, size: size)
+        } else {
+            Rectangle()
+                .fill(color ?? .clear)
+                // A thinner edge on small marks leaves more of the colour showing.
+                .overlay { if outlined { Rectangle().strokeBorder(.ink, lineWidth: size <= 9 ? Metrics.line : Metrics.lineMark) } }
+                .frame(width: size, height: size)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+public extension EnvironmentValues {
+    /// Calendar marks take their calendar's shape as well (설정 › 일반 › 색과 함께 패턴도 표시).
+    @Entry var showsPalettePatterns = false
+}
+
+/// The shapes a calendar's marks can take when patterns are on, picked per calendar or following
+/// its colour (`Palette.markShape`). Nothing round: rings are reminders.
+public enum MarkShape: String, Codable, Sendable, CaseIterable {
+    case square, triangle, diamond, cross, hollowSquare, verticalBar, horizontalBar, halfSquare, x
+
+    /// For VoiceOver and help tags.
+    public var name: String {
+        switch self {
+        case .square: "네모"
+        case .triangle: "세모"
+        case .diamond: "마름모"
+        case .cross: "십자"
+        case .hollowSquare: "속 빈 네모"
+        case .verticalBar: "세로 막대"
+        case .horizontalBar: "가로 막대"
+        case .halfSquare: "반 채운 네모"
+        case .x: "엑스"
+        }
+    }
+
+    /// The filled outline in `rect`; `hollowSquare` and `halfSquare` add an edge to it.
+    public func path(in rect: CGRect) -> Path {
+        func polygon(_ points: [(CGFloat, CGFloat)]) -> Path {
+            Path { path in
+                path.addLines(points.map { CGPoint(x: rect.minX + $0.0 * rect.width, y: rect.minY + $0.1 * rect.height) })
+                path.closeSubpath()
+            }
+        }
+        switch self {
+        case .square, .hollowSquare: return Path(rect)
+        case .triangle: return polygon([(0.5, 0), (1, 1), (0, 1)])
+        case .diamond: return polygon([(0.5, 0), (1, 0.5), (0.5, 1), (0, 0.5)])
+        case .cross:
+            return polygon([(0.35, 0), (0.65, 0), (0.65, 0.35), (1, 0.35), (1, 0.65), (0.65, 0.65),
+                            (0.65, 1), (0.35, 1), (0.35, 0.65), (0, 0.65), (0, 0.35), (0.35, 0.35)])
+        case .verticalBar: return polygon([(0.3, 0), (0.7, 0), (0.7, 1), (0.3, 1)])
+        case .horizontalBar: return polygon([(0, 0.3), (1, 0.3), (1, 0.7), (0, 0.7)])
+        case .halfSquare: return polygon([(0, 0), (1, 0), (0, 1)])
+        case .x:
+            return polygon([(0, 0.15), (0.15, 0), (0.5, 0.35), (0.85, 0), (1, 0.15), (0.65, 0.5),
+                            (1, 0.85), (0.85, 1), (0.5, 0.65), (0.15, 1), (0, 0.85), (0.35, 0.5)])
+        }
+    }
+
+    /// The edge drawn around the shape, or nil for none.
+    public func edgeWidth(size: CGFloat) -> CGFloat? {
+        switch self {
+        case .hollowSquare: max(Metrics.lineBox, (size * 0.25).rounded())
+        case .halfSquare: Metrics.line
+        default: nil
+        }
+    }
+
+    /// Only the hollow square leaves its inside empty.
+    public var isFilled: Bool { self != .hollowSquare }
+}
+
+public extension Palette {
+    /// The shape a calendar in this colour takes unless one is picked for it.
+    var markShape: MarkShape {
+        switch self {
+        case .red: .square
+        case .orange: .triangle
+        case .yellow: .diamond
+        case .green: .cross
+        case .teal: .hollowSquare
+        case .blue: .verticalBar
+        case .purple: .horizontalBar
+        case .pink: .halfSquare
+        case .grey: .x
+        }
+    }
+}
+
+/// One `MarkShape` in a colour, without an ink outline: the shape is the difference.
+struct MarkShapeView: View {
+    private struct Outline: Shape {
+        let shape: MarkShape
+        func path(in rect: CGRect) -> Path { shape.path(in: rect) }
+    }
+
+    let shape: MarkShape
+    let color: Color
+    let size: CGFloat
+
+    var body: some View {
+        Outline(shape: shape)
+            .fill(shape.isFilled ? color : .clear)
+            .overlay { if let edge = shape.edgeWidth(size: size) { Rectangle().strokeBorder(color, lineWidth: edge) } }
             .frame(width: size, height: size)
             .accessibilityHidden(true)
     }
@@ -638,15 +747,19 @@ public struct DayStrip: View {
         /// Minutes after midnight.
         public var start: Int
         public var end: Int
-        public var palette: Palette
+        public var look: CalendarLook
         public var isReminder: Bool
 
-        public init(id: String, start: Int, end: Int, palette: Palette, isReminder: Bool = false) {
+        public init(id: String, start: Int, end: Int, look: CalendarLook, isReminder: Bool = false) {
             self.id = id
             self.start = start
             self.end = end
-            self.palette = palette
+            self.look = look
             self.isReminder = isReminder
+        }
+
+        public init(id: String, start: Int, end: Int, palette: Palette, isReminder: Bool = false) {
+            self.init(id: id, start: start, end: end, look: CalendarLook(palette), isReminder: isReminder)
         }
     }
 
@@ -676,13 +789,13 @@ public struct DayStrip: View {
                     if item.isReminder {
                         let ring = CGRect(x: min(max(x(item.start) - 4.5, 0), size.width - 9), y: mid - 4.5, width: 9, height: 9)
                         context.fill(Path(ellipseIn: ring), with: .color(.paper))
-                        context.stroke(Path(ellipseIn: ring.insetBy(dx: 0.75, dy: 0.75)), with: .color(item.palette.ink), lineWidth: Metrics.lineBox)
+                        context.stroke(Path(ellipseIn: ring.insetBy(dx: 0.75, dy: 0.75)), with: .color(item.look.ink), lineWidth: Metrics.lineBox)
                     } else {
                         let width = max(min(x(item.end), size.width) - start, 6)
                         let block = CGRect(x: min(start, size.width - width), y: mid - 9, width: width, height: 18)
-                        context.fill(Path(block), with: .color(item.palette.tint))
+                        context.fill(Path(block), with: .color(item.look.tint))
                         context.stroke(Path(block.insetBy(dx: 0.5, dy: 0.5)), with: .color(.ink), lineWidth: Metrics.line)
-                        context.fill(Path(CGRect(x: block.minX, y: mid - 9, width: 3, height: 18)), with: .color(item.palette.ink))
+                        context.fill(Path(CGRect(x: block.minX, y: mid - 9, width: 3, height: 18)), with: .color(item.look.ink))
                     }
                 }
                 if let now, now >= Int(first), now <= Int(last) {

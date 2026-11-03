@@ -1,6 +1,7 @@
 import Foundation
 
-/// How long a diary page lasts: one day, one Sunday–Saturday week, or one month.
+/// How long a diary page lasts: one day, one week (Sunday–Saturday, or Monday–Sunday when 설정 says
+/// so), or one month.
 public enum PeriodScope: String, Codable, CaseIterable, Sendable {
     case day, week, month
 }
@@ -8,9 +9,11 @@ public enum PeriodScope: String, Codable, CaseIterable, Sendable {
 /// A day, week or month that memos and ToDos belong to.
 ///
 /// `key` is the stable storage id: `2026-10-26`, `2026-W44` (the week's number in its year), `2026-10`.
+/// Week numbers are always counted in Sunday weeks, whatever day the calendar starts weeks on, so a
+/// week memo stays with the week it shares six days with when the start day changes.
 public struct Period: Hashable, Sendable {
     public let scope: PeriodScope
-    /// The first instant of the period: start of day, Sunday 00:00, or the 1st 00:00.
+    /// The first instant of the period: start of day, the week's first day 00:00, or the 1st 00:00.
     public let start: Date
     public let calendar: Calendar
 
@@ -36,8 +39,10 @@ public struct Period: Hashable, Sendable {
             guard parts.count == 3, let y = Int(parts[0]), let m = Int(parts[1]), let d = Int(parts[2]) else { return nil }
             components = DateComponents(year: y, month: m, day: d)
         case .week:
-            guard parts.count == 2, let y = Int(parts[0]), parts[1].first == "W", let w = Int(parts[1].dropFirst()) else { return nil }
-            components = DateComponents(weekday: calendar.firstWeekday, weekOfYear: w, yearForWeekOfYear: y)
+            guard parts.count == 2, let y = Int(parts[0]), parts[1].first == "W", let w = Int(parts[1].dropFirst()),
+                  let sunday = calendar.sundayWeeks.date(from: DateComponents(weekday: 1, weekOfYear: w, yearForWeekOfYear: y)) else { return nil }
+            // The week that starts within that Sunday week.
+            components = calendar.dateComponents([.year, .month, .day], from: calendar.date(byAdding: .day, value: calendar.firstWeekday - 1, to: sunday)!)
         case .month:
             guard parts.count == 2, let y = Int(parts[0]), let m = Int(parts[1]) else { return nil }
             components = DateComponents(year: y, month: m, day: 1)
@@ -80,7 +85,8 @@ public struct Period: Hashable, Sendable {
             let c = calendar.dateComponents([.year, .month, .day], from: start)
             return String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
         case .week:
-            let c = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: start)
+            // The Sunday week this week starts in; the same week for Sunday-first calendars.
+            let c = calendar.sundayWeeks.dateComponents([.yearForWeekOfYear, .weekOfYear], from: start)
             return String(format: "%04d-W%02d", c.yearForWeekOfYear!, c.weekOfYear!)
         case .month:
             let c = calendar.dateComponents([.year, .month], from: start)
@@ -108,15 +114,38 @@ public struct Period: Hashable, Sendable {
 
 public extension Calendar {
     /// The Gregorian calendar with weeks from Sunday to Saturday, as Korean wall calendars print
-    /// them; week 1 is the week holding 1 January. In the user's current time zone, with Korean
-    /// names. The zone is fixed at creation so stored dates and keys stay consistent; when the
-    /// system zone changes, build a new calendar and carry dates across by year, month and day.
+    /// them, or from Monday when 설정 › 일반 says so (`SharedSettings.firstWeekday`, read by the app
+    /// and the widgets alike); week 1 is the week holding 1 January. In the user's current time
+    /// zone, with Korean names. The zone is fixed at creation so stored dates and keys stay
+    /// consistent; when the system zone or the start day changes, build a new calendar and carry
+    /// dates across by year, month and day.
     static var simplify: Calendar {
+        simplify(firstWeekday: SharedSettings.firstWeekday(in: SharedSettings.defaults))
+    }
+
+    static func simplify(firstWeekday: Int) -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.firstWeekday = 1
+        calendar.firstWeekday = firstWeekday
         calendar.minimumDaysInFirstWeek = 1
         calendar.locale = Locale(identifier: "ko_KR")
         calendar.timeZone = .current
+        return calendar
+    }
+
+    /// The weekdays of a row from its first day, as `Calendar.Component.weekday` numbers (1 = Sunday).
+    var weekdaysInOrder: [Int] {
+        (0..<7).map { (firstWeekday - 1 + $0) % 7 + 1 }
+    }
+
+    /// `일` for 1 (Sunday) to `토` for 7.
+    static func weekdayName(_ weekday: Int) -> String {
+        ["일", "월", "화", "수", "목", "금", "토"][weekday - 1]
+    }
+
+    /// The same calendar counting Sunday weeks, which week keys are numbered in.
+    internal var sundayWeeks: Calendar {
+        var calendar = self
+        calendar.firstWeekday = 1
         return calendar
     }
 }

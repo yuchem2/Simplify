@@ -46,7 +46,7 @@ private struct UnsentWritesList: View {
         let source = calendars.sources[write.calendar.sourceID]
         let title = write.draft?.title ?? write.event?.title ?? ""
         return HStack(alignment: .firstTextBaseline, spacing: Metrics.spaceM) {
-            Mark(source?.palette.ink, size: 10)
+            Mark(source?.look.ink, size: 10, shape: source?.look.shape)
             VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
                 Text(title.isEmpty ? "(제목 없음)" : title)
                     .textStyle(.body)

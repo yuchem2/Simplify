@@ -146,7 +146,7 @@ private struct DayStripView: View {
             // An event that runs past midnight fills the strip to its end.
             let end = calendar.isDate(occurrence.end, inSameDayAs: day) ? minutes(occurrence.end) : 24 * 60
             return DayStrip.Item(id: occurrence.id, start: start, end: max(end, start + 15),
-                                 palette: source?.palette ?? .grey, isReminder: source?.isReminderList == true)
+                                 look: source?.look ?? CalendarLook(.grey), isReminder: source?.isReminderList == true)
         }
     }
 
@@ -258,13 +258,11 @@ private struct NowLine: View {
     }
 }
 
-/// The week's events grouped by day, Sunday to Saturday.
+/// The week's events grouped by day, from its first day to its last.
 private struct WeekEvents: View {
     let period: Period
     let model: AppModel
     let calendars: CalendarController
-
-    private static let weekdays = ["일", "월", "화", "수", "목", "금", "토"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spaceS) {
@@ -279,7 +277,7 @@ private struct WeekEvents: View {
                             .textStyle(.date)
                             .fontWeight(model.isToday(day) ? .bold : .semibold)
                             .foregroundStyle(red ? Color.holiday : Color.ink)
-                        Text(Self.weekdays[weekday - 1] + (model.isToday(day) ? " · 오늘" : ""))
+                        Text(Calendar.weekdayName(weekday) + (model.isToday(day) ? " · 오늘" : ""))
                             .textStyle(.meta)
                             .foregroundStyle(.inkSoft)
                     }

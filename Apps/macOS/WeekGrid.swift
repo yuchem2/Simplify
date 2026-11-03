@@ -19,7 +19,6 @@ struct WeekGrid: View {
     static let maxLanes = 4
     /// The shortest a block is drawn, so a 10-minute event or a reminder still fits its title.
     static let minBlockHeight: CGFloat = 20
-    private static let weekdays = ["일", "월", "화", "수", "목", "금", "토"]
     /// Height of the ink bar over today's head, as on today's cell in the month.
     static let todayBar: CGFloat = 3
 
@@ -55,7 +54,7 @@ struct WeekGrid: View {
     }
 
     static func weekdayName(_ day: Date, calendar: Calendar) -> String {
-        weekdays[calendar.component(.weekday, from: day) - 1]
+        Calendar.weekdayName(calendar.component(.weekday, from: day))
     }
 
     /// Sunday and Saturday columns sit one step off the paper, as in the month.
@@ -291,9 +290,10 @@ private struct WeekBand: View {
     let continues: (Bool, Bool)
     /// Picked with a click or Tab: drawn in ink, as in the month.
     let isSelected: Bool
+    @Environment(\.showsPalettePatterns) private var showsPatterns
 
     var body: some View {
-        let palette = source?.palette ?? .grey
+        let look = source?.look ?? CalendarLook(.grey)
         let color = isSelected ? Color.onInk : EventTime.titleColor(occurrence, source: source)
         let title = Text(occurrence.title)
             .textStyle(.small)
@@ -311,18 +311,23 @@ private struct WeekBand: View {
                 .padding(.horizontal, Metrics.spaceS)
                 .background { if isSelected { Rectangle().fill(Tokens.selection) } }
             } else {
-                title
-                    .padding(.leading, continues.0 ? Metrics.spaceS : Metrics.spaceL)
-                    .padding(.trailing, Metrics.spaceXs)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                    .background(isSelected ? Tokens.selection : palette.tint)
-                    .overlay(alignment: .leading) {
-                        if !continues.0 {
-                            Rectangle().fill(palette.ink).frame(width: 6)
-                                .overlay(alignment: .trailing) { Rectangle().fill(.ink).frame(width: Metrics.line) }
-                        }
+                // With patterns on, the band starts with its calendar's shape in place of the colour cap.
+                let capped = !continues.0 && !showsPatterns
+                HStack(spacing: Metrics.spaceXs) {
+                    if showsPatterns, !continues.0 { Mark(isSelected ? .onInk : look.ink, size: 9, shape: look.shape) }
+                    title
+                }
+                .padding(.leading, capped ? Metrics.spaceL : Metrics.spaceS)
+                .padding(.trailing, Metrics.spaceXs)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .background(isSelected ? Tokens.selection : look.tint)
+                .overlay(alignment: .leading) {
+                    if capped {
+                        Rectangle().fill(look.ink).frame(width: 6)
+                            .overlay(alignment: .trailing) { Rectangle().fill(.ink).frame(width: Metrics.line) }
                     }
-                    .overlay { BandOutline(open: continues).stroke(.ink, lineWidth: Metrics.line) }
+                }
+                .overlay { BandOutline(open: continues).stroke(.ink, lineWidth: Metrics.line) }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -520,10 +525,11 @@ private struct TimeBlock: View {
     let height: CGFloat
     let calendar: Calendar
     @State private var hovering = false
+    @Environment(\.showsPalettePatterns) private var showsPatterns
 
     var body: some View {
         let occurrence = block.occurrence
-        let palette = source?.palette ?? .grey
+        let look = source?.look ?? CalendarLook(.grey)
         let color = isSelected ? Color.onInk : EventTime.titleColor(occurrence, source: source)
         let title = Text(occurrence.title)
             .foregroundStyle(color)
@@ -544,7 +550,14 @@ private struct TimeBlock: View {
                 // Side by side in a narrow column, a block tall enough gets a second title line in place of the time.
                 let narrow = width < 70
                 VStack(alignment: .leading, spacing: 0) {
-                    title.textStyle(narrow ? .cell : .small).fontWeight(.semibold).lineLimit(narrow && height >= 32 ? 2 : 1)
+                    // With patterns on, the title starts with its calendar's shape; the bar keeps the colour.
+                    HStack(alignment: .firstTextBaseline, spacing: Metrics.spaceXs) {
+                        if showsPatterns {
+                            Mark(isSelected ? .onInk : look.ink, size: 8, shape: look.shape)
+                                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+                        }
+                        title.textStyle(narrow ? .cell : .small).fontWeight(.semibold).lineLimit(narrow && height >= 32 ? 2 : 1)
+                    }
                     if height >= 32, !narrow {
                         Text(time).textStyle(.meta).foregroundStyle(isSelected ? Color.onInk : Color.inkSoft).lineLimit(1)
                     }
@@ -553,9 +566,9 @@ private struct TimeBlock: View {
                 .padding(.trailing, Metrics.spaceXs)
                 .padding(.vertical, Metrics.spaceXxs)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background(isSelected ? Tokens.selection : palette.tint)
+                .background(isSelected ? Tokens.selection : look.tint)
                 .overlay(alignment: .leading) {
-                    Rectangle().fill(palette.ink).frame(width: 4)
+                    Rectangle().fill(look.ink).frame(width: 4)
                         .overlay(alignment: .trailing) { Rectangle().fill(.ink).frame(width: Metrics.line) }
                 }
                 // The block keeps its calendar's tint under the pointer; a heavier edge answers instead.

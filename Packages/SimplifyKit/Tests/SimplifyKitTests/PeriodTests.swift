@@ -4,7 +4,8 @@ import Testing
 
 struct PeriodTests {
     static func calendar(_ zone: String = "Asia/Seoul") -> Calendar {
-        var calendar = Calendar.simplify
+        // Sunday weeks whatever this Mac's settings say.
+        var calendar = Calendar.simplify(firstWeekday: 1)
         calendar.timeZone = TimeZone(identifier: zone)!
         return calendar
     }

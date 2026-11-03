@@ -242,6 +242,7 @@ struct EventEditorView: View {
     let calendars: CalendarController
     @Bindable var editor: EventEditorModel
     @FocusState private var focus: Field?
+    @Environment(\.showsPalettePatterns) private var showsPatterns
 
     private enum Field: Hashable { case title, location, notes }
 
@@ -347,13 +348,13 @@ struct EventEditorView: View {
                     ForEach(sources) { source in
                         Toggle(isOn: Binding(get: { editor.fields.sourceID == source.id },
                                              set: { if $0 { editor.fields.sourceID = source.id } })) {
-                            Label { Text(source.name) } icon: { Image(nsImage: Swatch.image(source.palette)) }
+                            Label { Text(source.name) } icon: { Image(nsImage: Swatch.image(source.look, patterned: showsPatterns)) }
                         }
                     }
                 }
             }
         } label: {
-            MenuLabel(text: source?.name ?? "캘린더", soft: source.flatMap(providerLabel), mark: source?.palette)
+            MenuLabel(text: source?.name ?? "캘린더", soft: source.flatMap(providerLabel), mark: source?.look)
         }
         .menuStyle(.button)
         .buttonStyle(FocusOnlyStyle())
@@ -724,14 +725,14 @@ private struct TimeField: View {
 }
 
 /// What a menu shows when closed: a drawn box with a chevron. The menu's button adds the focus ring.
-private struct MenuLabel: View {
+struct MenuLabel: View {
     let text: String
     var soft: String?
-    var mark: Palette?
+    var mark: CalendarLook?
 
     var body: some View {
         HStack(spacing: Metrics.spaceS) {
-            if let mark { Mark(mark.ink, size: 10) }
+            if let mark { Mark(mark.ink, size: 10, shape: mark.shape) }
             Text("\(text)\(Text(soft.map { " · " + $0 } ?? "").foregroundStyle(.inkSoft))")
             Spacer(minLength: Metrics.spaceXs)
             Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
@@ -742,21 +743,37 @@ private struct MenuLabel: View {
     }
 }
 
-/// Square colour swatches for menus, which only take images.
+/// Square colour swatches for menus, which only take images; with patterns on, the calendar's shape
+/// as `Mark` draws it.
 @MainActor
 enum Swatch {
-    private static var cache: [Palette: NSImage] = [:]
+    private struct Key: Hashable { let look: CalendarLook; let patterned: Bool }
+    private static var cache: [Key: NSImage] = [:]
 
-    static func image(_ palette: Palette) -> NSImage {
-        if let image = cache[palette] { return image }
-        let image = NSImage(size: NSSize(width: 10, height: 10), flipped: false) { rect in
-            NSColor(palette.ink).setFill()
-            rect.fill()
-            NSColor.labelColor.setStroke()
-            NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5)).stroke()
+    static func image(_ look: CalendarLook, patterned: Bool = false) -> NSImage {
+        let key = Key(look: look, patterned: patterned)
+        if let image = cache[key] { return image }
+        let shape = patterned ? look.shape : .square
+        let image = NSImage(size: NSSize(width: 10, height: 10), flipped: true) { rect in
+            let color = NSColor(look.ink)
+            if shape == .square {
+                color.setFill()
+                rect.fill()
+                NSColor.labelColor.setStroke()
+                NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5)).stroke()
+                return true
+            }
+            color.setFill()
+            color.setStroke()
+            if shape.isFilled { NSBezierPath(cgPath: shape.path(in: rect).cgPath).fill() }
+            if let edge = shape.edgeWidth(size: rect.width) {
+                let outline = NSBezierPath(rect: rect.insetBy(dx: edge / 2, dy: edge / 2))
+                outline.lineWidth = edge
+                outline.stroke()
+            }
             return true
         }
-        cache[palette] = image
+        cache[key] = image
         return image
     }
 }

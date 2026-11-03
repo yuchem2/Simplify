@@ -9,14 +9,15 @@ public struct WidgetEvent: Identifiable, Hashable, Sendable {
     public let end: Date
     public let isAllDay: Bool
     public let isBand: Bool
-    public let palette: Palette
+    /// Its calendar's colour and shape, as picked in 설정 or following the provider.
+    public let look: CalendarLook
     /// From the Mac's reminders: a round mark, and it is due at `start`.
     public let isReminder: Bool
     /// From a holiday calendar: it reddens the date and stays out of the marks.
     public let isHoliday: Bool
     public let isCompleted: Bool
 
-    public init(id: String, title: String, start: Date, end: Date, isAllDay: Bool, isBand: Bool, palette: Palette,
+    public init(id: String, title: String, start: Date, end: Date, isAllDay: Bool, isBand: Bool, look: CalendarLook,
                 isReminder: Bool = false, isHoliday: Bool = false, isCompleted: Bool = false) {
         self.id = id
         self.title = title
@@ -24,10 +25,17 @@ public struct WidgetEvent: Identifiable, Hashable, Sendable {
         self.end = end
         self.isAllDay = isAllDay
         self.isBand = isBand
-        self.palette = palette
+        self.look = look
         self.isReminder = isReminder
         self.isHoliday = isHoliday
         self.isCompleted = isCompleted
+    }
+
+    /// In a palette colour with that colour's shape.
+    public init(id: String, title: String, start: Date, end: Date, isAllDay: Bool, isBand: Bool, palette: Palette,
+                isReminder: Bool = false, isHoliday: Bool = false, isCompleted: Bool = false) {
+        self.init(id: id, title: title, start: start, end: end, isAllDay: isAllDay, isBand: isBand, look: CalendarLook(palette),
+                  isReminder: isReminder, isHoliday: isHoliday, isCompleted: isCompleted)
     }
 
     /// Over by `now`: a timed event once it ends, a reminder once its time comes. Bands last the day.
@@ -39,12 +47,12 @@ public struct WidgetEvent: Identifiable, Hashable, Sendable {
 
 /// What a calendar contributes to a widget besides its events.
 public struct WidgetCalendar: Hashable, Sendable {
-    public var palette: Palette
+    public var look: CalendarLook
     public var isReminderList: Bool
     public var isHoliday: Bool
 
-    public init(palette: Palette, isReminderList: Bool = false, isHoliday: Bool = false) {
-        self.palette = palette
+    public init(look: CalendarLook, isReminderList: Bool = false, isHoliday: Bool = false) {
+        self.look = look
         self.isReminderList = isReminderList
         self.isHoliday = isHoliday
     }
@@ -82,9 +90,9 @@ public enum WidgetContent {
 
     public static func events(_ occurrences: [EventOccurrence], calendars: [String: WidgetCalendar]) -> [WidgetEvent] {
         occurrences.map { occurrence in
-            let info = calendars[occurrence.sourceID] ?? WidgetCalendar(palette: .blue)
+            let info = calendars[occurrence.sourceID] ?? WidgetCalendar(look: CalendarLook(.blue))
             return WidgetEvent(id: occurrence.id, title: occurrence.title, start: occurrence.start, end: occurrence.end,
-                               isAllDay: occurrence.isAllDay, isBand: occurrence.isBand, palette: info.palette,
+                               isAllDay: occurrence.isAllDay, isBand: occurrence.isBand, look: info.look,
                                isReminder: info.isReminderList, isHoliday: info.isHoliday, isCompleted: occurrence.isCompleted)
         }
     }
@@ -222,7 +230,7 @@ public enum WidgetContent {
         list.filter(\.isBand) + list.filter { !$0.isBand }.sorted { ($0.start, $0.title) < ($1.start, $1.title) }
     }
 
-    /// The month ledger around `today`: whole Sunday-first weeks.
+    /// The month ledger around `today`: whole weeks from the calendar's first weekday.
     public static func ledger(month: Date, today: Date, events: [WidgetEvent], calendar: Calendar) -> [[LedgerDay]] {
         let grid = MonthGrid(month: month, calendar: calendar)
         let todayStart = calendar.startOfDay(for: today)

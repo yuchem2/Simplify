@@ -31,12 +31,23 @@ final class CalendarController {
         let remoteID: String
         let timeZone: String?
         let name: String
-        let palette: Palette
+        /// How it is drawn: `style` over the provider's colour.
+        let look: CalendarLook
+        /// The palette colour nearest the provider's own.
+        let autoPalette: Palette
+        /// The colour and shape picked on this Mac (설정 › 캘린더); empty fields follow the provider.
+        let style: CalendarStyle
         let isVisible: Bool
         let isReadOnly: Bool
         let isHoliday: Bool
         /// A list from the Mac's reminders; its entries get a round mark and never a band.
         let isReminderList: Bool
+
+        func restyled(_ style: CalendarStyle) -> Source {
+            Source(id: id, accountID: accountID, remoteID: remoteID, timeZone: timeZone, name: name,
+                   look: style.look(auto: autoPalette, isHoliday: isHoliday), autoPalette: autoPalette, style: style,
+                   isVisible: isVisible, isReadOnly: isReadOnly, isHoliday: isHoliday, isReminderList: isReminderList)
+        }
     }
 
     enum Status: Equatable {
@@ -147,6 +158,7 @@ final class CalendarController {
         self.defaults = defaults
         self.writer = writer
         showsCompletedReminders = defaults.bool(forKey: SharedSettings.showsCompletedReminders)
+        preferredNewEventSource = defaults.string(forKey: NewEventCalendar.preferredKey)
         self.container = container
         self.calendar = calendar
         self.tokens = tokens
@@ -177,9 +189,11 @@ final class CalendarController {
         let sourceModels = (try? context.fetch(FetchDescriptor<CalendarSource>(sortBy: [SortDescriptor(\.order)]))) ?? []
         let accountModels = (try? context.fetch(FetchDescriptor<CalendarAccount>(sortBy: [SortDescriptor(\.createdAt)]))) ?? []
         let reminderAccounts = Set(accountModels.filter { $0.provider == .reminders }.map(\.id))
+        let styles = CalendarStyles.all(in: defaults)
         sources = Dictionary(uniqueKeysWithValues: sourceModels.map {
-            ($0.id, Source(id: $0.id, accountID: $0.accountID, remoteID: $0.remoteID, timeZone: $0.timeZone, name: $0.name, palette: $0.palette,
-                           isVisible: $0.isVisible, isReadOnly: $0.isReadOnly, isHoliday: $0.isHoliday,
+            let style = $0.isHoliday ? CalendarStyle() : styles[$0.id] ?? CalendarStyle()
+            return ($0.id, Source(id: $0.id, accountID: $0.accountID, remoteID: $0.remoteID, timeZone: $0.timeZone, name: $0.name,
+                           look: style.look(auto: $0.palette, isHoliday: $0.isHoliday), autoPalette: $0.palette, style: style, isVisible: $0.isVisible, isReadOnly: $0.isReadOnly, isHoliday: $0.isHoliday,
                            isReminderList: reminderAccounts.contains($0.accountID)))
         })
         accounts = accountModels.map { model in
@@ -500,6 +514,7 @@ final class CalendarController {
             if !accounts.contains(where: { $0.id != accountID && $0.provider != .reminders }) { lastTryWasOffline = false }
             problems[accountID] = nil
             try? await engineTask.value.removeAccount(id: accountID)
+            CalendarStyles.remove(account: accountID, in: defaults)
             reload()
         }
     }
@@ -539,14 +554,20 @@ final class CalendarController {
         unsentWrite(for: occurrence) != nil
     }
 
-    /// The calendar a new event starts in: the one saved to last, while it can still be written.
+    /// The calendar new events start in (설정 › 일반), or nil for the one saved to last.
+    var preferredNewEventSource: String? {
+        didSet { defaults.set(preferredNewEventSource, forKey: NewEventCalendar.preferredKey) }
+    }
+
+    /// The calendar a new event starts in: the one chosen in 설정 while it can still be written,
+    /// otherwise the one saved to last, while that can.
     var defaultSourceForNewEvent: String? {
-        if let last = defaults.string(forKey: "lastEventSourceID"), isWritable(last) { return last }
-        return writableSources.first?.1.first?.id
+        NewEventCalendar.pick(preferred: preferredNewEventSource, last: defaults.string(forKey: NewEventCalendar.lastKey),
+                              writable: writableSources.flatMap { $0.1.map(\.id) })
     }
 
     func rememberSource(_ sourceID: String) {
-        defaults.set(sourceID, forKey: "lastEventSourceID")
+        defaults.set(sourceID, forKey: NewEventCalendar.lastKey)
     }
 
     /// Syncs the account of `sourceID` now, after whatever is queued.
@@ -626,6 +647,14 @@ final class CalendarController {
         case .thisAndFollowing: return .thisAndFollowing(originalStart: original)
         case .allOccurrences: return .allOccurrences
         }
+    }
+
+    /// Draws a calendar with `style` on this Mac only; an empty style follows the provider again.
+    /// Kept in the shared defaults, so neither the cache nor a sync is touched.
+    func setStyle(_ sourceID: String, _ style: CalendarStyle) {
+        guard let source = sources[sourceID], !source.isHoliday, source.style != style else { return }
+        CalendarStyles.set(style, for: sourceID, in: defaults)
+        sources[sourceID] = source.restyled(style)
     }
 
     func setVisible(_ sourceID: String, _ visible: Bool) {

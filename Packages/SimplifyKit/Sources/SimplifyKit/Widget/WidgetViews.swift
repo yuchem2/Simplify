@@ -23,7 +23,8 @@ public struct WidgetInk: Sendable {
     var hair: Color { isFullColor ? .shadeSoft : .primary.opacity(0.18) }
     var holiday: Color { isFullColor ? .holiday : .primary }
     func mark(_ palette: Palette) -> Color { isFullColor ? palette.ink : .primary }
-    func tint(_ palette: Palette) -> Color { isFullColor ? palette.tint : .primary.opacity(0.1) }
+    func mark(_ look: CalendarLook) -> Color { isFullColor ? look.ink : .primary }
+    func tint(_ look: CalendarLook) -> Color { isFullColor ? look.tint : .primary.opacity(0.1) }
 }
 
 /// What a widget needs at one moment: the stores' contents and the entry's time.
@@ -137,6 +138,7 @@ public struct SmallWidgetView: View {
         .padding(.bottom, Metrics.spaceXl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .widgetURL(moment.link)
+        .environment(\.showsPalettePatterns, moment.data.showsPatterns)
     }
 }
 
@@ -178,6 +180,7 @@ public struct MediumWidgetView: View {
         .padding(.vertical, Metrics.spaceL)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .widgetURL(moment.link)
+        .environment(\.showsPalettePatterns, moment.data.showsPatterns)
     }
 }
 
@@ -233,6 +236,7 @@ public struct ExtraLargeWidgetView: View {
         .padding(.vertical, Metrics.spaceL)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .widgetURL(moment.link)
+        .environment(\.showsPalettePatterns, moment.data.showsPatterns)
     }
 }
 
@@ -265,9 +269,9 @@ private struct EventMark: View {
     var body: some View {
         Group {
             if event.isReminder {
-                ReminderMark(ink.mark(event.palette), size: size, isCompleted: event.isCompleted)
+                ReminderMark(ink.mark(event.look), size: size, isCompleted: event.isCompleted)
             } else {
-                Mark(ink.mark(event.palette), size: size, outlined: false)
+                Mark(ink.mark(event.look), size: size, outlined: false, shape: event.look.shape)
             }
         }
         .widgetAccentable()
@@ -341,7 +345,8 @@ private struct ScheduleColumn: View {
 }
 
 /// An event as a block, as the week view draws one: the calendar's tint, a 3 pt bar in its ink,
-/// the title, and for a timed event its times underneath.
+/// the title, and for a timed event its times underneath. With patterns on, the title starts with
+/// the calendar's shape too.
 private struct EventBlock: View {
     /// A title line, or a title and a time line, with 2 pt above and below.
     static let allDayHeight = TextStyle.small.lineHeight + 2 * Metrics.spaceXxs
@@ -350,13 +355,18 @@ private struct EventBlock: View {
     let event: WidgetEvent
     let span: String
     let ink: WidgetInk
+    @Environment(\.showsPalettePatterns) private var showsPatterns
 
     var body: some View {
         HStack(spacing: Metrics.spaceS) {
-            Rectangle().fill(ink.mark(event.palette)).frame(width: 3).widgetAccentable()
+            Rectangle().fill(ink.mark(event.look)).frame(width: 3).widgetAccentable()
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: Metrics.spaceXs) {
-                    if event.isReminder { ReminderMark(ink.mark(event.palette), size: 8).widgetAccentable() }
+                    if event.isReminder {
+                        ReminderMark(ink.mark(event.look), size: 8).widgetAccentable()
+                    } else if showsPatterns {
+                        Mark(ink.mark(event.look), size: 8, outlined: false, shape: event.look.shape).widgetAccentable()
+                    }
                     Text(event.title).textStyle(.small).fontWeight(.semibold).foregroundStyle(ink.ink).lineLimit(1)
                 }
                 if !event.isBand {
@@ -367,7 +377,7 @@ private struct EventBlock: View {
             Spacer(minLength: 0)
         }
         .frame(height: event.isBand ? Self.allDayHeight : Self.timedHeight)
-        .background(ink.tint(event.palette))
+        .background(ink.tint(event.look))
         .accessibilityElement(children: .combine)
     }
 }
@@ -491,8 +501,8 @@ private struct Ledger: View {
     private func grid(_ weeks: [[WidgetContent.LedgerDay]], titles: Int) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                ForEach(Array(["일", "월", "화", "수", "목", "금", "토"].enumerated()), id: \.offset) { index, name in
-                    Text(name).textStyle(.meta).foregroundStyle(index == 0 ? ink.holiday : ink.soft)
+                ForEach(moment.calendar.weekdaysInOrder, id: \.self) { weekday in
+                    Text(Calendar.weekdayName(weekday)).textStyle(.meta).foregroundStyle(weekday == 1 ? ink.holiday : ink.soft)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -521,6 +531,7 @@ private struct LedgerCell: View {
     /// How many titles the row holds.
     let titles: Int
     let ink: WidgetInk
+    @Environment(\.showsPalettePatterns) private var showsPatterns
 
     /// Title lines a row of `height` holds under the number. A row with none shows the number alone.
     static func titles(fitting height: CGFloat) -> Int {
@@ -539,7 +550,11 @@ private struct LedgerCell: View {
             let rest = day.count - shown
             ForEach(Array(day.marks.prefix(shown).enumerated()), id: \.element.id) { index, event in
                 HStack(spacing: Metrics.spaceXxs) {
-                    Rectangle().fill(ink.mark(event.palette)).frame(width: 3, height: 10).widgetAccentable()
+                    if showsPatterns {
+                        Mark(ink.mark(event.look), size: 7, outlined: false, shape: event.look.shape).widgetAccentable()
+                    } else {
+                        Rectangle().fill(ink.mark(event.look)).frame(width: 3, height: 10).widgetAccentable()
+                    }
                     Text(event.title).textStyle(.cell).foregroundStyle(day.isInMonth ? ink.ink : ink.faint).lineLimit(1)
                     if !ownLine, rest > 0, index == shown - 1 {
                         Text("+\(rest)").textStyle(.cell).foregroundStyle(ink.soft).fixedSize()

@@ -214,7 +214,7 @@ struct WidgetStoreTests {
         let data = WidgetStore.load(now: now, calendar: cal, cache: cache, diary: diary, pending: [], defaults: defaults())
         #expect(data.state == .ready)
         #expect(data.events.map(\.title) == ["회의", "우유"], "hidden calendar and finished reminder left out")
-        #expect(data.events[0].palette == .purple && !data.events[0].isReminder)
+        #expect(data.events[0].look == CalendarLook(.purple) && !data.events[0].isReminder)
         #expect(data.events[1].isReminder)
     }
 

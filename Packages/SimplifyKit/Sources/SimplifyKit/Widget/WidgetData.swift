@@ -16,11 +16,14 @@ public struct WidgetData: Sendable {
     public var events: [WidgetEvent]
     /// ToDos by day key (`yyyy-MM-dd`); nil when the diary store would not open.
     public var todos: [String: [TodoEntry]]?
+    /// Marks take their calendar's shape too (설정 › 일반), as in the app.
+    public var showsPatterns: Bool
 
-    public init(state: State, events: [WidgetEvent] = [], todos: [String: [TodoEntry]]? = [:]) {
+    public init(state: State, events: [WidgetEvent] = [], todos: [String: [TodoEntry]]? = [:], showsPatterns: Bool = false) {
         self.state = state
         self.events = events
         self.todos = todos
+        self.showsPatterns = showsPatterns
     }
 
     public func todos(on day: Date, calendar: Calendar) -> [TodoEntry]? {
@@ -68,16 +71,19 @@ public enum WidgetStore {
             }
             return result
         }
-        guard let cache else { return WidgetData(state: .unavailable, todos: todos) }
+        let patterns = SharedSettings.showsPatterns(in: defaults)
+        guard let cache else { return WidgetData(state: .unavailable, todos: todos, showsPatterns: patterns) }
 
         let context = ModelContext(cache)
         let accounts = (try? context.fetch(FetchDescriptor<CalendarAccount>())) ?? []
-        guard !accounts.isEmpty else { return WidgetData(state: .noAccounts, todos: todos) }
+        guard !accounts.isEmpty else { return WidgetData(state: .noAccounts, todos: todos, showsPatterns: patterns) }
         let reminderAccounts = Set(accounts.filter { $0.provider == .reminders }.map(\.id))
         let sources = (try? context.fetch(FetchDescriptor<CalendarSource>())) ?? []
         let visible = Set(sources.filter(\.isVisible).map(\.id))
+        let styles = CalendarStyles.all(in: defaults)
         let calendars = Dictionary(sources.map {
-            ($0.id, WidgetCalendar(palette: $0.palette, isReminderList: reminderAccounts.contains($0.accountID), isHoliday: $0.isHoliday))
+            ($0.id, WidgetCalendar(look: (styles[$0.id] ?? CalendarStyle()).look(auto: $0.palette, isHoliday: $0.isHoliday),
+                                   isReminderList: reminderAccounts.contains($0.accountID), isHoliday: $0.isHoliday))
         }) { first, _ in first }
 
         // As the app shows them: the cache with unsent changes on top, visible calendars only.
@@ -86,7 +92,7 @@ public enum WidgetStore {
             .filter { visible.contains($0.sourceID) }
         if !(defaults.bool(forKey: SharedSettings.showsCompletedReminders)) { snapshots.removeAll(where: \.isCompleted) }
         let occurrences = OccurrenceBuilder.occurrences(from: snapshots, in: range(now: now, calendar: calendar), calendar: calendar)
-        return WidgetData(state: .ready, events: WidgetContent.events(occurrences, calendars: calendars), todos: todos)
+        return WidgetData(state: .ready, events: WidgetContent.events(occurrences, calendars: calendars), todos: todos, showsPatterns: patterns)
     }
 
     /// A widget's checkbox: ticks or unticks the ToDo, and leaves a note for the app to read the store again.

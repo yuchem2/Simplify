@@ -64,6 +64,36 @@ final class AppModel {
         didSet { SharedSettings.defaults.set(showsCellTimes, forKey: SharedSettings.showsCellTimes) }
     }
 
+    /// Calendar marks take their calendar's shape too (설정 › 일반). Off unless turned on; shared with the widgets.
+    var showsPatterns = SharedSettings.showsPatterns(in: SharedSettings.defaults) {
+        didSet {
+            SharedSettings.defaults.set(showsPatterns, forKey: SharedSettings.showsPatterns)
+            WidgetRefresh.request()
+        }
+    }
+
+    /// Weeks start on Sunday or Monday (설정 › 일반), in the app and the widgets alike.
+    var weekStart: WeekStart {
+        get { calendar.firstWeekday == WeekStart.monday.rawValue ? .monday : .sunday }
+        set {
+            guard newValue != weekStart else { return }
+            SharedSettings.defaults.set(newValue.rawValue, forKey: SharedSettings.firstWeekday)
+            rebuildCalendar()
+            WidgetRefresh.request()
+        }
+    }
+
+    enum WeekStart: Int, CaseIterable {
+        case sunday = 1, monday = 2
+
+        var label: String {
+            switch self {
+            case .sunday: "일요일"
+            case .monday: "월요일"
+            }
+        }
+    }
+
     enum CalendarView: String, Hashable, CaseIterable {
         case week, month, year
 
@@ -151,12 +181,12 @@ final class AppModel {
         return (0..<count).map { calendar.date(byAdding: .day, value: $0, to: start)! }
     }
 
-    /// What decides `shownDays`: the view, and the first day of its month grid or year. Cheap to
-    /// compare, so the window reloads events only when it changes.
+    /// What decides `shownDays`: the view, the first day of its month or year, and the weekday rows
+    /// start on. Cheap to compare, so the window reloads events only when it changes.
     var shownRange: String {
         switch calendarView {
-        case .year: "year-\(shownYear)"
-        case .week, .month: "month-\(month.start.timeIntervalSinceReferenceDate)"
+        case .year: "year-\(shownYear)-\(calendar.firstWeekday)"
+        case .week, .month: "month-\(month.start.timeIntervalSinceReferenceDate)-\(calendar.firstWeekday)"
         }
     }
 
@@ -215,6 +245,11 @@ final class AppModel {
     /// the 26th) under a calendar in the new zone.
     func timeZoneDidChange(now: Date = .now) {
         NSTimeZone.resetSystemTimeZone()
+        rebuildCalendar(now: now)
+    }
+
+    /// A new `Calendar.simplify` (another zone or first weekday) that keeps the same calendar dates.
+    private func rebuildCalendar(now: Date = .now) {
         let old = calendar
         let new = Calendar.simplify
         func carry(_ date: Date) -> Date {
@@ -228,6 +263,6 @@ final class AppModel {
 
     func isToday(_ day: Date) -> Bool { day == today }
     func isSelected(_ day: Date) -> Bool { day == selectedDay }
-    /// Sundays are red; public holidays join them once calendars sync (stage 2).
+    /// Sundays are red, wherever the week starts; public holidays join them once calendars sync (stage 2).
     func isRedDay(_ day: Date) -> Bool { calendar.component(.weekday, from: day) == 1 }
 }

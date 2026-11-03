@@ -1,4 +1,5 @@
 import AuthenticationServices
+import ServiceManagement
 import SwiftUI
 import SimplifyKit
 
@@ -10,6 +11,7 @@ struct SettingsModal: View {
     @Environment(\.webAuthenticationSession) private var webAuth
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var openURL
+    @Environment(\.showsPalettePatterns) private var showsPatterns
     @State private var page: Page = .accounts
     /// The account kind whose connect page is open, before anything has started.
     @State private var intro: CalendarProviderKind?
@@ -51,6 +53,8 @@ struct SettingsModal: View {
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .overlay { if let account = confirming { confirmDisconnect(account) } }
+        // A colour wheel left open would go on recolouring a calendar nobody is looking at.
+        .onDisappear { ColorWheel.shared.release() }
     }
 
     /// The largest the settings box grows, and the least room it leaves around itself.
@@ -147,31 +151,34 @@ struct SettingsModal: View {
         @Bindable var model = model
         return VStack(alignment: .leading, spacing: Metrics.spaceL) {
             SectionRule("모양")
-            HStack {
-                VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
-                    Text("테마").textStyle(.item)
-                    Text("시스템을 고르면 Mac의 밝은 모드·어두운 모드를 따라가요.")
-                        .textStyle(.small)
-                        .foregroundStyle(.inkSoft)
-                }
-                Spacer()
+            settingRow("테마", note: "시스템을 고르면 Mac의 밝은 모드·어두운 모드를 따라가요.") {
                 SegmentedTabs(AppModel.Theme.allCases.map { ($0, $0.label) }, selection: $model.theme)
                     .accessibilityLabel("테마")
             }
+            HStack(spacing: Metrics.spaceL) {
+                Toggle(isOn: $model.showsPatterns) {
+                    labelled("색과 함께 패턴도 표시", note: "캘린더마다 모양을 함께 그려요. 모양은 왼쪽 캘린더에서 캘린더마다 골라요.")
+                }
+                .toggleStyle(DrawnCheckboxStyle())
+                Spacer()
+                // What the marks become, whether or not it is on.
+                HStack(spacing: Metrics.spaceS) {
+                    ForEach([Palette.blue, .orange, .green, .pink], id: \.self) { Mark($0.ink, shape: $0.markShape) }
+                }
+                .environment(\.showsPalettePatterns, true)
+                .accessibilityHidden(true)
+            }
 
             SectionRule("달력").padding(.top, Metrics.spaceM)
-            HStack {
-                VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
-                    Text("칸 안 일정 글자 크기").textStyle(.item)
-                    Text("작게 고를수록 한 칸에 일정이 더 많이, 제목이 더 길게 보여요.")
-                        .textStyle(.small)
-                        .foregroundStyle(.inkSoft)
-                }
-                Spacer()
+            settingRow("주 시작 요일", note: "달력과 한 주 메모가 이 요일부터 시작해요.") {
+                SegmentedTabs(AppModel.WeekStart.allCases.map { ($0, $0.label) }, selection: $model.weekStart)
+                    .accessibilityLabel("주 시작 요일")
+            }
+            settingRow("칸 안 일정 글자 크기", note: "작게 고를수록 한 칸에 일정이 더 많이, 제목이 더 길게 보여요.") {
                 SegmentedTabs(AppModel.CellTextSize.allCases.map { ($0, $0.label) }, selection: $model.cellTextSize)
             }
             HStack(spacing: Metrics.spaceS) {
-                Mark(Palette.blue.ink, size: model.cellTextSize.markSize)
+                Mark(Palette.blue.ink, size: model.cellTextSize.markSize, shape: Palette.blue.markShape)
                 // The size the day cells use, so the preview reads exactly like a cell.
                 Text(model.showsCellTimes ? "09:30 주간 스탠드업 · 14:00 디자인 리뷰" : "주간 스탠드업 · 디자인 리뷰 · 필라테스")
                     .font(.system(size: model.cellTextSize.points))
@@ -187,17 +194,67 @@ struct SettingsModal: View {
             }
             .toggleStyle(DrawnCheckboxStyle())
 
+            SectionRule("새 일정").padding(.top, Metrics.spaceM)
+            settingRow("기본 캘린더", note: "새 일정을 만들 때 처음 골라져 있는 캘린더예요.") {
+                newEventCalendarMenu
+            }
+
             SectionRule("미리알림").padding(.top, Metrics.spaceM)
             Toggle(isOn: Binding(get: { calendars.showsCompletedReminders }, set: { calendars.showsCompletedReminders = $0 })) {
-                VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
-                    Text("완료된 미리알림 보기").textStyle(.item)
-                    Text("끄면 완료한 미리알림은 달력에서 빠져요. 켜면 줄을 그어 보여 줘요.")
-                        .textStyle(.small)
-                        .foregroundStyle(.inkSoft)
-                }
+                labelled("완료된 미리알림 보기", note: "끄면 완료한 미리알림은 달력에서 빠져요. 켜면 줄을 그어 보여 줘요.")
             }
             .toggleStyle(DrawnCheckboxStyle())
+
+            SectionRule("시작").padding(.top, Metrics.spaceM)
+            LoginItemRow()
         }
+    }
+
+    /// A setting's name and what it does, with its control on the right.
+    private func settingRow(_ title: String, note: String, @ViewBuilder control: () -> some View) -> some View {
+        HStack(spacing: Metrics.spaceL) {
+            labelled(title, note: note)
+            Spacer()
+            control()
+        }
+    }
+
+    private func labelled(_ title: String, note: String) -> some View {
+        VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
+            Text(title).textStyle(.item)
+            Text(note)
+                .textStyle(.small)
+                .foregroundStyle(.inkSoft)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// 마지막으로 쓴 캘린더, or one calendar that can be written to. A chosen calendar that turned
+    /// read-only or went away reads as the last one used, which is what new events then start in.
+    private var newEventCalendarMenu: some View {
+        let chosen = calendars.preferredNewEventSource.flatMap { calendars.isWritable($0) ? calendars.sources[$0] : nil }
+        let shown = chosen ?? calendars.defaultSourceForNewEvent.flatMap { calendars.sources[$0] }
+        return Menu {
+            Toggle("마지막으로 쓴 캘린더", isOn: Binding(get: { chosen == nil }, set: { if $0 { calendars.preferredNewEventSource = nil } }))
+            ForEach(calendars.writableSources, id: \.0.id) { account, sources in
+                Section("\(account.provider.label) · \(account.email)") {
+                    ForEach(sources) { source in
+                        Toggle(isOn: Binding(get: { chosen?.id == source.id }, set: { if $0 { calendars.preferredNewEventSource = source.id } })) {
+                            Label { Text(source.name) } icon: { Image(nsImage: Swatch.image(source.look, patterned: showsPatterns)) }
+                        }
+                    }
+                }
+            }
+        } label: {
+            MenuLabel(text: chosen?.name ?? "마지막으로 쓴 캘린더", mark: shown?.look)
+        }
+        .menuStyle(.button)
+        .buttonStyle(FocusOnlyStyle())
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(calendars.writableSources.isEmpty)
+        .help(calendars.writableSources.isEmpty ? "일정을 쓸 수 있는 캘린더가 없어요" : "")
+        .accessibilityLabel("기본 캘린더")
     }
 
     private var accountsPage: some View {
@@ -303,7 +360,7 @@ struct SettingsModal: View {
                         HStack(spacing: Metrics.spaceM) {
                             Toggle(isOn: Binding(get: { source.isVisible }, set: { calendars.setVisible(source.id, $0) })) {
                                 HStack(spacing: Metrics.spaceM) {
-                                    if source.isReminderList { ReminderMark(source.palette.ink) } else { Mark(source.palette.ink) }
+                                    if source.isReminderList { ReminderMark(source.look.ink) } else { Mark(source.look.ink, shape: source.look.shape) }
                                     Text(source.name)
                                         .textStyle(.item)
                                         .foregroundStyle(source.isVisible ? Color.ink : Color.inkSoft)
@@ -312,7 +369,9 @@ struct SettingsModal: View {
                             .toggleStyle(DrawnCheckboxStyle())
                             .accessibilityLabel("\(source.name) 보이기")
                             Spacer()
-                            Text(sourceNote(source)).textStyle(.meta).foregroundStyle(.inkSoft)
+                            if let note = sourceNote(source) { Text(note).textStyle(.meta).foregroundStyle(.inkSoft) }
+                            // A holiday calendar stays red words; its look is not the person's to pick.
+                            if !source.isHoliday { StyleButton(source: source, provider: account.provider, calendars: calendars) }
                         }
                         .padding(.vertical, Metrics.spaceXs)
                     } }
@@ -326,12 +385,12 @@ struct SettingsModal: View {
         }
     }
 
-    /// `공휴일 · 읽기 전용`, `읽기 전용`, or the palette colour the calendar is drawn in.
-    private func sourceNote(_ source: CalendarController.Source) -> String {
+    /// `공휴일 · 읽기 전용`, `읽기 전용`, or nil; the colour button says the colour.
+    private func sourceNote(_ source: CalendarController.Source) -> String? {
         var parts: [String] = []
         if source.isHoliday { parts.append("공휴일") }
         if source.isReadOnly { parts.append("읽기 전용") }
-        return parts.isEmpty ? source.palette.name : parts.joined(separator: " · ")
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     // MARK: - Adding an account
@@ -399,7 +458,7 @@ struct SettingsModal: View {
     @ViewBuilder private var googleIntro: some View {
         Text("Google 계정 연결").textStyle(.subheading)
         Text("Google 캘린더 일정을 이 Mac으로 가져와요. 로그인은 Google 창에서 하고, Simplify는 암호를 보지 않아요.")
-        Text("처음 로그인할 때 \"확인되지 않은 앱\" 경고가 나오면 고급 › Simplify(으)로 이동을 눌러요. 개인용으로 만든 앱이라 Google 검수를 받지 않았어요.")
+        Text("Google 창에서 계정을 고르고 캘린더 접근을 허용해 주세요. 한 번 연결하면 다시 로그인하라고 하지 않아요.")
             .foregroundStyle(.inkSoft)
         HStack {
             Spacer()
@@ -574,6 +633,377 @@ extension CalendarProviderKind {
         case .icloud: "iCloud 계정 연결"
         case .reminders: "미리알림 가져오기"
         }
+    }
+}
+
+/// How a calendar is drawn, as a small box: `파랑`, `자동 · 파랑` while the colour follows its
+/// provider, and the shape after it once one is picked (`파랑 · 세모`). A click, or Space with the
+/// keyboard, opens the colours and shapes under it.
+private struct StyleButton: View {
+    let source: CalendarController.Source
+    let provider: CalendarProviderKind
+    let calendars: CalendarController
+    @State private var isOpen = false
+
+    var body: some View {
+        let label = Self.label(source)
+        Button { isOpen = true } label: {
+            HStack(spacing: Metrics.spaceS) {
+                Text(label)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+            }
+            .textStyle(.meta)
+            .foregroundStyle(isOpen ? Color.ink : Color.inkSoft)
+            .padding(.leading, Metrics.spaceS)
+            .padding(.trailing, Metrics.spaceXs)
+            .padding(.vertical, Metrics.spaceXxs)
+            .background(isOpen ? Color.rowActive : Color.clear)
+            .overlay(Rectangle().strokeBorder(isOpen ? Color.ink : Color.shade, lineWidth: Metrics.line))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(FocusOnlyStyle())
+        .fixedSize()
+        .help("색과 모양 고르기")
+        .accessibilityLabel("\(source.name) 색과 모양")
+        .accessibilityValue(label)
+        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+            StylePop(sourceID: source.id, provider: provider, calendars: calendars) { isOpen = false }
+        }
+    }
+
+    static func label(_ source: CalendarController.Source) -> String {
+        var parts = source.style.hasColor ? [source.look.name] : ["자동", source.look.name]
+        if let shape = source.style.shape { parts.append(shape.name) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// A calendar's colour (자동, the nine palette colours, or any from the colour wheel) and the shape
+/// its marks take with patterns on (자동, or one of nine). Picking keeps the pop open; the arrow keys
+/// move the cursor through both, Return picks, Esc closes.
+struct StylePop: View {
+    let sourceID: String
+    let provider: CalendarProviderKind
+    let calendars: CalendarController
+    let close: () -> Void
+    /// Starts on the colour in use.
+    @State private var cursor: Int
+    @FocusState private var focused: Bool
+    @Environment(\.showsPalettePatterns) private var showsPatterns
+    @Environment(\.isRenderingSnapshot) private var isRenderingSnapshot
+
+    /// One choice in the pop, in reading order.
+    private enum Choice: Hashable {
+        case autoColor, palette(Palette), wheel, autoShape, shape(MarkShape)
+    }
+
+    /// The cursor walks these rows: two of colours, the colour wheel, then two of shapes. Reminder
+    /// lists keep their rings whatever the shape, so they get no shapes.
+    private static func rows(shapes: Bool) -> [[Choice]] {
+        let colors = [Choice.autoColor] + Palette.allCases.map(Choice.palette)
+        let shapeChoices = [Choice.autoShape] + MarkShape.allCases.map(Choice.shape)
+        let colorRows = [Array(colors[0..<5]), Array(colors[5...]), [Choice.wheel]]
+        return shapes ? colorRows + [Array(shapeChoices[0..<5]), Array(shapeChoices[5...])] : colorRows
+    }
+
+    private static let columns = 5
+    private static let swatch: CGFloat = 28
+    private static let gridWidth = swatch * CGFloat(columns) + Metrics.spaceL * CGFloat(columns - 1)
+
+    private var rows: [[Choice]] { Self.rows(shapes: calendars.sources[sourceID]?.isReminderList != true) }
+    private var choices: [Choice] { rows.flatMap { $0 } }
+    /// The column up and down keep to, across the one-wide colour wheel row.
+    @State private var column = 0
+
+    init(sourceID: String, provider: CalendarProviderKind, calendars: CalendarController, close: @escaping () -> Void) {
+        self.sourceID = sourceID
+        self.provider = provider
+        self.calendars = calendars
+        self.close = close
+        let start = calendars.sources[sourceID].map(Self.chosenColor) ?? .autoColor
+        let index = Self.rows(shapes: false).flatMap { $0 }.firstIndex(of: start) ?? 0
+        _cursor = State(initialValue: index)
+        _column = State(initialValue: index < 10 ? index % 5 : 0)
+    }
+
+    var body: some View {
+        if let source = calendars.sources[sourceID] {
+            content(source)
+        }
+    }
+
+    private func content(_ source: CalendarController.Source) -> some View {
+        VStack(alignment: .leading, spacing: Metrics.spaceM) {
+            Text("개인 색").textStyle(.section)
+            grid(Array(rows[0...1]), source: source)
+            wheelRow(source)
+            // Broken where the sentence breaks, not wherever the width runs out.
+            Text("자동은 \(providerName) 색(\(source.autoPalette.name))에\n가장 가까운 색이에요.")
+                .textStyle(.small)
+                .foregroundStyle(.inkSoft)
+                .fixedSize(horizontal: false, vertical: true)
+            if rows.count > 3 {
+                Rectangle().fill(.shade).frame(height: Metrics.line).padding(.vertical, Metrics.spaceXs)
+                Text("모양").textStyle(.section)
+                grid(Array(rows[3...4]), source: source)
+                Text(showsPatterns ? "자동은 색에 맞는 모양이에요." : "일반 › 모양의 패턴 표시를\n켜면 달력에 보여요.")
+                    .textStyle(.small)
+                    .foregroundStyle(.inkSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        // Everything as wide as the swatch grid, so the 다른 색 row and the notes line up with it.
+        .frame(width: Self.gridWidth, alignment: .leading)
+        .padding(Metrics.spaceL)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onAppear {
+            focused = true
+            // The wheel left open for another calendar stops sending to it.
+            ColorWheel.shared.release(unless: sourceID)
+        }
+        .onKeyPress(.leftArrow) { step(-1) }
+        .onKeyPress(.rightArrow) { step(1) }
+        .onKeyPress(.upArrow) { jump(-1) }
+        .onKeyPress(.downArrow) { jump(1) }
+        .onKeyPress(.return) {
+            pick(choices[cursor], source: source)
+            return .handled
+        }
+        .onExitCommand(perform: close)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(source.name) 색과 모양")
+    }
+
+    private var providerName: String {
+        switch provider {
+        case .google: "Google"
+        case .icloud: "iCloud"
+        case .reminders: "미리알림"
+        }
+    }
+
+    private static func chosenColor(_ source: CalendarController.Source) -> Choice {
+        if source.style.hex != nil { return .wheel }
+        return source.style.palette.map(Choice.palette) ?? .autoColor
+    }
+
+    private func chosenShape(_ source: CalendarController.Source) -> Choice {
+        source.style.shape.map(Choice.shape) ?? .autoShape
+    }
+
+    // MARK: Keys
+
+    private func position(of index: Int) -> (row: Int, column: Int) {
+        var start = 0
+        for (row, items) in rows.enumerated() {
+            if index < start + items.count { return (row, index - start) }
+            start += items.count
+        }
+        return (0, 0)
+    }
+
+    /// Left and right stay within a row.
+    private func step(_ offset: Int) -> KeyPress.Result {
+        let (row, at) = position(of: cursor)
+        if rows[row].indices.contains(at + offset) {
+            cursor += offset
+            column = at + offset
+        }
+        return .handled
+    }
+
+    /// Up and down go to the row above or below, at the nearest column.
+    private func jump(_ offset: Int) -> KeyPress.Result {
+        let (row, _) = position(of: cursor)
+        guard rows.indices.contains(row + offset) else { return .handled }
+        let target = rows[row + offset]
+        cursor = choices.firstIndex(of: target[min(column, target.count - 1)]) ?? cursor
+        return .handled
+    }
+
+    // MARK: Picking
+
+    private func pick(_ choice: Choice, source: CalendarController.Source) {
+        var style = source.style
+        switch choice {
+        case .autoColor: style.palette = nil; style.hex = nil
+        case .palette(let palette): style.palette = palette; style.hex = nil
+        case .wheel:
+            ColorWheel.shared.open(source.look.ink, for: sourceID) { hex in
+                guard var style = calendars.sources[sourceID]?.style else { return }
+                style.hex = hex
+                calendars.setStyle(sourceID, style)
+            }
+            return
+        case .autoShape: style.shape = nil
+        case .shape(let shape): style.shape = shape
+        }
+        calendars.setStyle(sourceID, style)
+    }
+
+    private func isCursor(_ choice: Choice) -> Bool {
+        (focused || isRenderingSnapshot) && choices.firstIndex(of: choice) == cursor
+    }
+
+    private func grid(_ rows: [[Choice]], source: CalendarController.Source) -> some View {
+        Grid(horizontalSpacing: Metrics.spaceL, verticalSpacing: Metrics.spaceM) {
+            ForEach(rows, id: \.self) { row in
+                GridRow {
+                    ForEach(row, id: \.self) { choice in swatch(choice, source: source) }
+                }
+            }
+        }
+        // Room for the chosen one's ring, which stands outside its swatch.
+        .padding(.vertical, Metrics.spaceXs)
+    }
+
+    private func swatch(_ choice: Choice, source: CalendarController.Source) -> some View {
+        let chosen = choice == Self.chosenColor(source) || choice == chosenShape(source)
+        let name = name(of: choice)
+        return Button { pick(choice, source: source) } label: {
+            ZStack {
+                switch choice {
+                case .autoColor, .autoShape:
+                    Rectangle().strokeBorder(Color.inkSoft, style: StrokeStyle(lineWidth: Metrics.line, dash: [2, 2]))
+                    Text("자동").textStyle(.meta).fontWeight(.semibold).foregroundStyle(.inkSoft)
+                case .palette(let palette):
+                    Rectangle().fill(palette.ink)
+                case .shape(let shape):
+                    Rectangle().strokeBorder(.shade, lineWidth: Metrics.line)
+                    // In the calendar's own colour, as its marks will show.
+                    Mark(source.look.ink, size: 14, outlined: false, shape: shape)
+                        .environment(\.showsPalettePatterns, true)
+                case .wheel:
+                    EmptyView()
+                }
+            }
+            .frame(width: Self.swatch, height: Self.swatch)
+            // The one in use stands in an ink square; the keys' cursor in the usual ring.
+            .overlay { if chosen { Rectangle().strokeBorder(.ink, lineWidth: 2).padding(-4) } }
+            .focusRing(isCursor(choice) && !chosen)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(name)
+        .accessibilityLabel(name)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
+    }
+
+    /// 다른 색…, with the picked colour beside it once there is one.
+    private func wheelRow(_ source: CalendarController.Source) -> some View {
+        let chosen = Self.chosenColor(source) == .wheel
+        return Button { pick(.wheel, source: source) } label: {
+            HStack(spacing: Metrics.spaceS) {
+                if chosen { Rectangle().fill(source.look.ink).frame(width: 12, height: 12) }
+                Text(chosen ? "직접 고른 색 · 바꾸기…" : "다른 색…").textStyle(.small)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Metrics.spaceS)
+            .frame(width: Self.gridWidth, height: 24)
+            .overlay(Rectangle().strokeBorder(.shade, lineWidth: Metrics.line))
+            // In use: the same ink square around it as a chosen swatch.
+            .overlay { if chosen { Rectangle().strokeBorder(.ink, lineWidth: 2).padding(-4) } }
+            .focusRing(isCursor(.wheel) && !chosen)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help("색상 휠에서 고르기")
+        .accessibilityLabel("다른 색")
+        .accessibilityAddTraits(chosen ? .isSelected : [])
+    }
+
+    private func name(of choice: Choice) -> String {
+        switch choice {
+        case .autoColor: "자동 색"
+        case .palette(let palette): palette.name
+        case .wheel: "다른 색"
+        case .autoShape: "자동 모양"
+        case .shape(let shape): shape.name
+        }
+    }
+}
+
+/// The system colour wheel for one calendar at a time. It stays open beside settings and sends
+/// every change, in sRGB, to whoever opened it last.
+@MainActor
+final class ColorWheel: NSObject {
+    static let shared = ColorWheel()
+    private var onChange: ((String) -> Void)?
+    /// The calendar the wheel is sending to.
+    private var owner: String?
+
+    func open(_ current: Color, for owner: String, onChange: @escaping (String) -> Void) {
+        let panel = NSColorPanel.shared
+        panel.showsAlpha = false
+        // The starting colour goes in before the action, so opening alone changes nothing.
+        panel.setAction(nil)
+        panel.color = NSColor(current)
+        self.onChange = onChange
+        self.owner = owner
+        panel.setTarget(self)
+        panel.setAction(#selector(changed(_:)))
+        panel.orderFront(nil)
+    }
+
+    /// Closes the wheel, unless it is sending to `keep`; nil closes it whatever it is for.
+    func release(unless keep: String? = nil) {
+        guard owner != nil, owner != keep else { return }
+        onChange = nil
+        owner = nil
+        NSColorPanel.shared.setTarget(nil)
+        NSColorPanel.shared.setAction(nil)
+        NSColorPanel.shared.orderOut(nil)
+    }
+
+    @objc private func changed(_ panel: NSColorPanel) {
+        guard let rgb = panel.color.usingColorSpace(.sRGB) else { return }
+        func byte(_ value: CGFloat) -> Int { Int((min(max(value, 0), 1) * 255).rounded()) }
+        onChange?(String(format: "#%02x%02x%02x", byte(rgb.redComponent), byte(rgb.greenComponent), byte(rgb.blueComponent)))
+    }
+}
+
+/// 설정 › 일반 › 시작: Simplify among the Mac's login items. The state is macOS's, read whenever the
+/// page opens, so a change made in 시스템 설정 shows here.
+private struct LoginItemRow: View {
+    @State private var status: SMAppService.Status = .notRegistered
+    @State private var failure: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Metrics.spaceS) {
+            Toggle(isOn: Binding(get: { status == .enabled || status == .requiresApproval }, set: set)) {
+                VStack(alignment: .leading, spacing: Metrics.spaceXxs) {
+                    Text("Mac에 로그인할 때 열기").textStyle(.item)
+                    Text("켜 두면 Mac을 켤 때 Simplify가 함께 열려요.").textStyle(.small).foregroundStyle(.inkSoft)
+                }
+            }
+            .toggleStyle(DrawnCheckboxStyle())
+            if let note = failure ?? (status == .requiresApproval ? "시스템 설정 › 일반 › 로그인 항목에서 허용해 주세요." : nil) {
+                Label(note, systemImage: "exclamationmark.triangle")
+                    .textStyle(.small)
+                    .foregroundStyle(Tokens.error)
+                    // Under the label's words, past the checkbox.
+                    .padding(.leading, 16 + Metrics.spaceM)
+            }
+        }
+        .task { status = SMAppService.mainApp.status }
+        // Back from 시스템 설정, where it may have been allowed.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            status = SMAppService.mainApp.status
+        }
+    }
+
+    private func set(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            failure = nil
+        } catch {
+            failure = on ? "로그인 항목에 넣지 못했어요. 시스템 설정 › 일반 › 로그인 항목에서 넣어 주세요." : "로그인 항목에서 빼지 못했어요."
+        }
+        status = SMAppService.mainApp.status
     }
 }
 

@@ -74,6 +74,7 @@ struct MainView: View {
         .foregroundStyle(.ink)
         // Every drawn control shows its own focus ring (a paper gap, then ink), so the system's round blue one stays off.
         .focusEffectDisabled()
+        .environment(\.showsPalettePatterns, model.showsPatterns)
         .environment(\.toggleReminder, ReminderToggle { occurrence in
             Task {
                 // Nothing to point at for a failure; the ring stays as it was and the Mac says no.

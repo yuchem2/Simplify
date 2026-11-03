@@ -49,8 +49,6 @@ private struct MiniMonth: View {
     /// Gives the arrow keys back to the year after a click.
     let takeFocus: () -> Void
 
-    private static let weekdays = ["일", "월", "화", "수", "목", "금", "토"]
-
     var body: some View {
         let calendar = model.calendar
         let first = calendar.date(from: DateComponents(year: model.shownYear, month: month, day: 1))!
@@ -67,10 +65,10 @@ private struct MiniMonth: View {
             Rectangle().fill(.ink).frame(height: Metrics.line)
             Grid(horizontalSpacing: 0, verticalSpacing: 0) {
                 GridRow {
-                    ForEach(Self.weekdays, id: \.self) { name in
-                        Text(name)
+                    ForEach(calendar.weekdaysInOrder, id: \.self) { weekday in
+                        Text(Calendar.weekdayName(weekday))
                             .textStyle(.meta)
-                            .foregroundStyle(name == "일" ? Color.holiday : Color.inkSoft)
+                            .foregroundStyle(weekday == 1 ? Color.holiday : Color.inkSoft)
                             .frame(maxWidth: .infinity)
                     }
                 }
