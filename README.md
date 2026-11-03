@@ -14,6 +14,16 @@ open Simplify.xcodeproj
 
 위젯과 App Group은 서명이 필요해요. Xcode › Settings › Accounts에 Apple ID가 있어야 하고, `project.yml`의 `DEVELOPMENT_TEAM`에는 개인 팀 ID가 들어 있어요. 다른 팀으로 빌드할 때만 바꿔요.
 
+## 설치
+
+```bash
+scripts/install.sh
+```
+
+Release로 빌드해 `/Applications/Simplify.app`에 설치하고 다시 열어요. 빌드 결과는 `build/release.noindex`에 두고 앱 목록 등록을 해제해서, Launchpad·Spotlight·위젯 목록에 Simplify가 하나만 보여요.
+
+개발 빌드도 같은 이유로 `.noindex`로 끝나는 폴더에 만들어요(예: `-derivedDataPath build/dev.noindex`). 그 밖의 폴더에 만든 앱을 실행하면 macOS가 앱으로 등록해서 목록에 하나 더 생겨요.
+
 ## 구조
 
 | 경로 | 내용 |
