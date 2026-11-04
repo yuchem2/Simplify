@@ -112,10 +112,10 @@ extension MemoDraft {
         todos.pop = pop
     }
 
-    /// The picked letters as plain text, for the right-click menu's copy.
+    /// The picked letters as plain text, for the right-click menu's copy, formulas in `$…$`.
     /// The first picked range only, the same one cut deletes.
     var selectedPlainText: String {
-        selectedRanges.first { !$0.isEmpty }.map { String(text[$0].characters) } ?? ""
+        selectedRanges.first { !$0.isEmpty }.map { MemoMath.plainText(AttributedString(text[$0])) } ?? ""
     }
 
     /// The right-click menu's cut, copy and paste, done on the memo's letters directly: the menu
@@ -307,6 +307,8 @@ struct MemoMenuHost: NSViewRepresentable {
             draft?.showMenu = { [weak self] in self?.showMenuUnderSelection() }
             draft?.redrawLines = { [weak self] in self?.redrawLines() }
             draft?.editLines = { [weak self] make in self?.editLines(make) ?? false }
+            draft?.openFormula = { [weak self] in self?.styler.openFormula }
+            draft?.startFormula = { [weak self] location in self?.styler.startEmptyFormula(at: location) }
             // Once the text view is in the window beside this view.
             Task { @MainActor [weak self] in self?.redrawLines() }
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown, .keyDown]) { [weak self] event in
@@ -317,6 +319,12 @@ struct MemoMenuHost: NSViewRepresentable {
                         // Esc closes the 문단 bar.
                         if draft.showsParagraphBar, event.keyCode == Self.keyEscape {
                             draft.showsParagraphBar = false
+                            return true
+                        }
+                        // Esc, or → at its end, leaves the formula being written; ⌘C and ⌘X put formulas
+                        // on the clipboard as `$…$`.
+                        if draft.hasFocus, draft.book.todos.pop == nil, let textView = self.styler.textView, window.firstResponder === textView,
+                           self.handleFormulaKey(event, in: textView) {
                             return true
                         }
                         // Return, Tab and Delete in lists, and a typed `* `.
@@ -337,6 +345,9 @@ struct MemoMenuHost: NSViewRepresentable {
                         if self.isInBox(event) {
                             draft.lastBoxClick = ProcessInfo.processInfo.systemUptime
                             draft.lastClickCount = event.clickCount
+                            if let textView = self.styler.textView {
+                                self.styler.lastClick = (textView.convert(event.locationInWindow, from: nil), draft.lastBoxClick)
+                            }
                         }
                         return false
                     default:
@@ -349,8 +360,48 @@ struct MemoMenuHost: NSViewRepresentable {
             }
         }
 
-        /// `kVK_ANSI_T`.
+        /// `kVK_ANSI_T`, `kVK_ANSI_C`, `kVK_ANSI_X`, `kVK_RightArrow`.
         private static let keyT: UInt16 = 17
+        private static let keyC: UInt16 = 8
+        private static let keyX: UInt16 = 7
+        private static let keyRight: UInt16 = 124
+
+        /// Formula keys in the focused memo; false for any other key, which goes on as usual.
+        @MainActor
+        private func handleFormulaKey(_ event: NSEvent, in textView: NSTextView) -> Bool {
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
+            let selection = textView.selectedRange()
+            switch (event.keyCode, modifiers) {
+            case (Self.keyEscape, []):
+                return leaveFormula(in: textView)
+            case (Self.keyRight, []):
+                guard selection.length == 0, let open = styler.openFormula, selection.location == NSMaxRange(open) else { return false }
+                return leaveFormula(in: textView)
+            // By place, as with T, and by letter, so another layout's key there is not taken for them.
+            case (Self.keyC, [.command]) where ["c", "ㅊ"].contains(event.charactersIgnoringModifiers?.lowercased() ?? ""),
+                 (Self.keyX, [.command]) where ["x", "ㅌ"].contains(event.charactersIgnoringModifiers?.lowercased() ?? ""):
+                // The text view copies or cuts as usual; then its plain text is written with the
+                // formulas in `$…$`. LaTeX picked inside the formula being written stays as it is.
+                guard let draft, selection.length > 0, let range = Range(selection, in: draft.text) else { return false }
+                if let open = styler.openFormula, NSIntersectionRange(open, selection) == selection { return false }
+                let picked = AttributedString(draft.text[range])
+                let plain = MemoMath.plainText(picked)
+                guard plain != String(picked.characters) else { return false }
+                if event.keyCode == Self.keyX { textView.cut(nil) } else { textView.copy(nil) }
+                NSPasteboard.general.setString(plain, forType: .string)
+                return true
+            default:
+                return false
+            }
+        }
+
+        /// The caret after the formula being written, which is drawn again; false when none is.
+        @MainActor
+        private func leaveFormula(in textView: NSTextView) -> Bool {
+            guard styler.leaveFormula(moving: { textView.setSelectedRange(NSRange(location: $0, length: 0)) }) else { return false }
+            draft?.dropFormulaTyping()
+            return true
+        }
         /// `kVK_Escape`.
         private static let keyEscape: UInt16 = 53
 
@@ -408,6 +459,8 @@ struct MemoMenuHost: NSViewRepresentable {
                 styler.attach(to: textView)
             }
             styler.update()
+            // Letters typed after a drawn formula are not part of it.
+            if styler.caretIsAfterDrawnFormula { draft.dropFormulaTyping() }
         }
 
         @MainActor
@@ -439,6 +492,16 @@ struct MemoMenuHost: NSViewRepresentable {
             guard let draft, draft.hasFocus, let textView = window?.firstResponder as? NSTextView, !textView.isFieldEditor else { return }
             textView.insertionPointColor = NSColor(Color.ink)
             textView.selectedTextAttributes = [.backgroundColor: NSColor(Color.rowActive)]
+        }
+
+        /// Drawn formulas take the new theme's ink.
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            // After the change has settled, not while the views are being redrawn for it.
+            Task { @MainActor [weak self] in
+                guard let self, self.styler.isAttached else { return }
+                self.styler.update(force: true)
+            }
         }
 
         // A plain view: clicks go to the text view on top.

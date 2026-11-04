@@ -50,6 +50,10 @@ final class MemoDraft {
     /// text view's letters and selection, the change to make, or nil for none. False when nothing
     /// was changed. Set by `MemoMenuHost`, which can reach the text view.
     @ObservationIgnored var editLines: ((_ make: (String, NSRange) -> MemoLists.Change?) -> Bool)?
+    /// The formula being written, in the text view's letters (UTF-16), and starting an empty one
+    /// at a place; set by `MemoMenuHost`, which draws them.
+    @ObservationIgnored var openFormula: (() -> NSRange?)?
+    @ObservationIgnored var startFormula: ((Int) -> Void)?
     @ObservationIgnored private var pending: Task<Void, Never>?
     @ObservationIgnored let book: MemoBook
     /// The highlighter ⌘⇧H puts on. Remembered across launches.
@@ -151,11 +155,6 @@ final class MemoDraft {
         change { $0[key] = on ? true : nil }
     }
 
-    func toggleScript(_ script: MemoScript) {
-        let on = shared(MemoAttributes.Script.self) != script
-        change { $0[MemoAttributes.Script.self] = on ? script : nil }
-    }
-
     func setInk(_ palette: Palette?) {
         change { $0[MemoAttributes.Ink.self] = palette }
     }
@@ -230,7 +229,7 @@ final class MemoDraft {
     }
 
     /// The editor's onChange picks up the new text and schedules the save.
-    private func change(_ body: (inout AttributeContainer) -> Void) {
+    func change(_ body: (inout AttributeContainer) -> Void) {
         text.transformAttributes(in: &selection, body: body)
     }
 
@@ -612,7 +611,7 @@ struct MemoEditor: View {
     }
 }
 
-/// Bold, italic, underline, strikethrough, code block, formula and raised/lowered letters, then
+/// Bold, italic, underline, strikethrough, code block and formula, then
 /// text colour and highlighter from the palette. Shortcuts show on hover and live in the 서식 menu
 /// too, with 서식 지우기, which the bar has no room for.
 struct MemoFormatBar: View {
@@ -628,9 +627,7 @@ struct MemoFormatBar: View {
                 style("S", "취소선", "⌘⇧X", isOn: draft.isOn(MemoAttributes.Strike.self), font: TextStyle.body.font, line: .strike) { draft.toggle(MemoAttributes.Strike.self) }
                 style("{ }", "코드 블록", "⌘⇧C", isOn: draft.isCode, font: TextStyle.cell.font.weight(.semibold), design: .monospaced) { draft.toggleCode() }
                 Rectangle().fill(.ink).frame(width: Metrics.line, height: 18).padding(.horizontal, Metrics.spaceXxs)
-                style("fx", "수식", "⌥⌘E", isOn: draft.isOn(MemoAttributes.Math.self), font: TextStyle.item.font.italic(), design: .serif) { draft.toggle(MemoAttributes.Math.self) }
-                style("x²", "위첨자", "⌃⌘=", isOn: draft.shared(MemoAttributes.Script.self) == .raised, font: TextStyle.small.font) { draft.toggleScript(.raised) }
-                style("x₂", "아래첨자", "⌃⌘-", isOn: draft.shared(MemoAttributes.Script.self) == .lowered, font: TextStyle.small.font) { draft.toggleScript(.lowered) }
+                style("fx", "수식", "⌥⌘E", isOn: draft.isOn(MemoAttributes.Math.self), font: TextStyle.item.font.italic(), design: .serif) { draft.toggleFormula() }
                 Spacer(minLength: Metrics.spaceM)
                 Button("시각") { draft.insertTime() }
                     .buttonStyle(DrawnButtonStyle(.text))
@@ -753,12 +750,8 @@ struct MemoCommands: Commands {
                 Button("코드 블록") { draft?.toggleCode() }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                 Divider()
-                Button("수식") { draft?.toggle(MemoAttributes.Math.self) }
+                Button("수식") { draft?.toggleFormula() }
                     .keyboardShortcut("e", modifiers: [.command, .option])
-                Button("위첨자") { draft?.toggleScript(.raised) }
-                    .keyboardShortcut("=", modifiers: [.command, .control])
-                Button("아래첨자") { draft?.toggleScript(.lowered) }
-                    .keyboardShortcut("-", modifiers: [.command, .control])
                 Divider()
                 Button("형광펜 (\((draft?.lastHighlight ?? .yellow).name))") { draft?.repeatHighlight() }
                     .keyboardShortcut("h", modifiers: [.command, .shift])

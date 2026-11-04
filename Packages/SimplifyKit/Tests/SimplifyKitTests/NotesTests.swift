@@ -38,6 +38,30 @@ struct NotesTests {
         #expect(html == "<div><h1>2026년 11월</h1></div>\n<div>장보기</div>\n<div><br></div>\n<div>우유</div>")
     }
 
+    @Test func formulasAreTheirLaTeXInDollars() throws {
+        var text = styled("근의 공식 ")
+        text += styled("x = \\frac{-b}{2a}") { $0[MemoAttributes.Math.self] = true }
+        text += styled(" 로 풀기\n$$ \\sum_{i=1}^{n} p_i < 1\n")
+        text += styled("$$ 코드는 그대로") { $0[MemoAttributes.Code.self] = true }
+        #expect(try lines(text) == [
+            "<div>근의 공식 $x = \\frac{-b}{2a}$ 로 풀기</div>",
+            "<div>$$\\sum_{i=1}^{n} p_i &lt; 1$$</div>",
+            "<div><tt>$$ 코드는 그대로</tt></div>",
+        ])
+    }
+
+    @Test func aColouredFormulaIsOneFormula() throws {
+        var text = styled("a + ") { $0[MemoAttributes.Math.self] = true }
+        text += styled("b") { $0[MemoAttributes.Math.self] = true; $0[MemoAttributes.Ink.self] = .red }
+        #expect(try lines(text) == ["<div>$a + <span style=\"color: #b3332a\">b</span>$</div>"])
+    }
+
+    @Test func oldFormulasMirrorTheirScriptsAsLaTeX() throws {
+        var text = styled("w = 0.9w") { $0[MemoAttributes.Math.self] = true }
+        text += styled("0") { $0[MemoAttributes.Math.self] = true; $0[MemoAttributes.Script.self] = .lowered }
+        #expect(try lines(text) == ["<div>$w = 0.9w_{0}$</div>"])
+    }
+
     @Test func blankMemosHaveNoBody() {
         #expect(NotesHTML.body(name: "이름", text: AttributedString()) == nil)
         #expect(NotesHTML.body(name: "이름", text: styled(" \n\n  ")) == nil)
@@ -53,7 +77,7 @@ struct NotesTests {
         #expect(try lines(styled("2") { $0[MemoAttributes.Script.self] = .raised }) == ["<div><sup>2</sup></div>"])
         #expect(try lines(styled("0") { $0[MemoAttributes.Script.self] = .lowered }) == ["<div><sub>0</sub></div>"])
         #expect(try lines(styled("let x = 1") { $0[MemoAttributes.Code.self] = true }) == ["<div><tt>let x = 1</tt></div>"])
-        #expect(try lines(styled("E=mc") { $0[MemoAttributes.Math.self] = true }) == ["<div><i>E=mc</i></div>"])
+        #expect(try lines(styled("E=mc^2") { $0[MemoAttributes.Math.self] = true }) == ["<div>$E=mc^2$</div>"])
         #expect(try lines(styled("빨강") { $0[MemoAttributes.Ink.self] = .red }) == ["<div><span style=\"color: #b3332a\">빨강</span></div>"])
         #expect(try lines(styled("노랑") { $0[MemoAttributes.Highlight.self] = .yellow })
             == ["<div><span style=\"background-color: #faf0c4\">노랑</span></div>"])

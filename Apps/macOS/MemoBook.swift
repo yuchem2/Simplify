@@ -80,7 +80,8 @@ final class MemoBook {
     /// Nil when a stored memo cannot be read, so the editor does not save over it.
     func text(for period: Period) -> AttributedString? {
         guard let note = try? Memos.note(for: period, in: context) else { return AttributedString() }
-        return MemoText.decodeIfReadable(note.body)
+        // Formulas from before LaTeX read with their raised and lowered letters as `^{}` and `_{}`.
+        return MemoText.decodeIfReadable(note.body).map(MemoMath.upgradingScripts)
     }
 
     /// Like `text(for:)`, but also nil when the store cannot be read, for the 메모 app's copy,

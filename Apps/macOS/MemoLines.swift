@@ -34,9 +34,10 @@ extension MemoDraft {
 /// (the time in figures and soft ink with a hanging indent; a rule's letters hidden; a list item's
 /// marker by level with the words hanging after it; a quote's `>` hidden; a title's or heading's
 /// line height), and the layout manager gives a rule paragraph a fragment that draws an ink line
-/// across the memo instead, and a quote one that draws an ink line down its side. The storage (and
-/// so the memo's text) is never touched. A rule shows its letters again while the caret is on it,
-/// so it can be edited like any line.
+/// across the memo instead, and a quote one that draws an ink line down its side. A formula's
+/// letters give way to its drawing (`FormulaAttachment`). The storage (and so the memo's text) is
+/// never touched. A rule shows its letters again while the caret is on it, so it can be edited
+/// like any line, and a formula its LaTeX while the caret is in it.
 @MainActor
 final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayoutManagerDelegate {
     /// The memo's text view, once attached.
@@ -45,6 +46,21 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     private var openRule: NSRange?
     /// Whether some timeline line in the memo has a range (`08:30-09:15`), which widens the time column.
     private var hasRange = false
+    /// The formula being written: its letters (a formula line's from the `$$ `), shown as LaTeX.
+    private(set) var openFormula: NSRange?
+    /// A formula left with Esc or → at its end: drawn again though the caret is beside it.
+    private var leftFormula: Int?
+    /// Where ⌥⌘E put an empty formula: what is typed there is its LaTeX.
+    private var emptyFormula: Int?
+    /// The last click in the text view, in its coordinates: a click on a drawn formula opens it.
+    var lastClick: (point: CGPoint, at: TimeInterval)?
+    /// The written formula drawn small under it.
+    private var peek: FormulaPeekView?
+    /// Hover tips over formulas that cannot be read, and what they say (the text view keeps only the tags).
+    private var tips: [NSView.ToolTipTag] = []
+    private var tipOwners: [FormulaTip] = []
+    /// What the tips were placed for: the letters, the formula being written and the width.
+    private var tipsPlacedFor: (letters: Int, open: NSRange?, width: CGFloat)?
 
     /// The text view it draws for is still in a window.
     var isAttached: Bool { textView?.window != nil }
@@ -66,17 +82,206 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         let string = text.string
         let widened = Self.hasRange(in: string)
         var rule: NSRange?
+        var formula: NSRange?
         if textView.window?.firstResponder === textView, let caret = textView.selectedRanges.first?.rangeValue {
             let paragraph = (string as NSString).paragraphRange(for: NSRange(location: caret.location, length: 0))
             if MemoTimeline.isRule(Self.line(string, paragraph)) { rule = paragraph }
+            let formulas = Self.formulas(in: text, paragraph: paragraph)
+            // Left until the caret moves away from the formula.
+            if let left = leftFormula, !formulas.contains(where: { $0.letters.location == left && NSMaxRange($0.letters) == caret.location }) {
+                leftFormula = nil
+            }
+            formula = formulaToOpen(formulas, selection: caret)
+            // An open formula emptied by Delete stays open, for its LaTeX to be typed again.
+            if formula == nil, caret.length == 0, let open = openFormula, open.location == caret.location, !Self.isFormulaLine(open, in: string) {
+                emptyFormula = caret.location
+            }
+            if let empty = emptyFormula, caret.location != empty || caret.length > 0 || formula.map({ $0.location != empty }) == true { emptyFormula = nil }
+        } else {
+            emptyFormula = nil
+            leftFormula = nil
         }
-        guard force || widened != hasRange || rule != openRule else { return }
-        let changed: [NSRange] = force || widened != hasRange ? [NSRange(location: 0, length: text.length)] : [openRule, rule].compactMap { $0 }
+        defer {
+            showPeek()
+            placeTips()
+        }
+        guard force || widened != hasRange || rule != openRule || formula != openFormula else { return }
+        var changed: [NSRange] = force || widened != hasRange ? [NSRange(location: 0, length: text.length)] : [openRule, rule].compactMap { $0 }
+        if !force, widened == hasRange, formula != openFormula {
+            // The paragraphs the formula was or is in, as they are now.
+            changed += [openFormula, formula].compactMap { range in
+                range.map { (string as NSString).paragraphRange(for: NSRange(location: min($0.location, text.length), length: 0)) }
+            }
+        }
         hasRange = widened
         openRule = rule
+        openFormula = formula
         for range in changed where NSMaxRange(range) <= text.length {
             storage.processEditing(for: text, edited: .editedAttributes, range: range, changeInLength: 0, invalidatedRange: range)
         }
+        // Laid out now, so the paragraphs made again show even with no edit or scroll to follow.
+        if !changed.isEmpty { textView.textLayoutManager?.textViewportLayoutController.layoutViewport() }
+    }
+
+    // MARK: Formulas
+
+    /// The formula the selection is in, to be shown as letters. A caret beside one opens it only
+    /// while it is being written, or after a click on it; any caret on a formula line does.
+    private func formulaToOpen(_ formulas: [StoredFormula], selection: NSRange) -> NSRange? {
+        for formula in formulas {
+            let letters = formula.letters
+            if selection.length > 0 {
+                if selection.location >= letters.location, NSMaxRange(selection) <= NSMaxRange(letters) { return letters }
+                continue
+            }
+            let caret = selection.location
+            guard caret >= letters.location, caret <= NSMaxRange(letters) else { continue }
+            if wasClicked(letters) { return letters }
+            guard leftFormula != letters.location else { continue }
+            if formula.isDisplay || (caret > letters.location && caret < NSMaxRange(letters)) { return letters }
+            // ⌥⌘E right after a formula opens that one: what is typed would join it anyway.
+            if openFormula?.location == letters.location || emptyFormula == letters.location || emptyFormula == NSMaxRange(letters) { return letters }
+        }
+        return nil
+    }
+
+    /// The last click, a moment ago, landed on the formula's drawing.
+    private func wasClicked(_ letters: NSRange) -> Bool {
+        guard let click = lastClick, ProcessInfo.processInfo.systemUptime - click.at < 0.6 else { return false }
+        return frames(of: letters).contains { $0.insetBy(dx: -2, dy: 0).contains(click.point) }
+    }
+
+    /// Esc, or → at the formula's end: the formula is drawn again and the caret, put by `moving`,
+    /// stays after it. False when no formula is being written.
+    func leaveFormula(moving: (Int) -> Void) -> Bool {
+        if emptyFormula != nil {
+            emptyFormula = nil
+            showPeek()
+            return true
+        }
+        guard let open = openFormula else { return false }
+        // A click just before is not one to open it again.
+        lastClick = nil
+        moving(NSMaxRange(open))
+        leftFormula = open.location
+        update()
+        return true
+    }
+
+    /// ⌥⌘E with only a caret: what is typed at it is a new formula, shown as it is written.
+    func startEmptyFormula(at location: Int) {
+        emptyFormula = location
+        leftFormula = nil
+        update()
+    }
+
+    /// The caret is at the end of a formula that is drawn, not written: letters typed there must
+    /// not join it.
+    var caretIsAfterDrawnFormula: Bool {
+        guard let textView, let text = textView.textStorage, let caret = textView.selectedRanges.first?.rangeValue, caret.length == 0,
+              textView.window?.firstResponder === textView else { return false }
+        let paragraph = (text.string as NSString).paragraphRange(for: caret)
+        return Self.formulas(in: text, paragraph: paragraph).contains { !$0.isDisplay && NSMaxRange($0.letters) == caret.location && $0.letters != openFormula }
+    }
+
+    /// Where a range of letters sits in the text view, line by line.
+    private func frames(of range: NSRange) -> [CGRect] {
+        guard let textView, let layout = textView.textLayoutManager, let storage = textView.textContentStorage,
+              let start = storage.location(storage.documentRange.location, offsetBy: range.location),
+              let end = storage.location(start, offsetBy: range.length),
+              let textRange = NSTextRange(location: start, end: end) else { return [] }
+        var frames: [CGRect] = []
+        let origin = textView.textContainerOrigin
+        layout.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, frame, _, _ in
+            frames.append(frame.offsetBy(dx: origin.x, dy: origin.y))
+            return true
+        }
+        return frames
+    }
+
+    /// The small drawing under the formula being written, or the hint under an empty one.
+    private func showPeek() {
+        guard let textView, let text = textView.textStorage else { return }
+        var shown: (latex: String, isDisplay: Bool, ink: Palette?, under: [CGRect])?
+        if let open = openFormula, NSMaxRange(open) <= text.length,
+           let formula = Self.formulas(in: text, paragraph: (text.string as NSString).paragraphRange(for: open)).first(where: { $0.letters == open }) {
+            let ink = formula.latex.length > 0 ? Self.palette(text.attribute(Self.inkKey, at: formula.latex.location, effectiveRange: nil)) : nil
+            shown = (text.attributedSubstring(from: formula.latex).string, formula.isDisplay, ink, frames(of: formula.letters))
+        } else if let empty = emptyFormula, empty <= text.length {
+            shown = ("", false, nil, frames(of: NSRange(location: empty, length: 0)))
+        }
+        guard let shown, let first = shown.under.first, let last = shown.under.last else {
+            peek?.removeFromSuperview()
+            peek = nil
+            return
+        }
+        let view = peek ?? FormulaPeekView()
+        view.show(latex: shown.latex, isDisplay: shown.isDisplay, ink: shown.ink)
+        let size = view.fittingSize
+        let x = min(max(0, first.minX - Self.markSpace), max(0, textView.bounds.width - size.width - Metrics.spaceS))
+        view.frame = CGRect(x: x, y: last.maxY + Metrics.spaceXs, width: size.width, height: size.height)
+        if view.superview !== textView { textView.addSubview(view) }
+        peek = view
+    }
+
+    /// "수식을 읽을 수 없어요" and why, on hover over each unreadable formula. The text view takes
+    /// tips only from its own letters, not from the paragraphs drawn for it, so they are its tip areas.
+    private func placeTips() {
+        guard let textView, let text = textView.textStorage else { return }
+        // Not again for a caret move alone.
+        let placedFor = (text.string.hashValue, openFormula, textView.bounds.width)
+        if let last = tipsPlacedFor, last.letters == placedFor.0, last.open == placedFor.1, last.width == placedFor.2 { return }
+        tipsPlacedFor = placedFor
+        tips.forEach(textView.removeToolTip)
+        tips = []
+        tipOwners = []
+        let string = text.string as NSString
+        string.enumerateSubstrings(in: NSRange(location: 0, length: string.length), options: [.byParagraphs, .substringNotRequired]) { _, _, paragraph, _ in
+            for formula in Self.formulas(in: text, paragraph: paragraph) where formula.letters != self.openFormula && formula.latex.length > 0 {
+                guard let reason = FormulaPicture.unreadableReason(string.substring(with: formula.latex)) else { continue }
+                let owner = FormulaTip(text: "수식을 읽을 수 없어요: \(reason)")
+                self.tipOwners.append(owner)
+                for frame in self.frames(of: formula.latex) { self.tips.append(textView.addToolTip(frame, owner: owner, userData: nil)) }
+            }
+        }
+    }
+
+    /// A formula in the text view's letters.
+    struct StoredFormula: Equatable {
+        /// What shows as letters while it is written: the LaTeX, or a formula line without its line break.
+        var letters: NSRange
+        var latex: NSRange
+        var isDisplay: Bool
+    }
+
+    /// The formulas in one paragraph, as `MemoMath` finds them in the memo.
+    static func formulas(in text: NSAttributedString, paragraph: NSRange) -> [StoredFormula] {
+        let string = text.string as NSString
+        guard paragraph.length > 0, NSMaxRange(paragraph) <= string.length else { return [] }
+        var line = paragraph
+        while line.length > 0, string.substring(with: NSRange(location: NSMaxRange(line) - 1, length: 1)).rangeOfCharacter(from: .newlines) != nil {
+            line.length -= 1
+        }
+        guard line.length > 0, !isOn(text.attribute(codeKey, at: line.location, effectiveRange: nil)) else { return [] }
+        let mark = (MemoMath.displayMark as NSString).length
+        if MemoMath.displayLaTeX(string.substring(with: line)) != nil {
+            return [StoredFormula(letters: line, latex: NSRange(location: line.location + mark, length: line.length - mark), isDisplay: true)]
+        }
+        var found: [StoredFormula] = []
+        text.enumerateAttribute(mathKey, in: line) { value, range, _ in
+            guard isOn(value) else { return }
+            if let last = found.last, NSMaxRange(last.latex) == range.location {
+                found[found.count - 1].latex.length += range.length
+                found[found.count - 1].letters = found[found.count - 1].latex
+            } else {
+                found.append(StoredFormula(letters: range, latex: range, isDisplay: false))
+            }
+        }
+        return found
+    }
+
+    private static func isFormulaLine(_ range: NSRange, in string: String) -> Bool {
+        NSMaxRange(range) <= (string as NSString).length && MemoMath.displayLaTeX((string as NSString).substring(with: range)) != nil
     }
 
     // MARK: NSTextContentStorageDelegate
@@ -105,29 +310,32 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             shown.addAttribute(.memoRule, value: true, range: NSRange(location: 0, length: shown.length))
             return NSTextParagraph(attributedString: shown)
         }
-        if let length = MemoTimeline.stampLength(line) {
-            let shown = NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
-            let stamp = NSRange(location: 0, length: (String(line.prefix(length)) as NSString).length)
-            let size = (text.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)?.pointSize ?? MemoStyle.size
-            let figures = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .regular)
-            shown.addAttributes([.font: figures, .foregroundColor: NSColor(Color.inkSoft)], range: stamp)
-            let width = Self.width(of: String(line.prefix(length)), font: figures)
-            let column = Self.width(of: Self.hasRange(in: text.string) ? "00.00 00:00-00:00 " : "00.00 00:00 ", font: figures)
-            // The space after the time stretches to the column, so every line's words start together.
-            if stamp.length < (line as NSString).length {
-                let space = Self.width(of: " ", font: figures)
-                shown.addAttribute(.kern, value: max(0, column - width - space), range: NSRange(location: stamp.length, length: 1))
-            }
-            let style = ((shown.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
-            style.headIndent = column
-            shown.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: shown.length))
-            return NSTextParagraph(attributedString: shown)
+        let shown = MemoTimeline.stampLength(line).map { stampParagraph(text, range, line, $0) } ?? blockParagraph(text, range, line)
+        return dressFormulas(shown, text, range).map(NSTextParagraph.init(attributedString:))
+    }
+
+    /// A timeline line: the time in figures and soft ink, the words from a column after it.
+    private func stampParagraph(_ text: NSTextStorage, _ range: NSRange, _ line: String, _ length: Int) -> NSMutableAttributedString {
+        let shown = NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
+        let stamp = NSRange(location: 0, length: (String(line.prefix(length)) as NSString).length)
+        let size = (text.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)?.pointSize ?? MemoStyle.size
+        let figures = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .regular)
+        shown.addAttributes([.font: figures, .foregroundColor: NSColor(Color.inkSoft)], range: stamp)
+        let width = Self.width(of: String(line.prefix(length)), font: figures)
+        let column = Self.width(of: Self.hasRange(in: text.string) ? "00.00 00:00-00:00 " : "00.00 00:00 ", font: figures)
+        // The space after the time stretches to the column, so every line's words start together.
+        if stamp.length < (line as NSString).length {
+            let space = Self.width(of: " ", font: figures)
+            shown.addAttribute(.kern, value: max(0, column - width - space), range: NSRange(location: stamp.length, length: 1))
         }
-        return blockParagraph(text, range, line)
+        let style = ((shown.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        style.headIndent = column
+        shown.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: shown.length))
+        return shown
     }
 
     /// A list item, a quote, or a title, heading or subheading line as drawn; nil for any other.
-    private func blockParagraph(_ text: NSTextStorage, _ range: NSRange, _ line: String) -> NSTextParagraph? {
+    private func blockParagraph(_ text: NSTextStorage, _ range: NSRange, _ line: String) -> NSMutableAttributedString? {
         let marker = MemoLists.marker(line)
         let paragraph = Self.paragraph(text.attribute(Self.paragraphKey, at: range.location, effectiveRange: nil))
         guard marker != nil || paragraph != nil else { return nil }
@@ -188,7 +396,102 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             style.headIndent = quoteIndent + CGFloat(marker.level) * MemoLists.levelIndent + max(column, width)
         }
         shown.addAttribute(.paragraphStyle, value: style, range: whole)
-        return NSTextParagraph(attributedString: shown)
+        return shown
+    }
+
+    /// The paragraph's formulas: drawn in place of their letters, or, for the one being written
+    /// and any that cannot be read, their LaTeX in a fixed-width face. Nil when it has none and
+    /// nothing else changed.
+    private func dressFormulas(_ shown: NSMutableAttributedString?, _ text: NSTextStorage, _ range: NSRange) -> NSMutableAttributedString? {
+        let formulas = Self.formulas(in: text, paragraph: range)
+        guard !formulas.isEmpty else { return shown }
+        let shown = shown ?? NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
+        // Every change below keeps the letters' count, so the caret's places stay the text's.
+        guard shown.length == range.length else { return shown }
+        let style = ((shown.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        let lineHeight = style.maximumLineHeight > 0 ? style.maximumLineHeight : MemoStyle.lineHeight
+        let code = NSFont.monospacedSystemFont(ofSize: Self.latexSize, weight: .regular)
+        var grows = false
+        var marked = false
+        for formula in formulas {
+            let letters = NSRange(location: formula.letters.location - range.location, length: formula.letters.length)
+            let latexRange = NSRange(location: formula.latex.location - range.location, length: formula.latex.length)
+            let mark = NSRange(location: letters.location, length: latexRange.location - letters.location)
+            let latex = (text.string as NSString).substring(with: formula.latex)
+            let isOpen = openFormula?.location == formula.letters.location || emptyFormula == formula.latex.location
+            if mark.length > 0 { shown.addAttributes([.font: code, .foregroundColor: NSColor(Color.inkFaint)], range: mark) }
+            if isOpen || latex.trimmingCharacters(in: .whitespaces).isEmpty {
+                // The LaTeX on a light ground, between `$` marks that are only drawn.
+                guard latexRange.length > 0 else { continue }
+                shown.addAttribute(.font, value: code, range: latexRange)
+                shown.addAttribute(.memoFormula, value: formula.isDisplay ? FormulaMark.line : FormulaMark.open, range: latexRange)
+                marked = true
+                if !formula.isDisplay {
+                    let last = NSMaxRange(latexRange) - 1
+                    shown.addAttribute(.kern, value: ((shown.attribute(.kern, at: last, effectiveRange: nil) as? CGFloat) ?? 0) + Self.markRoom,
+                                       range: NSRange(location: last, length: 1))
+                    if latexRange.location > 0 {
+                        let before = latexRange.location - 1
+                        shown.addAttribute(.kern, value: ((shown.attribute(.kern, at: before, effectiveRange: nil) as? CGFloat) ?? 0) + Self.markRoom,
+                                           range: NSRange(location: before, length: 1))
+                    } else {
+                        style.firstLineHeadIndent += Self.markRoom
+                    }
+                }
+                continue
+            }
+            let around = (text.attribute(.font, at: formula.latex.location, effectiveRange: nil) as? NSFont)?.pointSize ?? MemoStyle.size
+            var size = formula.isDisplay ? Self.displaySize : max(Self.inlineSize, around)
+            switch FormulaPicture.shape(latex, size: size, display: formula.isDisplay) {
+            case .failure:
+                // Why, on hover: `placeTips`.
+                shown.addAttributes([.font: code, .memoFormula: FormulaMark.unreadable], range: latexRange)
+                marked = true
+            case .success(var shape):
+                if !formula.isDisplay {
+                    // Made smaller to keep within the line, down to three quarters; past that the line grows.
+                    let room = Self.room(lineHeight: lineHeight, font: NSFont.systemFont(ofSize: MemoStyle.size))
+                    let scale = max(Self.leastScale, min(1, room.above / max(shape.ascent, 1), room.below / max(shape.descent, 0.01)))
+                    let smallerSize = (size * scale * 2).rounded(.down) / 2
+                    if smallerSize < size, case .success(let smaller) = FormulaPicture.shape(latex, size: smallerSize, display: false) {
+                        size = smallerSize
+                        shape = smaller
+                    }
+                    if shape.ascent > room.above + 0.5 || shape.descent > room.below + 0.5 { grows = true }
+                } else {
+                    grows = true
+                }
+                let ink = Self.palette(text.attribute(Self.inkKey, at: formula.latex.location, effectiveRange: nil))
+                let attachment = FormulaAttachment(latex: latex, size: size, isDisplay: formula.isDisplay, shape: shape, ink: ink)
+                // The letters (and a formula line's `$$ `) take no room; the first stands for the drawing.
+                shown.addAttributes([.font: Self.hiddenFont, .foregroundColor: NSColor.clear], range: letters)
+                shown.removeAttribute(.backgroundColor, range: mark)
+                let first = (shown.string as NSString).rangeOfComposedCharacterSequence(at: latexRange.location)
+                var kept = shown.attributes(at: first.location, effectiveRange: nil)
+                kept[.font] = nil
+                kept[.foregroundColor] = nil
+                kept[.attachment] = attachment
+                shown.replaceCharacters(in: first, with: NSAttributedString(string: "\u{FFFC}" + String(repeating: "\u{200B}", count: first.length - 1), attributes: kept))
+                if NSMaxRange(first) < NSMaxRange(latexRange) {
+                    shown.removeAttribute(.backgroundColor, range: NSRange(location: NSMaxRange(first), length: NSMaxRange(latexRange) - NSMaxRange(first)))
+                }
+                if formula.isDisplay {
+                    // The line already reaches a little past the drawing; with this, about the
+                    // mockup's 6 pt above and below.
+                    style.alignment = .center
+                    style.paragraphSpacingBefore = max(style.paragraphSpacingBefore, Metrics.spaceXxs)
+                    style.paragraphSpacing = max(style.paragraphSpacing, Metrics.spaceXxs)
+                }
+            }
+        }
+        if grows {
+            // Only the lines that need it grow; the rest keep the memo's height.
+            style.minimumLineHeight = lineHeight
+            style.maximumLineHeight = 0
+        }
+        shown.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: shown.length))
+        if marked { shown.addAttribute(.memoFormulas, value: true, range: NSRange(location: 0, length: shown.length)) }
+        return shown
     }
 
     // MARK: NSTextLayoutManagerDelegate
@@ -202,6 +505,9 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             }
             if paragraph.attributedString.attribute(.memoQuote, at: 0, effectiveRange: nil) != nil {
                 return QuoteFragment(textElement: textElement, range: range)
+            }
+            if paragraph.attributedString.attribute(.memoFormulas, at: 0, effectiveRange: nil) != nil {
+                return FormulaFragment(textElement: textElement, range: range)
             }
         }
         return NSTextLayoutFragment(textElement: textElement, range: range)
@@ -240,6 +546,38 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
 
     private static let paragraphKey = NSAttributedString.Key(MemoAttributes.Paragraph.name)
     private static let inkKey = NSAttributedString.Key(MemoAttributes.Ink.name)
+    private static let mathKey = NSAttributedString.Key(MemoAttributes.Math.name)
+    private static let codeKey = NSAttributedString.Key(MemoAttributes.Code.name)
+
+    /// A formula's LaTeX while written or unreadable: the code block's face.
+    nonisolated static let latexSize: CGFloat = 13
+    /// A formula in the text, and a formula line: the old formula lettering's size, and larger.
+    private static let inlineSize: CGFloat = 16
+    private static let displaySize: CGFloat = 19
+    private static let leastScale: CGFloat = 0.75
+    /// Letters that take no room under a drawn formula.
+    private static let hiddenFont = NSFont.systemFont(ofSize: 0.01)
+    /// Room for a drawn `$` and its gaps on either side of a formula being written.
+    nonisolated static let markSpace: CGFloat = markWidth + 2 * markGap
+    /// The kern beside a formula being written: its `$` mark, and a gap outside its ground.
+    nonisolated static let markRoom: CGFloat = markSpace + markGap
+    nonisolated static let markGap: CGFloat = 3
+    nonisolated static let markWidth: CGFloat = ("$" as NSString).size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: latexSize, weight: .regular)]).width
+
+    /// How far a line of `font` at `lineHeight` reaches above and below its baseline.
+    private static func room(lineHeight: CGFloat, font: NSFont) -> (above: CGFloat, below: CGFloat) {
+        let letters = font.ascender - font.descender
+        let spare = max(0, lineHeight - letters) / 2
+        return (font.ascender + spare, -font.descender + spare)
+    }
+
+    private static func isOn(_ value: Any?) -> Bool { (value as? Bool) == true }
+
+    /// A palette name as the text view keeps it.
+    static func palette(_ value: Any?) -> Palette? {
+        if let palette = value as? Palette { return palette }
+        return (value as? String).flatMap(Palette.init(rawValue:))
+    }
 
     /// A paragraph style as the text view keeps it.
     private static func paragraph(_ value: Any?) -> MemoParagraph? {
@@ -253,11 +591,115 @@ extension NSAttributedString.Key {
     static let memoRule = NSAttributedString.Key("simplify.memo.rule")
     /// A quote paragraph, likewise.
     static let memoQuote = NSAttributedString.Key("simplify.memo.quote")
+    /// A formula's letters shown as LaTeX, and how (`FormulaMark`).
+    static let memoFormula = NSAttributedString.Key("simplify.memo.formula")
+    /// A paragraph with letters under `memoFormula`, on its every letter.
+    static let memoFormulas = NSAttributedString.Key("simplify.memo.formulas")
+}
+
+/// How a formula's LaTeX shows when it is not drawn.
+enum FormulaMark {
+    /// Being written in the text: on a light ground between drawn `$` marks.
+    static let open = "open"
+    /// Being written on a formula line, after its typed `$$ `.
+    static let line = "line"
+    /// Cannot be read: a faint wavy line under it.
+    static let unreadable = "unreadable"
+}
+
+/// A paragraph with a formula's LaTeX showing: the ground and `$` marks of one being written,
+/// and the wavy line under one that cannot be read.
+class FormulaFragment: NSTextLayoutFragment {
+    override func draw(at point: CGPoint, in context: CGContext) {
+        let marks = formulaMarks()
+        guard !marks.isEmpty else { return super.draw(at: point, in: context) }
+        let space = MemoLineStyler.markSpace, gap = MemoLineStyler.markGap
+        for mark in marks where mark.kind != FormulaMark.unreadable {
+            let left = mark.x0 - (mark.isStart && mark.kind == FormulaMark.open ? space : gap)
+            let right = mark.x1 + (mark.isEnd && mark.kind == FormulaMark.open ? space : gap)
+            let box = CGRect(x: point.x + left, y: point.y + mark.line.minY + 2, width: right - left, height: mark.line.height - 4)
+            context.setFillColor(NSColor(Color.raised).cgColor)
+            context.fill(box)
+            context.setStrokeColor(NSColor(Color.shade).cgColor)
+            context.setLineWidth(Metrics.line)
+            context.stroke(box.insetBy(dx: Metrics.line / 2, dy: Metrics.line / 2))
+        }
+        super.draw(at: point, in: context)
+        let font = NSFont.monospacedSystemFont(ofSize: MemoLineStyler.latexSize, weight: .regular)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        for mark in marks {
+            switch mark.kind {
+            case FormulaMark.unreadable:
+                // A faint wave under the letters; red is kept for holidays and what cannot be undone.
+                let path = NSBezierPath()
+                let y = point.y + mark.baseline + 3
+                var x = point.x + mark.x0
+                path.move(to: CGPoint(x: x, y: y))
+                var up = true
+                while x < point.x + mark.x1 {
+                    x = min(x + 2, point.x + mark.x1)
+                    path.line(to: CGPoint(x: x, y: up ? y - 1.5 : y))
+                    up.toggle()
+                }
+                path.lineWidth = Metrics.line
+                NSColor(Color.inkFaint).setStroke()
+                path.stroke()
+            case FormulaMark.open:
+                let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(Color.inkFaint)]
+                let top = point.y + mark.baseline - font.ascender
+                let width = MemoLineStyler.markWidth
+                if mark.isStart { ("$" as NSString).draw(at: CGPoint(x: point.x + mark.x0 - gap - width, y: top), withAttributes: attributes) }
+                // x1 is the letters' right edge, and the `$` stands after it.
+                if mark.isEnd { ("$" as NSString).draw(at: CGPoint(x: point.x + mark.x1 + gap, y: top), withAttributes: attributes) }
+            default:
+                break
+            }
+        }
+    }
+
+    private struct Mark {
+        var kind: String
+        /// Its line's typographic bounds in the fragment, its baseline, and its letters' left and right edges.
+        var line: CGRect
+        var baseline: CGFloat
+        var x0: CGFloat
+        var x1: CGFloat
+        var isStart: Bool
+        var isEnd: Bool
+    }
+
+    /// Each formula's LaTeX, line by line.
+    private func formulaMarks() -> [Mark] {
+        guard let paragraph = textElement as? NSTextParagraph else { return [] }
+        let string = paragraph.attributedString
+        var marks: [Mark] = []
+        string.enumerateAttribute(.memoFormula, in: NSRange(location: 0, length: string.length)) { value, range, _ in
+            guard let kind = value as? String else { return }
+            for line in textLineFragments {
+                let part = NSIntersectionRange(range, line.characterRange)
+                guard part.length > 0 else { continue }
+                let bounds = line.typographicBounds
+                let isStart = part.location == range.location, isEnd = NSMaxRange(part) == NSMaxRange(range)
+                // At a line's end the measure stops at the letters.
+                let atLineEnd = NSMaxRange(part) >= string.length || (string.string as NSString).character(at: NSMaxRange(part)) == 0x0A
+                // A caret's place sits halfway through a kern: the letters start half the room for
+                // the `$` after their measured start, and end half of it before their measured end.
+                let half = kind == FormulaMark.open ? MemoLineStyler.markRoom / 2 : 0
+                marks.append(Mark(kind: kind, line: bounds, baseline: bounds.minY + line.glyphOrigin.y,
+                                  x0: bounds.minX + line.locationForCharacter(at: part.location).x + (isStart && part.location > 0 ? half : 0),
+                                  x1: bounds.minX + line.locationForCharacter(at: NSMaxRange(part)).x - (isEnd && !atLineEnd ? half : 0),
+                                  isStart: isStart, isEnd: isEnd))
+            }
+        }
+        return marks
+    }
 }
 
 /// A quote paragraph: its words, and a spine-weight ink line down its left side. Quote lines one
 /// under another make one line.
-final class QuoteFragment: NSTextLayoutFragment {
+final class QuoteFragment: FormulaFragment {
     override func draw(at point: CGPoint, in context: CGContext) {
         super.draw(at: point, in: context)
         guard let first = textLineFragments.first, let last = textLineFragments.last else { return }

@@ -9,6 +9,10 @@ options:
 packages:
   SimplifyKit:
     path: Packages/SimplifyKit
+  # Draws a memo's formulas from their LaTeX (MIT, CoreText); the app's only outside package.
+  SwiftMath:
+    url: https://github.com/mgriebling/SwiftMath
+    exactVersion: 1.7.3
 
 settings:
   base:
@@ -33,6 +37,7 @@ targets:
       Release: Config/Base.xcconfig
     dependencies:
       - package: SimplifyKit
+      - package: SwiftMath
       - target: SimplifyWidgets
     info:
       path: Apps/macOS/Info.plist

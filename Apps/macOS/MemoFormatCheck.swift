@@ -44,7 +44,7 @@ enum MemoFormatCheck {
             NSApp.activate()
             window.makeKeyAndOrderFront(nil)
             try? await Task.sleep(for: .seconds(2))
-            memos.draft.text = sample()
+            memos.draft.text = sample() + AttributedString("\n") + formulaSample()
             if let editor = window.contentView.flatMap(textView) { window.makeFirstResponder(editor) }
             kept.append(window)
         }
@@ -308,6 +308,8 @@ enum MemoFormatCheck {
         let ours = seen.filter { entry in entry.value.contains { $0.hasPrefix("서식") } }.flatMap(\.value).sorted()
         log("INFO  서식 menu shortcuts: \(ours.joined(separator: ", "))")
 
+        await checkFormulas(draft: draft, editor: editor, window: window, reset: reset, type: type, key: key)
+
         // Pictures of every format, light and dark.
         await reset(sample())
         editor.setSelectedRange(NSRange(location: 0, length: 0))
@@ -331,6 +333,140 @@ enum MemoFormatCheck {
         try? await Task.sleep(for: .seconds(0.6))
         capture(window, "narrow")
         window.close()
+    }
+
+    /// Formulas: drawn while the caret is elsewhere, their LaTeX while it is in one, Esc and → to
+    /// leave, ⌥⌘E with a caret, letters that cannot be read, and ⌘C.
+    private static func checkFormulas(draft: MemoDraft, editor: NSTextView, window: NSWindow, reset: (AttributedString, Int?) async -> Void,
+                                      type: (String) async -> Void, key: (UInt16, String, NSEvent.ModifierFlags) async -> Void) async {
+        var letters: String { String(draft.text.characters) }
+        func shown(_ location: Int) -> NSAttributedString? {
+            guard let storage = editor.textContentStorage, let layout = editor.textLayoutManager,
+                  let start = storage.location(storage.documentRange.location, offsetBy: location) else { return nil }
+            layout.ensureLayout(for: NSTextRange(location: start))
+            return (layout.textLayoutFragment(for: start)?.textElement as? NSTextParagraph)?.attributedString
+        }
+        func has(_ key: NSAttributedString.Key, at location: Int) -> Bool {
+            guard let string = shown(location) else { return false }
+            var found = false
+            string.enumerateAttribute(key, in: NSRange(location: 0, length: string.length)) { value, _, _ in if value != nil { found = true } }
+            return found
+        }
+        func mark(at location: Int) -> String? {
+            guard let string = shown(location) else { return nil }
+            var found: String?
+            string.enumerateAttribute(.memoFormula, in: NSRange(location: 0, length: string.length)) { value, _, _ in if let value = value as? String { found = value } }
+            return found
+        }
+        let quadratic = "x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}"
+        let text = formulaSample()
+        await reset(text, 0)
+        let firstLine = ("근의 공식: " as NSString).length
+        check(has(.attachment, at: firstLine), "a formula in the text is drawn")
+        check(has(.attachment, at: (letters as NSString).range(of: "$$ ").location), "a $$ line is drawn")
+        let bad = (letters as NSString).range(of: "\\frac{a}{").location
+        check(mark(at: bad) == FormulaMark.unreadable, "unreadable LaTeX keeps its letters", mark(at: bad) ?? "none")
+        let hangul = (letters as NSString).range(of: "\\text{합계 }").location
+        check(has(.attachment, at: hangul), "Korean in \\text is drawn")
+        window.makeFirstResponder(nil)
+        try? await Task.sleep(for: .seconds(0.6))
+        capture(window, "math")
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        try? await Task.sleep(for: .seconds(0.6))
+        capture(window, "math-dark")
+        NSApp.appearance = nil
+        window.makeFirstResponder(editor)
+
+        // Into the formula: its LaTeX between `$` marks, then Esc draws it again.
+        editor.setSelectedRange(NSRange(location: firstLine + 4, length: 0))
+        try? await Task.sleep(for: .seconds(0.5))
+        check(mark(at: firstLine) == FormulaMark.open, "the caret in a formula shows its LaTeX", mark(at: firstLine) ?? "none")
+        capture(window, "math-open")
+        await key(53, "\u{1b}", [])
+        check(mark(at: firstLine) == nil && has(.attachment, at: firstLine), "Esc draws it again", mark(at: firstLine) ?? "none")
+        check(editor.selectedRange().location == firstLine + (quadratic as NSString).length, "Esc leaves the caret after it", "\(editor.selectedRange())")
+        // → at its end leaves too, and what is typed after is not part of it.
+        editor.setSelectedRange(NSRange(location: firstLine + 2, length: 0))
+        try? await Task.sleep(for: .seconds(0.4))
+        editor.setSelectedRange(NSRange(location: firstLine + (quadratic as NSString).length, length: 0))
+        try? await Task.sleep(for: .seconds(0.4))
+        check(mark(at: firstLine) == FormulaMark.open, "the caret at its end while writing keeps it open", "\(mark(at: firstLine) ?? "none") \(editor.selectedRange())")
+        await key(124, "\u{f703}", [.numericPad, .function])
+        check(mark(at: firstLine) == nil, "→ at its end draws it again", mark(at: firstLine) ?? "none")
+        await type("!")
+        let typed = draft.text.runs.first { String(draft.text[$0.range].characters).contains("!") }
+        check(typed?[MemoAttributes.Math.self] == nil, "letters typed after a drawn formula are plain")
+
+        // ⌥⌘E with a caret: an empty formula, written as typed, Esc to leave.
+        await reset(AttributedString("값: "), nil)
+        draft.toggleFormula()
+        try? await Task.sleep(for: .seconds(0.4))
+        capture(window, "math-empty")
+        await type("x^2")
+        let made = draft.text.runs.filter { $0[MemoAttributes.Math.self] == true }.map { String(draft.text[$0.range].characters) }.joined()
+        check(made == "x^2", "⌥⌘E then typing writes a formula", made.debugDescription)
+        check(mark(at: 4) == FormulaMark.open, "it shows its LaTeX while written", mark(at: 4) ?? "none")
+        capture(window, "math-new")
+        await key(53, "\u{1b}", [])
+        await type(" 끝")
+        check(has(.attachment, at: 4), "Esc draws the new formula")
+        check(letters == "값: x^2 끝" && draft.text.runs.last?[MemoAttributes.Math.self] == nil, "and what follows is plain", letters.debugDescription)
+
+        // ⌥⌘E right after a drawn formula opens that one.
+        editor.setSelectedRange(NSRange(location: ("값: x^2" as NSString).length, length: 0))
+        try? await Task.sleep(for: .seconds(0.4))
+        check(mark(at: 4) == nil, "the caret after a drawn formula leaves it drawn", mark(at: 4) ?? "none")
+        draft.toggleFormula()
+        try? await Task.sleep(for: .seconds(0.4))
+        check(mark(at: 4) == FormulaMark.open, "⌥⌘E right after a formula opens it", mark(at: 4) ?? "none")
+        await key(53, "\u{1b}", [])
+
+        // Picked letters become a formula and back.
+        await reset(AttributedString("a^2 + b^2 = c^2"), nil)
+        editor.setSelectedRange(NSRange(location: 0, length: 15))
+        try? await Task.sleep(for: .seconds(0.3))
+        draft.toggleFormula()
+        check(draft.text.runs.allSatisfy { $0[MemoAttributes.Math.self] == true }, "⌥⌘E makes picked letters a formula")
+        draft.toggleFormula()
+        check(draft.text.runs.allSatisfy { $0[MemoAttributes.Math.self] == nil }, "⌥⌘E again makes them letters")
+
+        // ⌘C puts formulas on the clipboard in `$…$`. The clipboard's letters are put back after.
+        let kept = NSPasteboard.general.string(forType: .string)
+        await reset(text, 0)
+        editor.setSelectedRange(NSRange(location: 0, length: ("근의 공식: " + quadratic + " 로 풀기") .utf16.count))
+        try? await Task.sleep(for: .seconds(0.3))
+        await key(8, "c", [.command])
+        try? await Task.sleep(for: .seconds(0.3))
+        let copied = NSPasteboard.general.string(forType: .string) ?? ""
+        check(copied == "근의 공식: $\(quadratic)$ 로 풀기", "⌘C writes formulas as $…$", copied)
+        NSPasteboard.general.clearContents()
+        if let kept { NSPasteboard.general.setString(kept, forType: .string) }
+    }
+
+    /// Formulas in the text and on a line of their own, one that cannot be read, Korean in one,
+    /// one in a colour and highlighter, and a matrix taller than the line.
+    private static func formulaSample() -> AttributedString {
+        func styled(_ string: String, _ build: (inout AttributeContainer) -> Void = { _ in }) -> AttributedString {
+            var container = AttributeContainer()
+            build(&container)
+            return AttributedString(string, attributes: container)
+        }
+        let math: (inout AttributeContainer) -> Void = { $0[MemoAttributes.Math.self] = true }
+        var text = styled("근의 공식: ")
+        text += styled("x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}", math)
+        text += styled(" 로 풀기\n할인 후 금액 ")
+        text += styled("p' = p(1 - r)") { $0[MemoAttributes.Math.self] = true; $0[MemoAttributes.Ink.self] = .blue; $0[MemoAttributes.Highlight.self] = .yellow }
+        text += styled("\n$$ S = \\sum_{i=1}^{n} p_i\n면적 ")
+        text += styled("\\frac{a}{", math)
+        text += styled(" 다시 쓰기\n")
+        text += styled("\\text{합계 } \\sum p_i = 1000\\text{원}", math)
+        text += styled("\n행렬 ")
+        text += styled("A = \\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}", math)
+        text += styled(" 처럼 높은 것\n예전 ")
+        text += styled("w = 0.9w", math)
+        text += styled("0") { $0[MemoAttributes.Math.self] = true; $0[MemoAttributes.Script.self] = .lowered }
+        text += styled(" 끝")
+        return MemoMath.upgradingScripts(text)
     }
 
     /// The mockup's memo: a title, headings, numbers to three levels, bullets, a dash, a quote,

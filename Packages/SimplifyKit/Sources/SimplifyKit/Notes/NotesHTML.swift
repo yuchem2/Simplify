@@ -28,8 +28,10 @@ public enum NotesHTML {
     /// letters, since the name already takes the 메모 app's title (`<h1>`). List lines become
     /// `<ul>` (`class="Apple-dash-list"` for dashes) or `<ol>` items, a level in nested inside
     /// the list above; quote lines are a `<blockquote>`, with any list items in them inside it.
+    /// Formulas are their LaTeX in `$…$`, and a formula line's in `$$…$$`.
     public static func body(name: String, text: AttributedString) -> String? {
         guard !MemoText.isBlank(text) else { return nil }
+        let text = MemoMath.upgradingScripts(text)
         var lines: [Line] = MemoTodoLines.lines(in: text).map { range in
             let letters = String(text[range].characters)
             // A code block keeps its `- ` and `> ` as typed, as the editor shows them.
@@ -39,10 +41,19 @@ public enum NotesHTML {
             var html = ""
             // Whether the letters so far on this line end in a space (or there are none yet).
             var afterSpace = true
-            for run in text[start..<range.upperBound].runs {
-                let piece = String(text[run.range].characters)
-                html += segment(piece, run: run, afterSpace: afterSpace)
-                afterSpace = piece.last == " "
+            if !isCode, marker == nil, let latex = MemoMath.displayLaTeX(letters) {
+                html = "$$\(escape(latex))$$"
+            } else {
+                var inFormula = false
+                for run in text[start..<range.upperBound].runs {
+                    let piece = String(text[run.range].characters)
+                    let isFormula = !isCode && run[MemoAttributes.Math.self] == true
+                    if isFormula != inFormula { html += "$" }
+                    inFormula = isFormula
+                    html += segment(piece, run: run, afterSpace: afterSpace && !isFormula)
+                    afterSpace = piece.last == " "
+                }
+                if inFormula { html += "$" }
             }
             let paragraph = text[range].runs.first { $0[MemoAttributes.Paragraph.self] != nil }?[MemoAttributes.Paragraph.self]
             return Line(html: html, marker: marker, paragraph: paragraph, isBlank: letters.isEmpty)
@@ -120,7 +131,7 @@ public enum NotesHTML {
         }
         if run[MemoAttributes.Strike.self] == true { html = "<strike>\(html)</strike>" }
         if run[MemoAttributes.Underline.self] == true { html = "<u>\(html)</u>" }
-        if run[MemoAttributes.Italic.self] == true || run[MemoAttributes.Math.self] == true { html = "<i>\(html)</i>" }
+        if run[MemoAttributes.Italic.self] == true { html = "<i>\(html)</i>" }
         if run[MemoAttributes.Bold.self] == true { html = "<b>\(html)</b>" }
         var style: [String] = []
         if let ink = run[MemoAttributes.Ink.self] { style.append("color: \(lightInk(ink))") }
