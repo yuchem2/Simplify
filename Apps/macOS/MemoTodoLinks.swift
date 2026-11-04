@@ -306,6 +306,7 @@ struct MemoMenuHost: NSViewRepresentable {
             draft?.inkTextView = { [weak self] in self?.inkTextView() }
             draft?.showMenu = { [weak self] in self?.showMenuUnderSelection() }
             draft?.redrawLines = { [weak self] in self?.redrawLines() }
+            draft?.editLines = { [weak self] make in self?.editLines(make) ?? false }
             // Once the text view is in the window beside this view.
             Task { @MainActor [weak self] in self?.redrawLines() }
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown, .keyDown]) { [weak self] event in
@@ -313,6 +314,16 @@ struct MemoMenuHost: NSViewRepresentable {
                     guard let self, let window = self.window, event.window === window, let draft = self.draft else { return false }
                     switch event.type {
                     case .keyDown:
+                        // Esc closes the 문단 bar.
+                        if draft.showsParagraphBar, event.keyCode == Self.keyEscape {
+                            draft.showsParagraphBar = false
+                            return true
+                        }
+                        // Return, Tab and Delete in lists, and a typed `* `.
+                        if draft.hasFocus, draft.book.todos.pop == nil, let textView = self.styler.textView, window.firstResponder === textView,
+                           MemoListKeys.handle(event, in: textView, draft: draft) {
+                            return true
+                        }
                         // ⌘⇧T and ⌃⌘T while the memo is being written; ahead of the text view and the menus.
                         // By the key's place, not its letter: with a Korean input source T types ㅅ.
                         guard draft.hasFocus, draft.book.todos.pop == nil, event.keyCode == Self.keyT else { return false }
@@ -340,6 +351,18 @@ struct MemoMenuHost: NSViewRepresentable {
 
         /// `kVK_ANSI_T`.
         private static let keyT: UInt16 = 17
+        /// `kVK_Escape`.
+        private static let keyEscape: UInt16 = 53
+
+        /// A list change made in the memo's text view, whether or not it has keyboard focus.
+        @MainActor
+        private func editLines(_ make: (String, NSRange) -> MemoLists.Change?) -> Bool {
+            if !styler.isAttached { redrawLines() }
+            guard let textView = styler.textView, textView.isEditable,
+                  let change = make(textView.string, textView.selectedRange()), !change.edits.isEmpty else { return false }
+            MemoListKeys.apply(change, to: textView)
+            return true
+        }
 
         /// The selection's first line in this view, asked of the focused text view the way an input
         /// method asks it. Nil when the memo does not have focus.
@@ -464,8 +487,29 @@ struct MemoMenuHost: NSViewRepresentable {
                 .divider,
                 .item("굵게", detail: "⌘B", isEnabled: hasSelection) { draft.toggle(MemoAttributes.Bold.self) },
                 .item("기울임", detail: "⌘I", isEnabled: hasSelection) { draft.toggle(MemoAttributes.Italic.self) },
+                .item("밑줄", detail: "⌘U", isEnabled: hasSelection) { draft.toggle(MemoAttributes.Underline.self) },
+                .item("취소선", detail: "⌘⇧X", isEnabled: hasSelection) { draft.toggle(MemoAttributes.Strike.self) },
                 .item("서식 지우기", isEnabled: hasSelection) { draft.clearFormatting() },
+                .divider,
             ]
+            // The caret's line, picked or not.
+            let paragraph = draft.paragraph
+            let kind = draft.listKind
+            entries.append(.submenu("문단", [
+                .item("제목", detail: "⌥⌘1", checked: paragraph == .title) { draft.setParagraph(.title) },
+                .item("머리말", detail: "⌥⌘2", checked: paragraph == .heading) { draft.setParagraph(.heading) },
+                .item("부머리말", detail: "⌥⌘3", checked: paragraph == .sub) { draft.setParagraph(.sub) },
+                .item("본문", detail: "⌥⌘0", checked: paragraph == nil) { draft.setParagraph(nil) },
+            ]))
+            entries.append(.submenu("목록", [
+                .item("글머리 기호", detail: "⌘⇧7", checked: kind == .bullet) { draft.setList(.bullet) },
+                .item("대시", detail: "⌘⇧8", checked: kind == .dash) { draft.setList(.dash) },
+                .item("번호", detail: "⌘⇧9", checked: kind == .number) { draft.setList(.number) },
+                .item("인용문", detail: "⌘'", checked: draft.isQuoted) { draft.setList(.quote) },
+                .divider,
+                .item("들여쓰기", detail: "⌘]") { draft.indentLines(by: 1) },
+                .item("내어쓰기", detail: "⌘[") { draft.indentLines(by: -1) },
+            ]))
             return entries
         }
     }

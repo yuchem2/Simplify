@@ -68,8 +68,57 @@ struct MemoTests {
     @Test func unreadableBodiesAreToldApart() {
         #expect(MemoText.decodeIfReadable(nil) == AttributedString())
         #expect(MemoText.decodeIfReadable(Data("not json".utf8)) == nil)
-        #expect(MemoText.decodeIfReadable(Data(#"{"v":2,"runs":[{"t":"새 형식"}]}"#.utf8)) == nil)
+        #expect(MemoText.decodeIfReadable(Data(#"{"v":3,"runs":[{"t":"새 형식"}]}"#.utf8)) == nil)
         #expect(MemoText.decodeIfReadable(MemoText.encode(AttributedString("가"))).map { String($0.characters) } == "가")
+    }
+
+    @Test func underlineStrikeAndParagraphsSurviveTheRoundTrip() throws {
+        var text = styled("11월 정리") { $0[MemoAttributes.Paragraph.self] = .title }
+        text += AttributedString("\n")
+        text += styled("밑줄") { $0[MemoAttributes.Underline.self] = true }
+        text += styled(" 지운 말") { $0[MemoAttributes.Strike.self] = true }
+        text += AttributedString("\n")
+        text += styled("회의") { $0[MemoAttributes.Paragraph.self] = .heading }
+        text += AttributedString("\n")
+        text += styled("결정") { $0[MemoAttributes.Paragraph.self] = .sub; $0[MemoAttributes.Bold.self] = true }
+        let data = try #require(MemoText.encode(text))
+        let json = String(decoding: data, as: UTF8.self)
+        #expect(json.contains(#""p":"title""#) && json.contains(#""p":"heading""#) && json.contains(#""p":"sub""#))
+        #expect(json.contains(#""u":true"#) && json.contains(#""x":true"#))
+        #expect(MemoText.decode(data) == text)
+        #expect(MemoText.decodeIfReadable(data) == text)
+    }
+
+    /// Version 2 is written only for the new keys: older builds keep reading every other memo,
+    /// and leave a version 2 memo unread (they read only `v` up to 1).
+    @Test func versionTwoOnlyForTheNewKeys() throws {
+        func version(_ text: AttributedString) throws -> Int {
+            let data = try #require(MemoText.encode(text))
+            let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            return try #require(object["v"] as? Int)
+        }
+        // Lists and quotes are letters.
+        #expect(try version(AttributedString("• 하나\n1. 둘\n> 셋")) == 1)
+        #expect(try version(styled("굵게") { $0[MemoAttributes.Bold.self] = true }) == 1)
+        #expect(try version(styled("밑줄") { $0[MemoAttributes.Underline.self] = true }) == 2)
+        #expect(try version(styled("취소") { $0[MemoAttributes.Strike.self] = true }) == 2)
+        #expect(try version(styled("제목") { $0[MemoAttributes.Paragraph.self] = .heading }) == 2)
+    }
+
+    @Test func versionOneMemosStillRead() {
+        let json = #"{"v":1,"runs":[{"t":"예전 ","b":true},{"t":"메모","c":"blue"}]}"#
+        let text = MemoText.decodeIfReadable(Data(json.utf8))
+        #expect(text.map { String($0.characters) } == "예전 메모")
+        #expect(text?.runs.first?[MemoAttributes.Bold.self] == true)
+    }
+
+    @Test func badValuesUnderTheNewKeysAreDropped() {
+        let json = #"{"v":2,"runs":[{"t":"가","u":"yes","p":"poster"},{"t":"나","x":true}]}"#
+        let text = MemoText.decode(Data(json.utf8))
+        #expect(String(text.characters) == "가나")
+        #expect(text.runs.first?[MemoAttributes.Underline.self] == nil)
+        #expect(text.runs.first?[MemoAttributes.Paragraph.self] == nil)
+        #expect(text.runs.last?[MemoAttributes.Strike.self] == true)
     }
 
     @Test func neighbouringRunsWithTheSameFormattingJoin() throws {

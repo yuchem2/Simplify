@@ -44,6 +44,12 @@ final class MemoDraft {
     @ObservationIgnored var skipsSearchTrigger = false
     /// Bumped to put keyboard focus back in the box after a pop closes.
     var focusRequest = 0
+    /// The Aa button's 문단 bar is open over the memo.
+    var showsParagraphBar = false
+    /// Makes a list change in the memo's text view, as typing would (one undo step): given the
+    /// text view's letters and selection, the change to make, or nil for none. False when nothing
+    /// was changed. Set by `MemoMenuHost`, which can reach the text view.
+    @ObservationIgnored var editLines: ((_ make: (String, NSRange) -> MemoLists.Change?) -> Bool)?
     @ObservationIgnored private var pending: Task<Void, Never>?
     @ObservationIgnored let book: MemoBook
     /// The highlighter ⌘⇧H puts on. Remembered across launches.
@@ -73,6 +79,7 @@ final class MemoDraft {
     /// After typing stops for half a second the memo is saved.
     func textChanged() {
         keepCodeBlocksWhole()
+        keepParagraphsWhole()
         keepChipsWhole()
         catchSearchTrigger()
         guard text != saved else { return }
@@ -169,13 +176,7 @@ final class MemoDraft {
         var lines = lineRanges(of: selectedRanges)
         // Off takes the line breaks around the lines too, so no code is left for a later edit to
         // spread back over them.
-        if !on {
-            let characters = text.characters
-            for line in lines.ranges {
-                if line.lowerBound > characters.startIndex { lines.insert(characters.index(before: line.lowerBound), within: characters) }
-                if line.upperBound < characters.endIndex { lines.insert(line.upperBound, within: characters) }
-            }
-        }
+        if !on { widenToLineBreaks(&lines) }
         text.transform(updating: &selection) { text in
             text[lines][MemoAttributes.Code.self] = on ? true : nil
             if on { text[lines][MemoAttributes.Highlight.self] = nil }
@@ -185,15 +186,41 @@ final class MemoDraft {
         if !hasSelectedText { change { $0[MemoAttributes.Code.self] = on ? true : nil } }
     }
 
-    /// 지우기: back to plain text. A code block goes whole lines at a time, as it came.
-    func clearFormatting() {
+    /// The paragraph style the caret's or selection's lines share; nil for body lines or a mix.
+    var paragraph: MemoParagraph? {
         let lines = lineRanges(of: selectedRanges)
+        guard lines.ranges.contains(where: { !$0.isEmpty }) else { return shared(MemoAttributes.Paragraph.self) }
+        let values = Set(text[lines].runs[MemoAttributes.Paragraph.self].map(\.0))
+        return values.count == 1 ? values.first! : nil
+    }
+
+    /// 제목, 머리말, 부머리말 (nil: 본문), on every line the selection touches.
+    func setParagraph(_ paragraph: MemoParagraph?) {
+        var lines = lineRanges(of: selectedRanges)
+        // Off takes the line breaks around the lines too, as a code block's does.
+        if paragraph == nil { widenToLineBreaks(&lines) }
+        text.transform(updating: &selection) { text in
+            text[lines][MemoAttributes.Paragraph.self] = paragraph
+        }
+        // An empty line types in the style it was given.
+        if !hasSelectedText { change { $0[MemoAttributes.Paragraph.self] = paragraph } }
+    }
+
+    /// 지우기: back to plain text. A code block and a paragraph style go whole lines at a time,
+    /// as they came.
+    func clearFormatting() {
+        var lines = lineRanges(of: selectedRanges)
+        widenToLineBreaks(&lines)
         text.transform(updating: &selection) { text in
             text[lines][MemoAttributes.Code.self] = nil
+            text[lines][MemoAttributes.Paragraph.self] = nil
         }
         change { container in
             container[MemoAttributes.Bold.self] = nil
             container[MemoAttributes.Italic.self] = nil
+            container[MemoAttributes.Underline.self] = nil
+            container[MemoAttributes.Strike.self] = nil
+            container[MemoAttributes.Paragraph.self] = nil
             container[MemoAttributes.Code.self] = nil
             container[MemoAttributes.Math.self] = nil
             container[MemoAttributes.Script.self] = nil
@@ -222,6 +249,31 @@ final class MemoDraft {
         text.transform(updating: &selection) { text in
             text[partial][MemoAttributes.Code.self] = true
             text[partial][MemoAttributes.Highlight.self] = nil
+        }
+    }
+
+    /// A line in two paragraph styles (letters typed at the front of a title, or two lines joined)
+    /// takes the first style in it throughout.
+    private func keepParagraphsWhole() {
+        if isComposing { return }
+        var fixes: [(line: Range<AttributedString.Index>, paragraph: MemoParagraph)] = []
+        for line in MemoTodoLines.lines(in: text) where !line.isEmpty {
+            let values = text[line].runs[MemoAttributes.Paragraph.self].map(\.0)
+            guard let first = values.compactMap({ $0 }).first, values.contains(where: { $0 != first }) else { continue }
+            fixes.append((line, first))
+        }
+        guard !fixes.isEmpty else { return }
+        text.transform(updating: &selection) { text in
+            for fix in fixes { text[fix.line][MemoAttributes.Paragraph.self] = fix.paragraph }
+        }
+    }
+
+    /// The line breaks on either side of each line, added in.
+    private func widenToLineBreaks(_ lines: inout RangeSet<AttributedString.Index>) {
+        let characters = text.characters
+        for line in lines.ranges {
+            if line.lowerBound > characters.startIndex { lines.insert(characters.index(before: line.lowerBound), within: characters) }
+            if line.upperBound < characters.endIndex { lines.insert(line.upperBound, within: characters) }
         }
     }
 
@@ -269,9 +321,20 @@ enum MemoStyle {
     /// A chip's box letter: larger than the text, so it is easy to hit.
     static let boxSize: CGFloat = 20
 
-    static func font(bold: Bool, italic: Bool, code: Bool, math: Bool, script: MemoScript?, box: Bool = false) -> Font {
+    static func font(bold: Bool, italic: Bool, code: Bool, math: Bool, script: MemoScript?, box: Bool = false,
+                     paragraph: MemoParagraph? = nil) -> Font {
         // In the memo's own face, only larger.
         if box { return .system(size: boxSize) }
+        // The title and heading tokens, and the memo's letters at 600 for a subheading; no new sizes.
+        if let paragraph, !code {
+            var font: Font = switch paragraph {
+            case .title: TextStyle.title.font
+            case .heading: TextStyle.heading.font
+            case .sub: .system(size: Self.size, weight: bold ? .bold : .semibold)
+            }
+            if italic || math { font = font.italic() }
+            return font
+        }
         var size = code ? 13 : math ? 16 : Self.size
         if script != nil { size = (size * 0.7).rounded() }
         var font: Font = code ? .system(size: size, design: .monospaced) : math ? .system(size: size, design: .serif) : .system(size: size)
@@ -294,14 +357,19 @@ enum MemoStyle {
         return highlight?.tint ?? (todo != nil ? Tokens.chip : nil)
     }
 
-    /// A chip's letters once its ToDo is done: soft and struck through.
-    static func ink(_ palette: Palette?, todo: MemoTodo?) -> Color? {
-        todo?.isDone == true ? Tokens.inkSoft : palette?.ink
+    /// A chip's letters once its ToDo is done: soft and struck through. Letters struck through by
+    /// hand are soft too, unless they have a colour of their own.
+    static func ink(_ palette: Palette?, todo: MemoTodo?, struck: Bool = false) -> Color? {
+        todo?.isDone == true ? Tokens.inkSoft : palette?.ink ?? (struck ? Tokens.inkSoft : nil)
     }
 
-    /// The title only: the box letter shows its tick unstruck.
-    static func strike(_ todo: MemoTodo?, box: Bool = false) -> Text.LineStyle? {
-        todo?.isDone == true && !box ? .single : nil
+    /// A done chip's title (the box letter shows its tick unstruck), or letters struck through by hand.
+    static func strike(_ todo: MemoTodo?, box: Bool = false, struck: Bool = false) -> Text.LineStyle? {
+        (todo?.isDone == true || struck) && !box ? .single : nil
+    }
+
+    static func underline(_ on: Bool) -> Text.LineStyle? {
+        on ? .single : nil
     }
 
     /// The memo with SwiftUI's own attributes filled in, for drawing it as plain `Text`.
@@ -312,19 +380,22 @@ enum MemoStyle {
             let script = run[MemoAttributes.Script.self]
             let box = run[MemoAttributes.TodoBox.self] == true
             text[run.range].font = font(bold: run[MemoAttributes.Bold.self] == true, italic: run[MemoAttributes.Italic.self] == true,
-                                        code: code, math: run[MemoAttributes.Math.self] == true, script: script, box: box)
+                                        code: code, math: run[MemoAttributes.Math.self] == true, script: script, box: box,
+                                        paragraph: run[MemoAttributes.Paragraph.self])
             let todo = run[MemoAttributes.Todo.self]
-            text[run.range].foregroundColor = ink(run[MemoAttributes.Ink.self], todo: todo)
+            let struck = run[MemoAttributes.Strike.self] == true
+            text[run.range].foregroundColor = ink(run[MemoAttributes.Ink.self], todo: todo, struck: struck)
             text[run.range].backgroundColor = ground(code: code, highlight: run[MemoAttributes.Highlight.self], todo: todo)
-            text[run.range].strikethroughStyle = strike(todo, box: box)
+            text[run.range].strikethroughStyle = strike(todo, box: box, struck: struck)
+            text[run.range].underlineStyle = underline(run[MemoAttributes.Underline.self] == true)
             text[run.range].baselineOffset = baselineOffset(script)
         }
         return text
     }
 }
 
-/// What the memo editor accepts: the memo's own formatting, drawn through SwiftUI's font, colour
-/// and baseline attributes. Anything else (pasted fonts, links, underlines) is dropped.
+/// What the memo editor accepts: the memo's own formatting, drawn through SwiftUI's font, colour,
+/// baseline and line attributes. Anything else (pasted fonts, links, pasted underlines) is dropped.
 struct MemoFormatting: AttributedTextFormattingDefinition {
     struct Scope: AttributeScope {
         let font: AttributeScopes.SwiftUIAttributes.FontAttribute
@@ -332,6 +403,7 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
         let backgroundColor: AttributeScopes.SwiftUIAttributes.BackgroundColorAttribute
         let baselineOffset: AttributeScopes.SwiftUIAttributes.BaselineOffsetAttribute
         let strikethroughStyle: AttributeScopes.SwiftUIAttributes.StrikethroughStyleAttribute
+        let underlineStyle: AttributeScopes.SwiftUIAttributes.UnderlineStyleAttribute
         let memo: AttributeScopes.MemoScope
     }
 
@@ -341,6 +413,7 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
         GroundFromFormatting()
         BaselineFromFormatting()
         StrikeFromFormatting()
+        UnderlineFromFormatting()
     }
 
     private struct FontFromFormatting: AttributedTextValueConstraint {
@@ -351,7 +424,8 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
             container[AttributeKey.self] = MemoStyle.font(
                 bold: container[MemoAttributes.Bold.self] == true, italic: container[MemoAttributes.Italic.self] == true,
                 code: container[MemoAttributes.Code.self] == true, math: container[MemoAttributes.Math.self] == true,
-                script: container[MemoAttributes.Script.self], box: container[MemoAttributes.TodoBox.self] == true)
+                script: container[MemoAttributes.Script.self], box: container[MemoAttributes.TodoBox.self] == true,
+                paragraph: container[MemoAttributes.Paragraph.self])
         }
     }
 
@@ -360,7 +434,8 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
         typealias AttributeKey = AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute
 
         func constrain(_ container: inout Attributes) {
-            container[AttributeKey.self] = MemoStyle.ink(container[MemoAttributes.Ink.self], todo: container[MemoAttributes.Todo.self])
+            container[AttributeKey.self] = MemoStyle.ink(container[MemoAttributes.Ink.self], todo: container[MemoAttributes.Todo.self],
+                                                         struck: container[MemoAttributes.Strike.self] == true)
         }
     }
 
@@ -388,7 +463,17 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
         typealias AttributeKey = AttributeScopes.SwiftUIAttributes.StrikethroughStyleAttribute
 
         func constrain(_ container: inout Attributes) {
-            container[AttributeKey.self] = MemoStyle.strike(container[MemoAttributes.Todo.self], box: container[MemoAttributes.TodoBox.self] == true)
+            container[AttributeKey.self] = MemoStyle.strike(container[MemoAttributes.Todo.self], box: container[MemoAttributes.TodoBox.self] == true,
+                                                            struck: container[MemoAttributes.Strike.self] == true)
+        }
+    }
+
+    private struct UnderlineFromFormatting: AttributedTextValueConstraint {
+        typealias Scope = MemoFormatting.Scope
+        typealias AttributeKey = AttributeScopes.SwiftUIAttributes.UnderlineStyleAttribute
+
+        func constrain(_ container: inout Attributes) {
+            container[AttributeKey.self] = MemoStyle.underline(container[MemoAttributes.Underline.self] == true)
         }
     }
 }
@@ -468,6 +553,12 @@ struct MemoEditor: View {
                 MemoFormatBar(draft: draft).offset(y: barY)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            // Under the Aa button at the section rule's end.
+            if draft.showsParagraphBar && !draft.isUnreadable {
+                MemoParagraphBar(draft: draft)
+            }
+        }
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { top = $0 }
         // Under the memo the bar would hang past the end of the scroll content, where clicks do not
         // reach it; the room is made inside the content instead.
@@ -490,6 +581,8 @@ struct MemoEditor: View {
         .onChange(of: draft.text) {
             draft.textChanged()
             draft.redrawLines?()
+            // Nothing stays open over the words being written.
+            draft.showsParagraphBar = false
         }
         .onChange(of: draft.selection) {
             draft.selectionChanged()
@@ -500,12 +593,13 @@ struct MemoEditor: View {
         .onChange(of: draft.focusRequest) { focused = true }
         .onDisappear {
             draft.flush()
+            draft.showsParagraphBar = false
             // A folded panel takes the memo away without a focus change.
             draft.hasFocus = false
         }
     }
 
-    private var showsBar: Bool { focused && draft.hasSelectedText }
+    private var showsBar: Bool { focused && draft.hasSelectedText && !draft.showsParagraphBar }
 
     /// The bar's top within the memo. Beside the selected line: over it where the panel shows
     /// enough room, otherwise under it. Without the line's place, over the memo or at its foot.
@@ -518,8 +612,9 @@ struct MemoEditor: View {
     }
 }
 
-/// Bold, italic, code block, formula and raised/lowered letters, then text colour and
-/// highlighter from the palette. Shortcuts show on hover and live in the 서식 menu too.
+/// Bold, italic, underline, strikethrough, code block, formula and raised/lowered letters, then
+/// text colour and highlighter from the palette. Shortcuts show on hover and live in the 서식 menu
+/// too, with 서식 지우기, which the bar has no room for.
 struct MemoFormatBar: View {
     let draft: MemoDraft
     static let height: CGFloat = 104
@@ -529,6 +624,8 @@ struct MemoFormatBar: View {
             HStack(spacing: Metrics.spaceXs) {
                 style("B", "굵게", "⌘B", isOn: draft.isOn(MemoAttributes.Bold.self), font: TextStyle.body.font.bold()) { draft.toggle(MemoAttributes.Bold.self) }
                 style("I", "기울임", "⌘I", isOn: draft.isOn(MemoAttributes.Italic.self), font: TextStyle.body.font.italic(), design: .serif) { draft.toggle(MemoAttributes.Italic.self) }
+                style("U", "밑줄", "⌘U", isOn: draft.isOn(MemoAttributes.Underline.self), font: TextStyle.body.font, line: .underline) { draft.toggle(MemoAttributes.Underline.self) }
+                style("S", "취소선", "⌘⇧X", isOn: draft.isOn(MemoAttributes.Strike.self), font: TextStyle.body.font, line: .strike) { draft.toggle(MemoAttributes.Strike.self) }
                 style("{ }", "코드 블록", "⌘⇧C", isOn: draft.isCode, font: TextStyle.cell.font.weight(.semibold), design: .monospaced) { draft.toggleCode() }
                 Rectangle().fill(.ink).frame(width: Metrics.line, height: 18).padding(.horizontal, Metrics.spaceXxs)
                 style("fx", "수식", "⌥⌘E", isOn: draft.isOn(MemoAttributes.Math.self), font: TextStyle.item.font.italic(), design: .serif) { draft.toggle(MemoAttributes.Math.self) }
@@ -539,10 +636,6 @@ struct MemoFormatBar: View {
                     .buttonStyle(DrawnButtonStyle(.text))
                     .focusable(false)
                     .help("시각 넣기 (⌃⌘T)")
-                Button("지우기") { draft.clearFormatting() }
-                    .buttonStyle(DrawnButtonStyle(.text))
-                    .focusable(false)
-                    .help("서식 지우기")
             }
             let ink = draft.shared(MemoAttributes.Ink.self)
             HStack(spacing: Metrics.spaceXxs) {
@@ -576,11 +669,16 @@ struct MemoFormatBar: View {
         .floatingFrame()
     }
 
-    private func style(_ title: String, _ name: String, _ shortcut: String, isOn: Bool, font: Font, design: Font.Design? = nil, action: @escaping () -> Void) -> some View {
+    private enum Line { case underline, strike }
+
+    private func style(_ title: String, _ name: String, _ shortcut: String, isOn: Bool, font: Font, design: Font.Design? = nil, line: Line? = nil,
+                       action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(font)
                 .fontDesign(design)
+                .underline(line == .underline)
+                .strikethrough(line == .strike)
                 .foregroundStyle(isOn ? Color.onInk : Color.ink)
                 .frame(width: 26, height: 24)
                 .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
@@ -611,7 +709,7 @@ struct MemoFormatBar: View {
 
 /// A format bar button: ink when switched on, the hover step under the pointer. The bar never takes
 /// keyboard focus, so it draws no ring.
-private struct FormatButtonStyle: ButtonStyle {
+struct FormatButtonStyle: ButtonStyle {
     var isOn: Bool
 
     func makeBody(configuration: Configuration) -> some View {
@@ -648,6 +746,10 @@ struct MemoCommands: Commands {
                     .keyboardShortcut("b", modifiers: .command)
                 Button("기울임") { draft?.toggle(MemoAttributes.Italic.self) }
                     .keyboardShortcut("i", modifiers: .command)
+                Button("밑줄") { draft?.toggle(MemoAttributes.Underline.self) }
+                    .keyboardShortcut("u", modifiers: .command)
+                Button("취소선") { draft?.toggle(MemoAttributes.Strike.self) }
+                    .keyboardShortcut("x", modifiers: [.command, .shift])
                 Button("코드 블록") { draft?.toggleCode() }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                 Divider()
@@ -661,6 +763,28 @@ struct MemoCommands: Commands {
                 Button("형광펜 (\((draft?.lastHighlight ?? .yellow).name))") { draft?.repeatHighlight() }
                     .keyboardShortcut("h", modifiers: [.command, .shift])
                 Button("서식 지우기") { draft?.clearFormatting() }
+                Divider()
+                Button("제목") { draft?.setParagraph(.title) }
+                    .keyboardShortcut("1", modifiers: [.command, .option])
+                Button("머리말") { draft?.setParagraph(.heading) }
+                    .keyboardShortcut("2", modifiers: [.command, .option])
+                Button("부머리말") { draft?.setParagraph(.sub) }
+                    .keyboardShortcut("3", modifiers: [.command, .option])
+                Button("본문") { draft?.setParagraph(nil) }
+                    .keyboardShortcut("0", modifiers: [.command, .option])
+                Divider()
+                Button("글머리 기호 목록") { draft?.setList(.bullet) }
+                    .keyboardShortcut("7", modifiers: [.command, .shift])
+                Button("대시 목록") { draft?.setList(.dash) }
+                    .keyboardShortcut("8", modifiers: [.command, .shift])
+                Button("번호 목록") { draft?.setList(.number) }
+                    .keyboardShortcut("9", modifiers: [.command, .shift])
+                Button("인용문") { draft?.setList(.quote) }
+                    .keyboardShortcut("'", modifiers: .command)
+                Button("들여쓰기") { draft?.indentLines(by: 1) }
+                    .keyboardShortcut("]", modifiers: .command)
+                Button("내어쓰기") { draft?.indentLines(by: -1) }
+                    .keyboardShortcut("[", modifiers: .command)
                 Divider()
                 Button("할 일로 만들기…") { draft?.askToMakeTodos() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])

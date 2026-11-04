@@ -13,6 +13,23 @@ public enum MemoAttributes {
         public static let name = "simplify.memo.italic"
     }
 
+    public enum Underline: CodableAttributedStringKey {
+        public typealias Value = Bool
+        public static let name = "simplify.memo.underline"
+    }
+
+    /// Struck-through letters, set by hand; a done ToDo chip's line is its own and not this.
+    public enum Strike: CodableAttributedStringKey {
+        public typealias Value = Bool
+        public static let name = "simplify.memo.strike"
+    }
+
+    /// A title, heading or subheading: whole lines, like a code block.
+    public enum Paragraph: CodableAttributedStringKey {
+        public typealias Value = MemoParagraph
+        public static let name = "simplify.memo.paragraph"
+    }
+
     /// A code block: whole lines in a fixed-width face on a shaded ground.
     public enum Code: CodableAttributedStringKey {
         public typealias Value = Bool
@@ -72,10 +89,18 @@ public enum MemoScript: String, Codable, Hashable, Sendable {
     case raised, lowered
 }
 
+/// A line's paragraph style; plain body lines have none.
+public enum MemoParagraph: String, Codable, Hashable, Sendable, CaseIterable {
+    case title, heading, sub
+}
+
 public extension AttributeScopes {
     struct MemoScope: AttributeScope {
         public let bold: MemoAttributes.Bold
         public let italic: MemoAttributes.Italic
+        public let underline: MemoAttributes.Underline
+        public let strike: MemoAttributes.Strike
+        public let paragraph: MemoAttributes.Paragraph
         public let code: MemoAttributes.Code
         public let math: MemoAttributes.Math
         public let script: MemoAttributes.Script
@@ -101,8 +126,13 @@ public extension AttributeDynamicLookup {
 /// attribute. Neighbouring runs with the same formatting are joined. A ToDo chip's run carries
 /// `"td"` (the ToDo's id) and `"tx":true` once done, and its box letter `"tb":true`; older
 /// versions ignore these and keep the text.
+///
+/// Version 2 adds `"u":true` (underline), `"x":true` (struck through) and `"p"` (`title`,
+/// `heading` or `sub`). A memo using none of them is still written as version 1, so a Mac with an
+/// older version keeps reading it; one that does is version 2, which older versions leave unread.
+/// Lists and quotes are letters (`• `, `- `, `1. `, `> `) and need no key.
 public enum MemoText {
-    static let version = 1
+    static let version = 2
 
     public static func encode(_ text: AttributedString) -> Data? {
         guard !isBlank(text) else { return nil }
@@ -117,7 +147,8 @@ public enum MemoText {
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        return try? encoder.encode(Document(v: version, runs: runs))
+        let needsTwo = runs.contains { $0.u != nil || $0.x != nil || $0.p != nil }
+        return try? encoder.encode(Document(v: needsTwo ? version : 1, runs: runs))
     }
 
     /// An empty memo for missing or unreadable data.
@@ -152,6 +183,9 @@ public enum MemoText {
         var t: String
         var b: Bool?
         var i: Bool?
+        var u: Bool?
+        var x: Bool?
+        var p: String?
         var k: Bool?
         var m: Bool?
         var s: String?
@@ -161,10 +195,37 @@ public enum MemoText {
         var tx: Bool?
         var tb: Bool?
 
+        private enum CodingKeys: String, CodingKey {
+            case t, b, i, u, x, p, k, m, s, c, h, td, tx, tb
+        }
+
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            t = try c.decode(String.self, forKey: .t)
+            b = try c.decodeIfPresent(Bool.self, forKey: .b)
+            i = try c.decodeIfPresent(Bool.self, forKey: .i)
+            // Keys version 1 did not know: a value of another type under them is left out rather
+            // than making the memo unreadable, as unknown keys always were.
+            u = (try? c.decodeIfPresent(Bool.self, forKey: .u)) ?? nil
+            x = (try? c.decodeIfPresent(Bool.self, forKey: .x)) ?? nil
+            p = (try? c.decodeIfPresent(String.self, forKey: .p)) ?? nil
+            k = try c.decodeIfPresent(Bool.self, forKey: .k)
+            m = try c.decodeIfPresent(Bool.self, forKey: .m)
+            s = try c.decodeIfPresent(String.self, forKey: .s)
+            self.c = try c.decodeIfPresent(String.self, forKey: .c)
+            h = try c.decodeIfPresent(String.self, forKey: .h)
+            td = try c.decodeIfPresent(String.self, forKey: .td)
+            tx = try c.decodeIfPresent(Bool.self, forKey: .tx)
+            tb = try c.decodeIfPresent(Bool.self, forKey: .tb)
+        }
+
         init(text: String, from run: AttributedString.Runs.Run) {
             t = text
             b = run[MemoAttributes.Bold.self] == true ? true : nil
             i = run[MemoAttributes.Italic.self] == true ? true : nil
+            u = run[MemoAttributes.Underline.self] == true ? true : nil
+            x = run[MemoAttributes.Strike.self] == true ? true : nil
+            p = run[MemoAttributes.Paragraph.self]?.rawValue
             k = run[MemoAttributes.Code.self] == true ? true : nil
             m = run[MemoAttributes.Math.self] == true ? true : nil
             s = run[MemoAttributes.Script.self]?.rawValue
@@ -178,13 +239,16 @@ public enum MemoText {
         }
 
         func sameFormatting(as other: Run) -> Bool {
-            b == other.b && i == other.i && k == other.k && m == other.m && s == other.s && c == other.c && h == other.h && td == other.td && tx == other.tx && tb == other.tb
+            b == other.b && i == other.i && u == other.u && x == other.x && p == other.p && k == other.k && m == other.m && s == other.s && c == other.c && h == other.h && td == other.td && tx == other.tx && tb == other.tb
         }
 
         var attributed: AttributedString {
             var container = AttributeContainer()
             if b == true { container[MemoAttributes.Bold.self] = true }
             if i == true { container[MemoAttributes.Italic.self] = true }
+            if u == true { container[MemoAttributes.Underline.self] = true }
+            if x == true { container[MemoAttributes.Strike.self] = true }
+            container[MemoAttributes.Paragraph.self] = p.flatMap(MemoParagraph.init(rawValue:))
             if k == true { container[MemoAttributes.Code.self] = true }
             if m == true { container[MemoAttributes.Math.self] = true }
             container[MemoAttributes.Script.self] = s.flatMap(MemoScript.init(rawValue:))

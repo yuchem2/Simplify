@@ -138,6 +138,7 @@ struct MainView: View {
         #if DEBUG
         .task { Snapshot.runIfRequested(model: model, calendars: calendars, memos: memos) }
         .task { WriteCheck.runIfRequested(model: model, calendars: calendars) }
+        .task { MemoFormatCheck.runIfRequested(model: model) }
         #endif
     }
 }

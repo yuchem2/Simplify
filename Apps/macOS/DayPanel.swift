@@ -66,6 +66,8 @@ struct DayPanel: View {
                                     }
                                         .buttonStyle(DrawnButtonStyle(.text))
                                         .help("다른 날의 할 일과 메모 속 할 일 줄을 가져와요")
+                                } else if section.kind == .memo {
+                                    MemoParagraphButton(draft: memos.draft)
                                 } else if let action = section.action {
                                     Button(action) { model.newEvent(on: period.start, calendars: calendars) }
                                         .buttonStyle(DrawnButtonStyle(.text))

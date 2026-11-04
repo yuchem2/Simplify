@@ -29,15 +29,18 @@ extension MemoDraft {
     }
 }
 
-/// Draws the memo's rules and timeline lines in its text view, through TextKit 2's own hooks: the
-/// content storage hands out each paragraph with display-only changes (the time in figures and
-/// soft ink with a hanging indent; a rule's letters hidden), and the layout manager gives a rule
-/// paragraph a fragment that draws an ink line across the memo instead. The storage (and so the
-/// memo's text) is never touched. A rule shows its letters again while the caret is on it, so it
-/// can be edited like any line.
+/// Draws the memo's rules, timeline lines, lists, quotes and titles in its text view, through
+/// TextKit 2's own hooks: the content storage hands out each paragraph with display-only changes
+/// (the time in figures and soft ink with a hanging indent; a rule's letters hidden; a list item's
+/// marker by level with the words hanging after it; a quote's `>` hidden; a title's or heading's
+/// line height), and the layout manager gives a rule paragraph a fragment that draws an ink line
+/// across the memo instead, and a quote one that draws an ink line down its side. The storage (and
+/// so the memo's text) is never touched. A rule shows its letters again while the caret is on it,
+/// so it can be edited like any line.
 @MainActor
 final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayoutManagerDelegate {
-    private weak var textView: NSTextView?
+    /// The memo's text view, once attached.
+    private(set) weak var textView: NSTextView?
     /// The rule paragraph the caret is on, shown as letters.
     private var openRule: NSRange?
     /// Whether some timeline line in the memo has a range (`08:30-09:15`), which widens the time column.
@@ -120,7 +123,72 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             shown.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: shown.length))
             return NSTextParagraph(attributedString: shown)
         }
-        return nil
+        return blockParagraph(text, range, line)
+    }
+
+    /// A list item, a quote, or a title, heading or subheading line as drawn; nil for any other.
+    private func blockParagraph(_ text: NSTextStorage, _ range: NSRange, _ line: String) -> NSTextParagraph? {
+        let marker = MemoLists.marker(line)
+        let paragraph = Self.paragraph(text.attribute(Self.paragraphKey, at: range.location, effectiveRange: nil))
+        guard marker != nil || paragraph != nil else { return nil }
+        let shown = NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
+        let whole = NSRange(location: 0, length: shown.length)
+        let style = ((shown.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        switch paragraph {
+        case .title?, .heading?:
+            // The title and heading tokens' own line heights, and a little room above.
+            let height = paragraph == .title ? TextStyle.title.lineHeight : TextStyle.heading.lineHeight
+            style.minimumLineHeight = height
+            style.maximumLineHeight = height
+            style.paragraphSpacingBefore = paragraph == .title ? Metrics.spaceXs : Metrics.spaceM
+        case .sub?:
+            style.paragraphSpacingBefore = Metrics.spaceS
+        case nil:
+            break
+        }
+        // A quote's `> ` hidden; what follows starts past the ink line, wrapped lines too.
+        let quoteIndent = marker?.isQuoted == true ? Metrics.lineSpine + Metrics.spaceL : 0
+        if let marker, marker.isQuoted {
+            // In the memo's own face, so a heading's larger letters do not push its words out.
+            let font = NSFont.systemFont(ofSize: MemoStyle.size)
+            shown.addAttribute(.font, value: font, range: NSRange(location: 0, length: 2))
+            shown.addAttribute(.foregroundColor, value: NSColor.clear, range: NSRange(location: 0, length: 1))
+            shown.addAttribute(.kern, value: max(0, quoteIndent - Self.width(of: "> ", font: font)), range: NSRange(location: 1, length: 1))
+            // Soft ink, except letters given a colour of their own.
+            if shown.length > 2 {
+                shown.enumerateAttribute(Self.inkKey, in: NSRange(location: 2, length: shown.length - 2)) { value, part, _ in
+                    if value == nil { shown.addAttribute(.foregroundColor, value: NSColor(Color.inkSoft), range: part) }
+                }
+            }
+            style.headIndent = quoteIndent
+            shown.addAttribute(.memoQuote, value: true, range: whole)
+        }
+        if let marker, marker.kind != .quote {
+            // A tab a level; the marker, then the words from a column after it, wrapped lines too.
+            style.tabStops = (1...MemoLists.maxLevel).map { NSTextTab(textAlignment: .left, location: quoteIndent + CGFloat($0) * MemoLists.levelIndent) }
+            style.defaultTabInterval = MemoLists.levelIndent
+            let label = NSRange(location: marker.labelOffset, length: (marker.label as NSString).length)
+            let drawn = MemoLists.shownLabel(marker)
+            if drawn != marker.label { shown.replaceCharacters(in: label, with: drawn) }
+            let size = (shown.attribute(.font, at: label.location, effectiveRange: nil) as? NSFont)?.pointSize ?? MemoStyle.size
+            let font: NSFont = switch marker.kind {
+            case .number: .monospacedDigitSystemFont(ofSize: size, weight: .regular)
+            // A geometric dot about half the letters' size, raised to their middle.
+            case .bullet: .systemFont(ofSize: (size * Self.bulletScale).rounded())
+            default: .systemFont(ofSize: size)
+            }
+            shown.addAttributes([.font: font, .foregroundColor: marker.quoted ? NSColor(Color.inkSoft) : NSColor(Color.ink)], range: label)
+            if marker.kind == .bullet { shown.addAttribute(.baselineOffset, value: (size * Self.bulletRise).rounded(), range: label) }
+            let space = NSRange(location: NSMaxRange(label), length: 1)
+            // In the marker's face, so the measured column is the drawn one on a title line too.
+            shown.addAttribute(.font, value: font, range: space)
+            let width = Self.width(of: drawn, font: font) + Self.width(of: " ", font: font)
+            let column = marker.kind == .number ? Self.numberColumn : MemoLists.levelIndent
+            shown.addAttribute(.kern, value: max(0, column - width), range: space)
+            style.headIndent = quoteIndent + CGFloat(marker.level) * MemoLists.levelIndent + max(column, width)
+        }
+        shown.addAttribute(.paragraphStyle, value: style, range: whole)
+        return NSTextParagraph(attributedString: shown)
     }
 
     // MARK: NSTextLayoutManagerDelegate
@@ -128,9 +196,13 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     nonisolated func textLayoutManager(_ textLayoutManager: NSTextLayoutManager, textLayoutFragmentFor location: any NSTextLocation,
                                        in textElement: NSTextElement) -> NSTextLayoutFragment {
         let range = textElement.elementRange
-        if let paragraph = textElement as? NSTextParagraph, paragraph.attributedString.length > 0,
-           paragraph.attributedString.attribute(.memoRule, at: 0, effectiveRange: nil) != nil {
-            return RuleFragment(textElement: textElement, range: range)
+        if let paragraph = textElement as? NSTextParagraph, paragraph.attributedString.length > 0 {
+            if paragraph.attributedString.attribute(.memoRule, at: 0, effectiveRange: nil) != nil {
+                return RuleFragment(textElement: textElement, range: range)
+            }
+            if paragraph.attributedString.attribute(.memoQuote, at: 0, effectiveRange: nil) != nil {
+                return QuoteFragment(textElement: textElement, range: range)
+            }
         }
         return NSTextLayoutFragment(textElement: textElement, range: range)
     }
@@ -159,11 +231,41 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     private static func width(of letters: String, font: NSFont) -> CGFloat {
         (letters as NSString).size(withAttributes: [.font: font]).width
     }
+
+    /// A number item's marker column, a little wider than a bullet's for two figures.
+    private static let numberColumn: CGFloat = 26
+    /// A bullet's size and lift against its line's letters.
+    private static let bulletScale: CGFloat = 0.5
+    private static let bulletRise: CGFloat = 0.15
+
+    private static let paragraphKey = NSAttributedString.Key(MemoAttributes.Paragraph.name)
+    private static let inkKey = NSAttributedString.Key(MemoAttributes.Ink.name)
+
+    /// A paragraph style as the text view keeps it.
+    private static func paragraph(_ value: Any?) -> MemoParagraph? {
+        if let paragraph = value as? MemoParagraph { return paragraph }
+        return (value as? String).flatMap(MemoParagraph.init(rawValue:))
+    }
 }
 
 extension NSAttributedString.Key {
     /// A rule paragraph, as `MemoLineStyler` hands it out; never in the memo's own text.
     static let memoRule = NSAttributedString.Key("simplify.memo.rule")
+    /// A quote paragraph, likewise.
+    static let memoQuote = NSAttributedString.Key("simplify.memo.quote")
+}
+
+/// A quote paragraph: its words, and a spine-weight ink line down its left side. Quote lines one
+/// under another make one line.
+final class QuoteFragment: NSTextLayoutFragment {
+    override func draw(at point: CGPoint, in context: CGContext) {
+        super.draw(at: point, in: context)
+        guard let first = textLineFragments.first, let last = textLineFragments.last else { return }
+        context.setFillColor(NSColor(Color.ink).cgColor)
+        let top = first.typographicBounds.minY
+        context.fill(CGRect(x: point.x + first.typographicBounds.minX, y: point.y + top, width: Metrics.lineSpine,
+                            height: last.typographicBounds.maxY - top))
+    }
 }
 
 /// A rule paragraph: a 1 pt ink line across the memo's width, in the middle of its line.

@@ -59,6 +59,56 @@ struct NotesTests {
             == ["<div><span style=\"background-color: #faf0c4\">노랑</span></div>"])
     }
 
+    @Test func underlineAndStrike() throws {
+        #expect(try lines(styled("밑줄") { $0[MemoAttributes.Underline.self] = true }) == ["<div><u>밑줄</u></div>"])
+        #expect(try lines(styled("취소") { $0[MemoAttributes.Strike.self] = true }) == ["<div><strike>취소</strike></div>"])
+    }
+
+    /// The note's name is its `<h1>`; the memo's own title and headings come under it.
+    @Test func paragraphStylesSitUnderTheName() throws {
+        var text = styled("11월 정리") { $0[MemoAttributes.Paragraph.self] = .title }
+        text += styled("\n")
+        text += styled("회의") { $0[MemoAttributes.Paragraph.self] = .heading }
+        text += styled("\n")
+        text += styled("결정") { $0[MemoAttributes.Paragraph.self] = .sub }
+        text += styled("\n본문")
+        #expect(try lines(text) == ["<div><h2>11월 정리</h2></div>", "<div><h3>회의</h3></div>", "<div><b>결정</b></div>", "<div>본문</div>"])
+    }
+
+    @Test func listsBecomeNestedListTags() throws {
+        let text = styled("1. 견적서\n2. 리뷰\n\ta. 시안\n\tb. 색상\n3. 치과\n• 배포\n\t• QA\n- 회의록\n끝")
+        #expect(try lines(text) == [
+            "<ol>", "<li>견적서</li>", "<li>리뷰</li>", "<ol>", "<li>시안</li>", "<li>색상</li>", "</ol>", "<li>치과</li>", "</ol>",
+            "<ul>", "<li>배포</li>", "<ul>", "<li>QA</li>", "</ul>", "</ul>",
+            "<ul class=\"Apple-dash-list\">", "<li>회의록</li>", "</ul>",
+            "<div>끝</div>",
+        ])
+    }
+
+    @Test func codeLinesAreNotListsAndNumbersKeepTheirStart() throws {
+        let code = styled("- name: x\n> out.txt") { $0[MemoAttributes.Code.self] = true }
+        #expect(try lines(code) == ["<div><tt>- name: x</tt></div>", "<div><tt>&gt; out.txt</tt></div>"])
+        #expect(try lines(styled("3. 셋\n4. 넷")) == ["<ol start=\"3\">", "<li>셋</li>", "<li>넷</li>", "</ol>"])
+    }
+
+    @Test func listsInsideAQuoteStayInIt() throws {
+        #expect(try lines(styled("> 말\n> • 하나\n> \t• 둘\n끝")) == [
+            "<blockquote>", "<div>말</div>", "<ul>", "<li>하나</li>", "<ul>", "<li>둘</li>", "</ul>", "</ul>", "</blockquote>", "<div>끝</div>",
+        ])
+    }
+
+    @Test func listItemsKeepTheirFormatting() throws {
+        var text = styled("• ")
+        text += styled("굵게") { $0[MemoAttributes.Bold.self] = true }
+        #expect(try lines(text) == ["<ul>", "<li><b>굵게</b></li>", "</ul>"])
+    }
+
+    @Test func quoteLinesShareABlockquote() throws {
+        #expect(try lines(styled("> 범위를 줄이고\n> 마감을 지키자\n다음")) == [
+            "<blockquote>", "<div>범위를 줄이고</div>", "<div>마감을 지키자</div>", "</blockquote>", "<div>다음</div>",
+        ])
+    }
+
     @Test func formattingStacksAndMixesWithinALine() throws {
         var text = styled("견적서") { $0[MemoAttributes.Bold.self] = true; $0[MemoAttributes.Italic.self] = true; $0[MemoAttributes.Ink.self] = .blue; $0[MemoAttributes.Highlight.self] = .pink }
         text += styled(" 보내기")

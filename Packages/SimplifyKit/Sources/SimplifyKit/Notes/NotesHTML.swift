@@ -23,27 +23,85 @@ public enum NotesHTML {
     }
 
     /// The note's body, or nil for a blank memo, whose note is deleted instead.
+    ///
+    /// The memo's 제목, 머리말 and 부머리말 sit under the note's name: `<h2>`, `<h3>` and bold
+    /// letters, since the name already takes the 메모 app's title (`<h1>`). List lines become
+    /// `<ul>` (`class="Apple-dash-list"` for dashes) or `<ol>` items, a level in nested inside
+    /// the list above; quote lines are a `<blockquote>`, with any list items in them inside it.
     public static func body(name: String, text: AttributedString) -> String? {
         guard !MemoText.isBlank(text) else { return nil }
-        var lines = [""]
-        // Whether the letters so far on this line end in a space (or there are none yet).
-        var afterSpace = true
-        for run in text.runs {
-            let pieces = String(text[run.range].characters).split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
-            for (number, piece) in pieces.enumerated() {
-                if number > 0 {
-                    lines.append("")
-                    afterSpace = true
-                }
-                guard !piece.isEmpty else { continue }
-                lines[lines.count - 1] += segment(String(piece), run: run, afterSpace: afterSpace)
+        var lines: [Line] = MemoTodoLines.lines(in: text).map { range in
+            let letters = String(text[range].characters)
+            // A code block keeps its `- ` and `> ` as typed, as the editor shows them.
+            let isCode = !range.isEmpty && text.runs[range.lowerBound][MemoAttributes.Code.self] == true
+            let marker = isCode ? nil : MemoLists.marker(letters)
+            let start = text.characters.index(range.lowerBound, offsetBy: marker.map { String(letters.utf16.prefix($0.length))!.count } ?? 0)
+            var html = ""
+            // Whether the letters so far on this line end in a space (or there are none yet).
+            var afterSpace = true
+            for run in text[start..<range.upperBound].runs {
+                let piece = String(text[run.range].characters)
+                html += segment(piece, run: run, afterSpace: afterSpace)
                 afterSpace = piece.last == " "
             }
+            let paragraph = text[range].runs.first { $0[MemoAttributes.Paragraph.self] != nil }?[MemoAttributes.Paragraph.self]
+            return Line(html: html, marker: marker, paragraph: paragraph, isBlank: letters.isEmpty)
         }
-        while lines.last?.isEmpty == true { lines.removeLast() }
-        while lines.first?.isEmpty == true { lines.removeFirst() }
-        let heading = "<div><h1>\(escape(name))</h1></div>"
-        return ([heading] + lines.map { "<div>\($0.isEmpty ? "<br>" : $0)</div>" }).joined(separator: "\n")
+        while lines.last?.isBlank == true { lines.removeLast() }
+        while lines.first?.isBlank == true { lines.removeFirst() }
+        var out = ["<div><h1>\(escape(name))</h1></div>"]
+        // The lists open around the line being written, outermost first.
+        var open: [(tag: String, close: String)] = []
+        var inQuote = false
+        for line in lines {
+            // Into or out of a quote: the lists around end there.
+            let quoted = line.marker?.isQuoted == true
+            if quoted != inQuote {
+                while let list = open.popLast() { out.append(list.close) }
+                out.append(quoted ? "<blockquote>" : "</blockquote>")
+                inQuote = quoted
+            }
+            guard let marker = line.marker, marker.kind != .quote else {
+                while let list = open.popLast() { out.append(list.close) }
+                out.append("<div>\(paragraphed(line))</div>")
+                continue
+            }
+            let tag = switch marker.kind {
+            case .number: "<ol>"
+            case .dash: "<ul class=\"Apple-dash-list\">"
+            default: "<ul>"
+            }
+            while open.count > marker.level + 1 { out.append(open.removeLast().close) }
+            if open.count == marker.level + 1, open.last?.tag != tag { out.append(open.removeLast().close) }
+            while open.count < marker.level + 1 {
+                // A numbered list typed from `3. ` starts at 3 in the note too.
+                let start = marker.number ?? 1
+                out.append(open.count == marker.level && start > 1 ? "<ol start=\"\(start)\">" : tag)
+                open.append((tag, marker.kind == .number ? "</ol>" : "</ul>"))
+            }
+            out.append("<li>\(paragraphed(line))</li>")
+        }
+        while let list = open.popLast() { out.append(list.close) }
+        if inQuote { out.append("</blockquote>") }
+        return out.joined(separator: "\n")
+    }
+
+    private struct Line {
+        var html: String
+        var marker: MemoLists.Marker?
+        var paragraph: MemoParagraph?
+        var isBlank: Bool
+    }
+
+    /// A line's letters in its paragraph style's tag; an empty line is a `<br>`.
+    private static func paragraphed(_ line: Line) -> String {
+        guard !line.html.isEmpty else { return "<br>" }
+        switch line.paragraph {
+        case .title: return "<h2>\(line.html)</h2>"
+        case .heading: return "<h3>\(line.html)</h3>"
+        case .sub: return "<b>\(line.html)</b>"
+        case nil: return line.html
+        }
     }
 
     /// One run's letters on one line, wrapped in its formatting's tags.
@@ -60,6 +118,8 @@ public enum NotesHTML {
         case .lowered: html = "<sub>\(html)</sub>"
         case nil: break
         }
+        if run[MemoAttributes.Strike.self] == true { html = "<strike>\(html)</strike>" }
+        if run[MemoAttributes.Underline.self] == true { html = "<u>\(html)</u>" }
         if run[MemoAttributes.Italic.self] == true || run[MemoAttributes.Math.self] == true { html = "<i>\(html)</i>" }
         if run[MemoAttributes.Bold.self] == true { html = "<b>\(html)</b>" }
         var style: [String] = []
