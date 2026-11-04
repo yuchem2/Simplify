@@ -127,6 +127,23 @@ struct NotesTests {
         #expect(try lines(text) == ["<ul>", "<li><b>굵게</b></li>", "</ul>"])
     }
 
+    @Test func tablesBecomeTableTags() throws {
+        func row(_ letters: String, _ id: String = "t1") -> AttributedString { styled(letters) { $0[MemoAttributes.Table.self] = id } }
+        var text = styled("비용\n") + row("항목\t금액\t") + styled("\n") + row("디자인\t") + styled("1,200,000") { $0[MemoAttributes.Table.self] = "t1"; $0[MemoAttributes.Bold.self] = true }
+        text += row("\t시안 2종") + styled("\n") + row("가\t나", "t2") + styled("\n끝")
+        #expect(try lines(text) == [
+            "<div>비용</div>",
+            "<table>", "<tr><td>항목</td><td>금액</td><td><br></td></tr>", "<tr><td>디자인</td><td><b>1,200,000</b></td><td>시안 2종</td></tr>", "</table>",
+            "<table>", "<tr><td>가</td><td>나</td></tr>", "</table>",
+            "<div>끝</div>",
+        ])
+        // A formula in a cell is its LaTeX in `$…$` there.
+        let formula = row("합\t") + styled("x^2") { $0[MemoAttributes.Table.self] = "t1"; $0[MemoAttributes.Math.self] = true } + row("\t끝")
+        #expect(try lines(formula) == ["<table>", "<tr><td>합</td><td>$x^2$</td><td>끝</td></tr>", "</table>"])
+        // A row that starts like a list item is still a row, and closes the list above it.
+        #expect(try lines(styled("• 하나\n") + row("- 가\t나")) == ["<ul>", "<li>하나</li>", "</ul>", "<table>", "<tr><td>- 가</td><td>나</td></tr>", "</table>"])
+    }
+
     @Test func quoteLinesShareABlockquote() throws {
         #expect(try lines(styled("> 범위를 줄이고\n> 마감을 지키자\n다음")) == [
             "<blockquote>", "<div>범위를 줄이고</div>", "<div>마감을 지키자</div>", "</blockquote>", "<div>다음</div>",

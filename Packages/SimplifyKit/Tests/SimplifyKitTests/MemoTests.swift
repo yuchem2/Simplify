@@ -103,6 +103,9 @@ struct MemoTests {
         #expect(try version(styled("밑줄") { $0[MemoAttributes.Underline.self] = true }) == 2)
         #expect(try version(styled("취소") { $0[MemoAttributes.Strike.self] = true }) == 2)
         #expect(try version(styled("제목") { $0[MemoAttributes.Paragraph.self] = .heading }) == 2)
+        #expect(try version(styled("가\t나") { $0[MemoAttributes.Table.self] = "t" }) == 2)
+        // A table's tabs without its mark are plain letters.
+        #expect(try version(AttributedString("가\t나")) == 1)
     }
 
     @Test func versionOneMemosStillRead() {

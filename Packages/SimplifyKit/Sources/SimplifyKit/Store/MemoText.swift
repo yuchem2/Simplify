@@ -36,6 +36,13 @@ public enum MemoAttributes {
         public static let name = "simplify.memo.code"
     }
 
+    /// A table row: the line's cells split by tab letters, every row of one table under its id.
+    /// Whole lines, like a paragraph style.
+    public enum Table: CodableAttributedStringKey {
+        public typealias Value = String
+        public static let name = "simplify.memo.table"
+    }
+
     /// Formula lettering: an italic serif.
     public enum Math: CodableAttributedStringKey {
         public typealias Value = Bool
@@ -102,6 +109,7 @@ public extension AttributeScopes {
         public let strike: MemoAttributes.Strike
         public let paragraph: MemoAttributes.Paragraph
         public let code: MemoAttributes.Code
+        public let table: MemoAttributes.Table
         public let math: MemoAttributes.Math
         public let script: MemoAttributes.Script
         public let ink: MemoAttributes.Ink
@@ -130,6 +138,9 @@ public extension AttributeDynamicLookup {
 /// Version 2 adds `"u":true` (underline), `"x":true` (struck through) and `"p"` (`title`,
 /// `heading` or `sub`). A memo using none of them is still written as version 1, so a Mac with an
 /// older version keeps reading it; one that does is version 2, which older versions leave unread.
+/// A table row's letters carry `"tl"` (its table's id), which makes the memo version 2; its cells
+/// are split by tab letters, so a version 2 build that does not know the key shows the rows as
+/// lines of tab-split words.
 /// Lists and quotes are letters (`• `, `- `, `1. `, `> `) and need no key.
 public enum MemoText {
     static let version = 2
@@ -147,7 +158,7 @@ public enum MemoText {
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        let needsTwo = runs.contains { $0.u != nil || $0.x != nil || $0.p != nil }
+        let needsTwo = runs.contains { $0.u != nil || $0.x != nil || $0.p != nil || $0.tl != nil }
         return try? encoder.encode(Document(v: needsTwo ? version : 1, runs: runs))
     }
 
@@ -186,6 +197,7 @@ public enum MemoText {
         var u: Bool?
         var x: Bool?
         var p: String?
+        var tl: String?
         var k: Bool?
         var m: Bool?
         var s: String?
@@ -196,7 +208,7 @@ public enum MemoText {
         var tb: Bool?
 
         private enum CodingKeys: String, CodingKey {
-            case t, b, i, u, x, p, k, m, s, c, h, td, tx, tb
+            case t, b, i, u, x, p, tl, k, m, s, c, h, td, tx, tb
         }
 
         init(from decoder: any Decoder) throws {
@@ -209,6 +221,7 @@ public enum MemoText {
             u = (try? c.decodeIfPresent(Bool.self, forKey: .u)) ?? nil
             x = (try? c.decodeIfPresent(Bool.self, forKey: .x)) ?? nil
             p = (try? c.decodeIfPresent(String.self, forKey: .p)) ?? nil
+            tl = (try? c.decodeIfPresent(String.self, forKey: .tl)) ?? nil
             k = try c.decodeIfPresent(Bool.self, forKey: .k)
             m = try c.decodeIfPresent(Bool.self, forKey: .m)
             s = try c.decodeIfPresent(String.self, forKey: .s)
@@ -226,6 +239,7 @@ public enum MemoText {
             u = run[MemoAttributes.Underline.self] == true ? true : nil
             x = run[MemoAttributes.Strike.self] == true ? true : nil
             p = run[MemoAttributes.Paragraph.self]?.rawValue
+            tl = run[MemoAttributes.Table.self]
             k = run[MemoAttributes.Code.self] == true ? true : nil
             m = run[MemoAttributes.Math.self] == true ? true : nil
             s = run[MemoAttributes.Script.self]?.rawValue
@@ -239,7 +253,7 @@ public enum MemoText {
         }
 
         func sameFormatting(as other: Run) -> Bool {
-            b == other.b && i == other.i && u == other.u && x == other.x && p == other.p && k == other.k && m == other.m && s == other.s && c == other.c && h == other.h && td == other.td && tx == other.tx && tb == other.tb
+            b == other.b && i == other.i && u == other.u && x == other.x && p == other.p && tl == other.tl && k == other.k && m == other.m && s == other.s && c == other.c && h == other.h && td == other.td && tx == other.tx && tb == other.tb
         }
 
         var attributed: AttributedString {
@@ -249,6 +263,7 @@ public enum MemoText {
             if u == true { container[MemoAttributes.Underline.self] = true }
             if x == true { container[MemoAttributes.Strike.self] = true }
             container[MemoAttributes.Paragraph.self] = p.flatMap(MemoParagraph.init(rawValue:))
+            if let tl, !tl.isEmpty { container[MemoAttributes.Table.self] = tl }
             if k == true { container[MemoAttributes.Code.self] = true }
             if m == true { container[MemoAttributes.Math.self] = true }
             container[MemoAttributes.Script.self] = s.flatMap(MemoScript.init(rawValue:))
@@ -256,7 +271,14 @@ public enum MemoText {
             if k != true { container[MemoAttributes.Highlight.self] = h.flatMap(Palette.init(rawValue:)) }
             container[MemoAttributes.Todo.self] = td.flatMap(UUID.init(uuidString:)).map { MemoTodo(id: $0, isDone: tx == true) }
             if tb == true, container[MemoAttributes.Todo.self] != nil { container[MemoAttributes.TodoBox.self] = true }
-            return AttributedString(t, attributes: container)
+            var text = AttributedString(t, attributes: container)
+            // A table's mark stays off line breaks, which belong to no row.
+            if container[MemoAttributes.Table.self] != nil {
+                for index in text.characters.indices where text.characters[index].isNewline {
+                    text[index..<text.characters.index(after: index)][MemoAttributes.Table.self] = nil
+                }
+            }
+            return text
         }
     }
 }

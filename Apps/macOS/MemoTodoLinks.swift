@@ -307,6 +307,8 @@ struct MemoMenuHost: NSViewRepresentable {
             draft?.showMenu = { [weak self] in self?.showMenuUnderSelection() }
             draft?.redrawLines = { [weak self] in self?.redrawLines() }
             draft?.editLines = { [weak self] make in self?.editLines(make) ?? false }
+            draft?.editTable = { [weak self] action in self?.editTable(action) ?? false }
+            draft?.tableColumns = { [weak self] in self?.styler.textView.map(MemoTableKeys.columnCount(in:)) ?? 0 }
             draft?.openFormula = { [weak self] in self?.styler.openFormula }
             draft?.startFormula = { [weak self] location in self?.styler.startEmptyFormula(at: location) }
             // Once the text view is in the window beside this view.
@@ -327,7 +329,11 @@ struct MemoMenuHost: NSViewRepresentable {
                            self.handleFormulaKey(event, in: textView) {
                             return true
                         }
-                        // Return, Tab and Delete in lists, and a typed `* `.
+                        // Tab, Return and Delete in and under tables, then in lists, and a typed `* `.
+                        if draft.hasFocus, draft.book.todos.pop == nil, let textView = self.styler.textView, window.firstResponder === textView,
+                           MemoTableKeys.handle(event, in: textView) {
+                            return true
+                        }
                         if draft.hasFocus, draft.book.todos.pop == nil, let textView = self.styler.textView, window.firstResponder === textView,
                            MemoListKeys.handle(event, in: textView, draft: draft) {
                             return true
@@ -413,6 +419,14 @@ struct MemoMenuHost: NSViewRepresentable {
                   let change = make(textView.string, textView.selectedRange()), !change.edits.isEmpty else { return false }
             MemoListKeys.apply(change, to: textView)
             return true
+        }
+
+        /// A table change made in the memo's text view, whether or not it has keyboard focus.
+        @MainActor
+        private func editTable(_ action: MemoTableAction) -> Bool {
+            if !styler.isAttached { redrawLines() }
+            guard let textView = styler.textView else { return false }
+            return MemoTableKeys.perform(action, in: textView)
         }
 
         /// The selection's first line in this view, asked of the focused text view the way an input
@@ -521,6 +535,25 @@ struct MemoMenuHost: NSViewRepresentable {
             return true
         }
 
+        /// In a table: its rows, columns, and the table itself, as the mockup's menu, above the rest.
+        @MainActor
+        private func tableEntries(_ draft: MemoDraft) -> [InkMenuEntry] {
+            [
+                .item("위에 행 넣기") { draft.tableAction(.rowAbove) },
+                .item("아래에 행 넣기") { draft.tableAction(.rowBelow) },
+                .item("왼쪽에 열 넣기") { draft.tableAction(.columnLeft) },
+                .item("오른쪽에 열 넣기") { draft.tableAction(.columnRight) },
+                .divider,
+                .item("행 지우기") { draft.tableAction(.deleteRow) },
+                // Two columns are the least a table keeps.
+                .item("열 지우기", isEnabled: (draft.tableColumns?() ?? 0) > MemoTables.leastColumns) { draft.tableAction(.deleteColumn) },
+                .divider,
+                .item("표를 글로 바꾸기") { draft.tableAction(.toText) },
+                .item("표 지우기", isDanger: true) { draft.tableAction(.deleteTable) },
+                .divider,
+            ]
+        }
+
         /// 할 일로 만들기 › and the ToDo items, then editing and the formats the memo uses. The system's
         /// spelling, substitutions, speech and services are left out; the red underlines stay.
         @MainActor
@@ -533,7 +566,8 @@ struct MemoMenuHost: NSViewRepresentable {
                     .item(target.name, detail: TodoNames.menuDetail(target.period)) { draft.makeTodos(fromLines: lines, in: target.period) }
                 }
                 + [.divider, .item("다른 날짜…") { draft.showPop(.pickDay(.makeTodos(lines: lines))) }]
-            var entries: [InkMenuEntry] = [
+            var entries: [InkMenuEntry] = draft.isInTable ? tableEntries(draft) : []
+            entries += [
                 .submenu("할 일로 만들기", isEnabled: !lines.isEmpty, targets),
                 .item("할 일 가져오기…") { draft.askToLinkTodo() },
                 .item("시각 넣기", detail: "⌃⌘T") { draft.insertTime() },
@@ -573,6 +607,7 @@ struct MemoMenuHost: NSViewRepresentable {
                 .item("들여쓰기", detail: "⌘]") { draft.indentLines(by: 1) },
                 .item("내어쓰기", detail: "⌘[") { draft.indentLines(by: -1) },
             ]))
+            if !draft.isInTable { entries.append(.item("표 넣기") { draft.tableAction(.insert) }) }
             return entries
         }
     }

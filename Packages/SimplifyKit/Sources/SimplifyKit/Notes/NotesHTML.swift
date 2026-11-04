@@ -28,7 +28,8 @@ public enum NotesHTML {
     /// letters, since the name already takes the 메모 app's title (`<h1>`). List lines become
     /// `<ul>` (`class="Apple-dash-list"` for dashes) or `<ol>` items, a level in nested inside
     /// the list above; quote lines are a `<blockquote>`, with any list items in them inside it.
-    /// Formulas are their LaTeX in `$…$`, and a formula line's in `$$…$$`.
+    /// Formulas are their LaTeX in `$…$`, and a formula line's in `$$…$$`. A table's rows are one
+    /// `<table>`, a row's tab-split cells each a `<td>`.
     public static func body(name: String, text: AttributedString) -> String? {
         guard !MemoText.isBlank(text) else { return nil }
         let text = MemoMath.upgradingScripts(text)
@@ -36,6 +37,32 @@ public enum NotesHTML {
             let letters = String(text[range].characters)
             // A code block keeps its `- ` and `> ` as typed, as the editor shows them.
             let isCode = !range.isEmpty && text.runs[range.lowerBound][MemoAttributes.Code.self] == true
+            let table = range.isEmpty ? nil : text.runs[range.lowerBound][MemoAttributes.Table.self]
+            if let table {
+                // Cell by cell: the runs' letters split at the tabs, formulas in `$…$` within their cell.
+                var cells = [""]
+                var afterSpace = true
+                var inFormula = false
+                for run in text[range].runs {
+                    let isFormula = !isCode && run[MemoAttributes.Math.self] == true
+                    let pieces = String(text[run.range].characters).components(separatedBy: MemoTables.separator)
+                    for (index, piece) in pieces.enumerated() {
+                        if index > 0 {
+                            if inFormula { cells[cells.count - 1] += "$" }
+                            inFormula = false
+                            cells.append("")
+                            afterSpace = true
+                        }
+                        guard !piece.isEmpty else { continue }
+                        if isFormula != inFormula { cells[cells.count - 1] += "$" }
+                        inFormula = isFormula
+                        cells[cells.count - 1] += segment(piece, run: run, afterSpace: afterSpace && !isFormula)
+                        afterSpace = piece.last == " "
+                    }
+                }
+                if inFormula { cells[cells.count - 1] += "$" }
+                return Line(html: "", marker: nil, paragraph: nil, isBlank: false, table: table, cells: cells)
+            }
             let marker = isCode ? nil : MemoLists.marker(letters)
             let start = text.characters.index(range.lowerBound, offsetBy: marker.map { String(letters.utf16.prefix($0.length))!.count } ?? 0)
             var html = ""
@@ -64,7 +91,26 @@ public enum NotesHTML {
         // The lists open around the line being written, outermost first.
         var open: [(tag: String, close: String)] = []
         var inQuote = false
+        var table: String?
         for line in lines {
+            if let id = line.table {
+                while let list = open.popLast() { out.append(list.close) }
+                if inQuote {
+                    out.append("</blockquote>")
+                    inQuote = false
+                }
+                if table != id {
+                    if table != nil { out.append("</table>") }
+                    out.append("<table>")
+                    table = id
+                }
+                out.append("<tr>" + line.cells.map { "<td>\($0.isEmpty ? "<br>" : $0)</td>" }.joined() + "</tr>")
+                continue
+            }
+            if table != nil {
+                out.append("</table>")
+                table = nil
+            }
             // Into or out of a quote: the lists around end there.
             let quoted = line.marker?.isQuoted == true
             if quoted != inQuote {
@@ -94,6 +140,7 @@ public enum NotesHTML {
         }
         while let list = open.popLast() { out.append(list.close) }
         if inQuote { out.append("</blockquote>") }
+        if table != nil { out.append("</table>") }
         return out.joined(separator: "\n")
     }
 
@@ -102,6 +149,9 @@ public enum NotesHTML {
         var marker: MemoLists.Marker?
         var paragraph: MemoParagraph?
         var isBlank: Bool
+        /// A table row's table id and its cells' HTML.
+        var table: String? = nil
+        var cells: [String] = []
     }
 
     /// A line's letters in its paragraph style's tag; an empty line is a `<br>`.

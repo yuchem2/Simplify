@@ -53,6 +53,11 @@ final class MemoDraft {
     /// The formula being written, in the text view's letters (UTF-16), and starting an empty one
     /// at a place; set by `MemoMenuHost`, which draws them.
     @ObservationIgnored var openFormula: (() -> NSRange?)?
+    /// Makes a table change in the memo's text view (`MemoTableKeys.perform`); false when none was
+    /// made. Set by `MemoMenuHost`.
+    @ObservationIgnored var editTable: ((MemoTableAction) -> Bool)?
+    /// The caret's table's columns, 0 outside one; set by `MemoMenuHost`.
+    @ObservationIgnored var tableColumns: (() -> Int)?
     @ObservationIgnored var startFormula: ((Int) -> Void)?
     @ObservationIgnored private var pending: Task<Void, Never>?
     @ObservationIgnored let book: MemoBook
@@ -84,6 +89,7 @@ final class MemoDraft {
     func textChanged() {
         keepCodeBlocksWhole()
         keepParagraphsWhole()
+        keepTablesWhole()
         keepChipsWhole()
         catchSearchTrigger()
         guard text != saved else { return }
@@ -778,6 +784,8 @@ struct MemoCommands: Commands {
                     .keyboardShortcut("]", modifiers: .command)
                 Button("내어쓰기") { draft?.indentLines(by: -1) }
                     .keyboardShortcut("[", modifiers: .command)
+                // No shortcut: ⌥⌘T is the 보기 menu's toolbar item.
+                Button("표 넣기") { draft?.tableAction(.insert) }
                 Divider()
                 Button("할 일로 만들기…") { draft?.askToMakeTodos() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])

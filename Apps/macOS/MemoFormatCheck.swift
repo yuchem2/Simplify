@@ -22,7 +22,7 @@ enum MemoFormatCheck {
             return
         }
         Task {
-            await run(model: model)
+            await run(model: model, tablesOnly: mode == "tables")
             let file = FileManager.default.temporaryDirectory.appending(path: "memo-check.txt")
             try? lines.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)
             NSApp.terminate(nil)
@@ -58,7 +58,7 @@ enum MemoFormatCheck {
         log((ok ? "PASS  " : "FAIL  ") + what + (ok ? "" : "  got: \(got())"))
     }
 
-    private static func run(model: AppModel) async {
+    private static func run(model: AppModel, tablesOnly: Bool = false) async {
         let memos = MemoBook(container: try! SimplifyStore.makeContainer(inMemory: true), isSaved: true)
         let calendars = CalendarController(container: try! SimplifyStore.makeCacheContainer(inMemory: true), calendar: model.calendar)
         // The panel's remembered settings are put back at the end.
@@ -111,6 +111,12 @@ enum MemoFormatCheck {
         let tab: (UInt16, String) = (48, "\t")
         let delete: (UInt16, String) = (51, "\u{7f}")
         let space: (UInt16, String) = (49, " ")
+
+        if tablesOnly {
+            await checkTables(draft: draft, editor: editor, window: window, model: model, reset: reset, type: type, key: key)
+            window.close()
+            return
+        }
 
         // `* ` becomes a bullet; ⌘Z takes it back to the star.
         await reset()
@@ -309,6 +315,7 @@ enum MemoFormatCheck {
         log("INFO  서식 menu shortcuts: \(ours.joined(separator: ", "))")
 
         await checkFormulas(draft: draft, editor: editor, window: window, reset: reset, type: type, key: key)
+        await checkTables(draft: draft, editor: editor, window: window, model: model, reset: reset, type: type, key: key)
 
         // Pictures of every format, light and dark.
         await reset(sample())
@@ -467,6 +474,207 @@ enum MemoFormatCheck {
         text += styled("0") { $0[MemoAttributes.Math.self] = true; $0[MemoAttributes.Script.self] = .lowered }
         text += styled(" 끝")
         return MemoMath.upgradingScripts(text)
+    }
+
+    /// Tables: Tab, ⇧Tab and Return between cells, a new row from the last cell, Delete that
+    /// never takes a table apart, the right-click menu's items, 표 넣기, saving, fitting the
+    /// memo's width, and pictures.
+    private static func checkTables(draft: MemoDraft, editor: NSTextView, window: NSWindow, model: AppModel,
+                                    reset: (AttributedString, Int?) async -> Void, type: (String) async -> Void,
+                                    key: (UInt16, String, NSEvent.ModifierFlags) async -> Void) async {
+        let tab: (UInt16, String) = (48, "\t")
+        let returnKey: (UInt16, String) = (36, "\r")
+        let delete: (UInt16, String) = (51, "\u{7f}")
+        var letters: String { String(draft.text.characters) }
+        var caret: Int { editor.selectedRange().location }
+        // -100 for letters not there, so a failed step is reported rather than overflowing.
+        func at(_ words: String) -> Int { (editor.string as NSString).range(of: words).location == NSNotFound ? -100 : (editor.string as NSString).range(of: words).location }
+        func end(_ words: String) -> Int { at(words) < 0 ? -100 : NSMaxRange((editor.string as NSString).range(of: words)) }
+        /// The table id on the letter at `location` in the memo's text.
+        func mark(_ location: Int) -> String? {
+            let characters = draft.text.characters
+            guard location >= 0, location < characters.count else { return nil }
+            return draft.text.runs[characters.index(characters.startIndex, offsetBy: location)][MemoAttributes.Table.self]
+        }
+        func put(_ location: Int) async {
+            editor.setSelectedRange(NSRange(location: max(0, location), length: 0))
+            try? await Task.sleep(for: .seconds(0.3))
+        }
+        let sample = tableSample()
+        let original = String(sample.characters)
+
+        await reset(sample, nil)
+        window.makeFirstResponder(editor)
+        await put(end("디자인"))
+        await key(tab.0, tab.1, [])
+        check(caret == end("1,200,000"), "Tab goes to the next cell's end", "\(caret)")
+        await key(tab.0, tab.1, .shift)
+        check(caret == end("디자인"), "⇧Tab goes back", "\(caret)")
+        await put(end("금액"))
+        await key(returnKey.0, returnKey.1, [])
+        check(caret == end("1,200,000") && letters == original, "Return goes to the next row's same cell", "\(caret)")
+
+        // The last cell's Tab makes a new row, marked as the table's.
+        await put(end("4주"))
+        await key(tab.0, tab.1, [])
+        check(letters.contains("4주\n\t\t\n표 다음 줄"), "Tab in the last cell makes a new row", letters.debugDescription)
+        check(caret == end("4주") + 1 && mark(caret) == "t1", "the caret is in the new row's first cell, and the row is the table's",
+              "\(caret) \(String(describing: mark(caret)))")
+        await type("합계")
+        check(mark(caret - 1) == "t1", "letters typed in a cell are the table's")
+        // Korean being composed is finished before Tab moves on.
+        editor.setMarkedText("ㅎ", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        try? await Task.sleep(for: .seconds(0.3))
+        await key(tab.0, tab.1, [])
+        check(!editor.hasMarkedText() && letters.contains("합계ㅎ\t") && caret == end("합계ㅎ") + 1,
+              "Tab while composing finishes the syllable, then moves", letters.debugDescription)
+        // Return in the last row leaves the table for a new line under it.
+        await key(returnKey.0, returnKey.1, [])
+        check(letters.contains("합계ㅎ\t\t\n\n표 다음 줄") && mark(caret) == nil, "Return in the last row leaves the table", letters.debugDescription)
+        editor.undoManager?.undo()
+        try? await Task.sleep(for: .seconds(0.4))
+        check(letters.contains("합계ㅎ\t\t\n표 다음 줄"), "⌘Z takes the new line back", letters.debugDescription)
+
+        // Delete at the front of a cell, of a row and of the words under the table.
+        await reset(sample, nil)
+        window.makeFirstResponder(editor)
+        await put(at("금액"))
+        await key(delete.0, delete.1, [])
+        check(letters == original && caret == at("금액"), "Delete at a cell's front does nothing", letters.debugDescription)
+        await put(at("개발"))
+        await key(delete.0, delete.1, [])
+        check(letters == original, "Delete at a row's front does nothing", letters.debugDescription)
+        await put(at("표 다음 줄"))
+        await key(delete.0, delete.1, [])
+        check(letters == original && caret == end("4주"), "Delete under the table keeps it and goes to its last cell", "\(caret)")
+        await put(end("디자인") - 1)
+        await key(delete.0, delete.1, [])
+        check(letters.contains("디인\t1,200,000"), "Delete inside a cell's words deletes", letters.debugDescription)
+
+        // List keys and menus leave rows alone; ⇧Return is Return; forward delete never joins cells.
+        await reset(sample, nil)
+        window.makeFirstResponder(editor)
+        await put(end("디자인"))
+        await type("*")
+        await key(49, " ", [])
+        check(letters.contains("디자인* \t1,200,000"), "* and a space in a cell stay as typed", letters.debugDescription)
+        await reset(sample, nil)
+        window.makeFirstResponder(editor)
+        await put(end("금액"))
+        await key(returnKey.0, returnKey.1, .shift)
+        check(letters == original && caret == end("1,200,000"), "⇧Return in a cell is Return", "\(caret)")
+        await key(117, "\u{F728}", [])
+        check(letters == original, "forward delete at a cell's end does nothing", letters.debugDescription)
+        draft.indentLines(by: 1)
+        try? await Task.sleep(for: .seconds(0.3))
+        check(letters == original, "⌘] leaves a table row alone", letters.debugDescription)
+
+        // The right-click menu's items.
+        func menu(_ action: MemoTableAction, after words: String) async {
+            await reset(sample, nil)
+            window.makeFirstResponder(editor)
+            await put(end(words))
+            draft.tableAction(action)
+            try? await Task.sleep(for: .seconds(0.4))
+        }
+        await menu(.rowAbove, after: "디자인")
+        check(letters.contains("메모\n\t\t\n디자인") && mark(caret) == "t1", "위에 행 넣기", letters.debugDescription)
+        await menu(.rowBelow, after: "디자인")
+        check(letters.contains("시안 2종\n\t\t\n개발"), "아래에 행 넣기", letters.debugDescription)
+        await menu(.columnLeft, after: "금액")
+        check(letters.contains("항목\t\t금액\t메모\n디자인\t\t1,200,000"), "왼쪽에 열 넣기", letters.debugDescription)
+        await menu(.columnRight, after: "금액")
+        check(letters.contains("항목\t금액\t\t메모\n디자인\t1,200,000\t\t시안"), "오른쪽에 열 넣기", letters.debugDescription)
+        check(mark(at("\t\t메모") + 1) == "t1", "a new column's tabs are the table's")
+        await menu(.deleteRow, after: "디자인")
+        check(letters.contains("메모\n개발") && !letters.contains("디자인"), "행 지우기", letters.debugDescription)
+        await menu(.deleteColumn, after: "금액")
+        check(letters.contains("항목\t메모\n디자인\t시안 2종\n개발\t4주"), "열 지우기", letters.debugDescription)
+        await menu(.toText, after: "금액")
+        check(letters == original && mark(at("항목")) == nil && mark(at("넓은 표")) == "t2", "표를 글로 바꾸기 keeps the letters, not the table",
+              "\(letters.debugDescription) \(String(describing: mark(at("항목"))))")
+        await menu(.deleteTable, after: "금액")
+        check(letters.hasPrefix("비용\n표 다음 줄"), "표 지우기", letters.debugDescription)
+        editor.undoManager?.undo()
+        try? await Task.sleep(for: .seconds(0.4))
+        check(letters == original, "⌘Z brings the table back", letters.debugDescription)
+
+        // 표 넣기: two by two on an empty line, under a line with words; not inside a table.
+        await reset(AttributedString("위\n\n아래"), 2)
+        draft.tableAction(.insert)
+        try? await Task.sleep(for: .seconds(0.4))
+        check(letters == "위\n\t\n\t\n아래" && mark(2) != nil && mark(2) == mark(4) && mark(3) == nil && caret == 2,
+              "표 넣기 on an empty line", letters.debugDescription)
+        await reset(AttributedString("위에 글"), 2)
+        draft.tableAction(.insert)
+        try? await Task.sleep(for: .seconds(0.4))
+        check(letters == "위에 글\n\t\n\t" && caret == 5, "표 넣기 under a line with words", letters.debugDescription)
+        let saved = MemoText.encode(draft.text).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        check(saved.contains(#""tl":""#) && saved.contains(#""v":2"#) && !saved.contains(#""tb""#), "saved under tl, version 2", saved)
+
+        // Wide tables stay within the memo, wide panel and normal.
+        await reset(sample, nil)
+        window.makeFirstResponder(editor)
+        await put(at("둘째 칸") + 4)
+        func widest() -> (table: CGFloat, room: CGFloat) {
+            guard let layout = editor.textLayoutManager, let container = editor.textContainer else { return (0, 0) }
+            var widest: CGFloat = 0
+            layout.enumerateTextLayoutFragments(from: layout.documentRange.location, options: [.ensuresLayout]) { fragment in
+                if let paragraph = fragment.textElement as? NSTextParagraph, paragraph.attributedString.length > 0,
+                   let look = paragraph.attributedString.attribute(.memoTable, at: 0, effectiveRange: nil) as? TableRowLook {
+                    widest = max(widest, look.width)
+                }
+                return true
+            }
+            return (widest, container.size.width - container.lineFragmentPadding * 2)
+        }
+        let wide = widest()
+        check(wide.table > 0 && wide.table <= wide.room, "a wide table fits the wide memo", "\(wide)")
+        capture(window, "table")
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        try? await Task.sleep(for: .seconds(0.6))
+        capture(window, "table-dark")
+        NSApp.appearance = nil
+        model.panelMode = .normal
+        try? await Task.sleep(for: .seconds(0.8))
+        let narrow = widest()
+        check(narrow.table > 0 && narrow.table <= narrow.room && narrow.room < wide.room, "and the normal one, fitted again", "\(narrow)")
+        capture(window, "table-narrow")
+        await put(end("넷째 칸도 길게 써 두었어요"))
+        try? await Task.sleep(for: .seconds(0.4))
+        capture(window, "table-narrow-caret")
+        // The caret past what fits: the letters before it show, after a `…`.
+        await put(end("보는 줄이에요"))
+        try? await Task.sleep(for: .seconds(0.4))
+        capture(window, "table-narrow-tail")
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        try? await Task.sleep(for: .seconds(0.6))
+        capture(window, "table-narrow-dark")
+        NSApp.appearance = nil
+        draft.showsParagraphBar = true
+        try? await Task.sleep(for: .seconds(0.6))
+        capture(window, "table-aa")
+        draft.showsParagraphBar = false
+        model.panelMode = .wide
+        try? await Task.sleep(for: .seconds(0.4))
+    }
+
+    /// The mockup's cost table, a wide one, and words around them.
+    private static func tableSample() -> AttributedString {
+        func row(_ string: String, _ id: String) -> AttributedString {
+            var container = AttributeContainer()
+            container[MemoAttributes.Table.self] = id
+            return AttributedString(string, attributes: container)
+        }
+        var text = AttributedString("비용\n")
+        text += row("항목\t금액\t메모", "t1") + AttributedString("\n")
+        text += row("디자인\t1,200,000\t시안 2종", "t1") + AttributedString("\n")
+        text += row("개발\t3,400,000\t4주", "t1") + AttributedString("\n")
+        text += AttributedString("표 다음 줄\n")
+        text += row("넓은 표\t둘째 칸에 아주 긴 글을 써서 메모 폭을 넘기면 어떻게 되는지 보는 줄이에요\t셋째\t넷째 칸도 길게 써 두었어요", "t2") + AttributedString("\n")
+        text += row("\t\t\t", "t2") + AttributedString("\n")
+        text += AttributedString("끝")
+        return text
     }
 
     /// The mockup's memo: a title, headings, numbers to three levels, bullets, a dash, a quote,

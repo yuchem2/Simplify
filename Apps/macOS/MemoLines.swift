@@ -62,6 +62,17 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     /// What the tips were placed for: the letters, the formula being written and the width.
     private var tipsPlacedFor: (letters: Int, open: NSRange?, width: CGFloat)?
 
+    /// The table cell the caret is in, drawn in an ink box.
+    private(set) var tableCaret: TableCaret?
+    /// The column edges each table was last drawn with, by id: when typing changes them, the
+    /// table's other rows are made again too.
+    private var tableEdges: [String: [CGFloat]] = [:]
+    /// Each table's measured edges and what they were measured from, so its rows share one measure.
+    var measuredTables: [String: (letters: NSAttributedString, width: CGFloat?, edges: [CGFloat])] = [:]
+    /// The memo's line width tables were last fitted into.
+    private var fittedWidth: CGFloat?
+    private var frameObserver: NSObjectProtocol?
+
     /// The text view it draws for is still in a window.
     var isAttached: Bool { textView?.window != nil }
 
@@ -73,6 +84,14 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         self.textView = textView
         storage.delegate = self
         layout.delegate = self
+        // A wider or narrower memo fits its tables again.
+        textView.postsFrameChangedNotifications = true
+        if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+        frameObserver = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: textView, queue: .main) { [weak self] _ in
+            // After the text view has resized its container to the new frame.
+            DispatchQueue.main.async { self?.refitTables() }
+        }
+        fittedWidth = tableWidth
         update(force: true)
     }
 
@@ -83,8 +102,17 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         let widened = Self.hasRange(in: string)
         var rule: NSRange?
         var formula: NSRange?
+        var cell: TableCaret?
+        var table: (id: String, rows: [NSRange])?
+        if let caret = textView.selectedRanges.first?.rangeValue, let found = Self.table(in: text, at: min(caret.location, text.length)) {
+            table = found
+        }
         if textView.window?.firstResponder === textView, let caret = textView.selectedRanges.first?.rangeValue {
             let paragraph = (string as NSString).paragraphRange(for: NSRange(location: caret.location, length: 0))
+            if caret.length == 0, let table, let row = table.rows.first(where: { caret.location >= $0.location && caret.location <= NSMaxRange($0) }),
+               let column = MemoTables.cellRanges(of: row, in: string as NSString).firstIndex(where: { caret.location <= NSMaxRange($0) }) {
+                cell = TableCaret(row: row, column: column, location: caret.location)
+            }
             if MemoTimeline.isRule(Self.line(string, paragraph)) { rule = paragraph }
             let formulas = Self.formulas(in: text, paragraph: paragraph)
             // Left until the caret moves away from the formula.
@@ -105,8 +133,24 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             showPeek()
             placeTips()
         }
-        guard force || widened != hasRange || rule != openRule || formula != openFormula else { return }
+        // The caret's table, when typing changed its columns: all its rows are made again.
+        var grown: NSRange?
+        if let table, let first = table.rows.first, let last = table.rows.last {
+            let edges = edges(of: table, in: text)
+            if tableEdges[table.id] != edges {
+                if tableEdges[table.id] != nil { grown = NSRange(location: first.location, length: NSMaxRange(last) - first.location) }
+                tableEdges[table.id] = edges
+            }
+        }
+        let cellMoved = cell != tableCaret
+        guard force || widened != hasRange || rule != openRule || formula != openFormula || cellMoved || grown != nil else { return }
         var changed: [NSRange] = force || widened != hasRange ? [NSRange(location: 0, length: text.length)] : [openRule, rule].compactMap { $0 }
+        if !force, widened == hasRange {
+            changed += [grown, tableCaret?.row, cell?.row].compactMap { range in
+                range.flatMap { NSMaxRange($0) <= text.length ? (string as NSString).paragraphRange(for: $0) : nil }
+            }
+        }
+        tableCaret = cell
         if !force, widened == hasRange, formula != openFormula {
             // The paragraphs the formula was or is in, as they are now.
             changed += [openFormula, formula].compactMap { range in
@@ -121,6 +165,23 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         }
         // Laid out now, so the paragraphs made again show even with no edit or scroll to follow.
         if !changed.isEmpty { textView.textLayoutManager?.textViewportLayoutController.layoutViewport() }
+    }
+
+    /// After the memo's width changed: every table is fitted again.
+    private func refitTables() {
+        guard let textView, let storage = textView.textContentStorage, let text = storage.textStorage else { return }
+        let width = tableWidth
+        guard width != fittedWidth else { return }
+        fittedWidth = width
+        let spans = Self.tableSpans(in: text)
+        guard !spans.isEmpty else { return }
+        tableEdges = [:]
+        measuredTables = [:]
+        for span in spans {
+            let range = (text.string as NSString).paragraphRange(for: span)
+            storage.processEditing(for: text, edited: .editedAttributes, range: range, changeInLength: 0, invalidatedRange: range)
+        }
+        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
     }
 
     // MARK: Formulas
@@ -297,6 +358,10 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     private func paragraph(_ storage: NSTextContentStorage, _ range: NSRange) -> NSTextParagraph? {
         guard let text = storage.textStorage, NSMaxRange(range) <= text.length, range.length > 0 else { return nil }
         let line = Self.line(text.string, range)
+        // A table row is drawn as one even when its letters are code.
+        if let row = tableParagraph(text, range, caret: tableCaret) {
+            return NSTextParagraph(attributedString: row)
+        }
         // A code block keeps its own face.
         if text.attribute(.font, at: range.location, effectiveRange: nil).map({ ($0 as? NSFont)?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true }) == true {
             return nil
@@ -500,6 +565,9 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
                                        in textElement: NSTextElement) -> NSTextLayoutFragment {
         let range = textElement.elementRange
         if let paragraph = textElement as? NSTextParagraph, paragraph.attributedString.length > 0 {
+            if paragraph.attributedString.attribute(.memoTable, at: 0, effectiveRange: nil) != nil {
+                return TableFragment(textElement: textElement, range: range)
+            }
             if paragraph.attributedString.attribute(.memoRule, at: 0, effectiveRange: nil) != nil {
                 return RuleFragment(textElement: textElement, range: range)
             }

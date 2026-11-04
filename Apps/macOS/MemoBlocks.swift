@@ -24,7 +24,8 @@ extension MemoDraft {
     /// 서식 › 글머리 기호·대시·번호 목록, 인용문, and the 문단 bar: the selection's lines become
     /// that kind, or plain lines again when they all are.
     func setList(_ kind: MemoLists.Kind) {
-        guard !isUnreadable, editLines?({ MemoLists.setKind(kind, in: $0, selection: $1) }) == true else {
+        // A table row's leading tab is a cell, not a level.
+        guard !isUnreadable, !touchesTable, editLines?({ MemoLists.setKind(kind, in: $0, selection: $1) }) == true else {
             NSSound.beep()
             return
         }
@@ -33,7 +34,7 @@ extension MemoDraft {
 
     /// ⌘] and ⌘[: list items a level in or out, other lines by a leading tab.
     func indentLines(by step: Int) {
-        guard !isUnreadable, editLines?({ MemoLists.indent(in: $0, selection: $1, by: step, listsOnly: false) }) == true else {
+        guard !isUnreadable, !touchesTable, editLines?({ MemoLists.indent(in: $0, selection: $1, by: step, listsOnly: false) }) == true else {
             NSSound.beep()
             return
         }
@@ -69,6 +70,8 @@ enum MemoListKeys {
         guard [returnKey, enterKey, tabKey, deleteKey, spaceKey].contains(code), modifiers.isEmpty || (code == tabKey && modifiers == .shift) else {
             return false
         }
+        // A table row's tabs and letters are cells; the table keys handle what they need.
+        if let storage = textView.textStorage, MemoLineStyler.table(in: storage, at: textView.selectedRange().location) != nil { return false }
         if code == spaceKey {
             // The space goes in first, as typed; a `* ` it made becomes `• ` as a step of its own.
             if !textView.hasMarkedText(), startsWithStar(textView), !isCode(at: textView.selectedRange().location, in: textView) {
@@ -232,6 +235,9 @@ struct MemoParagraphBar: View {
                 square("–", "대시 목록", "⌘⇧8", isOn: kind == .dash) { draft.setList(.dash) }
                 square("1.", "번호 목록", "⌘⇧9", isOn: kind == .number, font: TextStyle.cell.font) { draft.setList(.number) }
                 square("❝", "인용문", "⌘'", isOn: draft.isQuoted) { draft.setList(.quote) }
+                Rectangle().fill(.ink).frame(width: Metrics.line, height: 18).padding(.horizontal, Metrics.spaceXxs)
+                wide("표", "표 넣기", nil, isOn: false, font: TextStyle.body.font) { draft.tableAction(.insert) }
+                    .disabled(draft.isInTable)
             }
         }
         .padding(Metrics.spaceM)
@@ -245,7 +251,7 @@ struct MemoParagraphBar: View {
         Text(title).textStyle(.cell).foregroundStyle(.inkSoft).frame(width: 30, alignment: .leading)
     }
 
-    private func wide(_ title: String, _ name: String, _ shortcut: String, isOn: Bool, font: Font, action: @escaping () -> Void) -> some View {
+    private func wide(_ title: String, _ name: String, _ shortcut: String?, isOn: Bool, font: Font, action: @escaping () -> Void) -> some View {
         Button(action: pick(action)) {
             Text(title)
                 .font(font)
@@ -256,7 +262,7 @@ struct MemoParagraphBar: View {
         }
         .buttonStyle(FormatButtonStyle(isOn: isOn))
         .focusable(false)
-        .help("\(name) (\(shortcut))")
+        .help(shortcut.map { "\(name) (\($0))" } ?? name)
         .accessibilityLabel(name)
         .accessibilityAddTraits(isOn ? .isSelected : [])
     }
