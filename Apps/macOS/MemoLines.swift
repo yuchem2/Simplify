@@ -72,6 +72,15 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     /// The memo's line width tables were last fitted into.
     private var fittedWidth: CGFloat?
     private var frameObserver: NSObjectProtocol?
+    /// The picked card's letter, drawn with an ink outline: a clicked card (the caret then stands
+    /// just after it, so no selection grey shows around it), or one selected on its own.
+    private(set) var pickedAttachment: Int?
+    /// The card last clicked, picked while the caret stays where the click put it.
+    var clickedAttachment: Int?
+    /// The note under the caret, and what takes it away.
+    private var notice: MemoNoticeView?
+    private var noticeTask: Task<Void, Never>?
+    private var shelfObserver: NSObjectProtocol?
 
     /// The text view it draws for is still in a window.
     var isAttached: Bool { textView?.window != nil }
@@ -92,6 +101,12 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             DispatchQueue.main.async { self?.refitTables() }
         }
         fittedWidth = tableWidth
+        // A file arrived or went: its card is drawn again.
+        if shelfObserver == nil {
+            shelfObserver = NotificationCenter.default.addObserver(forName: AttachmentShelf.didChange, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.update(force: true) }
+            }
+        }
         update(force: true)
     }
 
@@ -104,6 +119,15 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         var formula: NSRange?
         var cell: TableCaret?
         var table: (id: String, rows: [NSRange])?
+        var picked: Int?
+        if textView.window?.firstResponder === textView, let caret = textView.selectedRanges.first?.rangeValue {
+            if caret.length == 0, let clicked = clickedAttachment, caret.location == clicked + 1, Self.attachmentRef(in: text, at: clicked) != nil {
+                picked = clicked
+            } else if caret.length == 1, NSMaxRange(caret) <= text.length, Self.attachmentRef(in: text, at: caret.location) != nil {
+                picked = caret.location
+            }
+        }
+        if picked == nil || picked != clickedAttachment { clickedAttachment = nil }
         if let caret = textView.selectedRanges.first?.rangeValue, let found = Self.table(in: text, at: min(caret.location, text.length)) {
             table = found
         }
@@ -143,7 +167,8 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             }
         }
         let cellMoved = cell != tableCaret
-        guard force || widened != hasRange || rule != openRule || formula != openFormula || cellMoved || grown != nil else { return }
+        let pickMoved = picked != pickedAttachment
+        guard force || widened != hasRange || rule != openRule || formula != openFormula || cellMoved || grown != nil || pickMoved else { return }
         var changed: [NSRange] = force || widened != hasRange ? [NSRange(location: 0, length: text.length)] : [openRule, rule].compactMap { $0 }
         if !force, widened == hasRange {
             changed += [grown, tableCaret?.row, cell?.row].compactMap { range in
@@ -151,6 +176,12 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             }
         }
         tableCaret = cell
+        if !force, widened == hasRange, pickMoved {
+            changed += [pickedAttachment, picked].compactMap { location in
+                location.flatMap { $0 < text.length ? (string as NSString).paragraphRange(for: NSRange(location: $0, length: 0)) : nil }
+            }
+        }
+        pickedAttachment = picked
         if !force, widened == hasRange, formula != openFormula {
             // The paragraphs the formula was or is in, as they are now.
             changed += [openFormula, formula].compactMap { range in
@@ -364,7 +395,7 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         }
         // A code block keeps its own face.
         if text.attribute(.font, at: range.location, effectiveRange: nil).map({ ($0 as? NSFont)?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true }) == true {
-            return nil
+            return dressAttachments(nil, text, range).map(NSTextParagraph.init(attributedString:))
         }
         // The caret as it is now: during an edit the rule's range has already moved.
         if MemoTimeline.isRule(line), !caretIsIn(range) {
@@ -376,7 +407,87 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             return NSTextParagraph(attributedString: shown)
         }
         let shown = MemoTimeline.stampLength(line).map { stampParagraph(text, range, line, $0) } ?? blockParagraph(text, range, line)
-        return dressFormulas(shown, text, range).map(NSTextParagraph.init(attributedString:))
+        return dressAttachments(dressFormulas(shown, text, range), text, range).map(NSTextParagraph.init(attributedString:))
+    }
+
+    // MARK: Attachments
+
+    /// The paragraph's attachments drawn in place of their letters (`AttachmentCard`). The letter
+    /// itself stays, so the caret's places are the text's. Nil when it has none and nothing else changed.
+    private func dressAttachments(_ shown: NSMutableAttributedString?, _ text: NSTextStorage, _ range: NSRange) -> NSMutableAttributedString? {
+        var found: [(offset: Int, ref: MemoAttachments.Ref)] = []
+        text.enumerateAttribute(Self.attachmentKey, in: range) { value, part, _ in
+            guard let value = value as? String, let ref = MemoAttachments.Ref(value: value) else { return }
+            let letters = (text.string as NSString).substring(with: part) as NSString
+            for index in 0..<letters.length where letters.character(at: index) == 0xFFFC {
+                found.append((part.location + index - range.location, ref))
+            }
+        }
+        guard !found.isEmpty else { return shown }
+        let shown = shown ?? NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
+        guard shown.length == range.length else { return shown }
+        let shelf = AttachmentShelf.shared
+        for item in found {
+            let state = shelf.state(item.ref)
+            let look = CardLook(ref: item.ref, state: state, isPicked: pickedAttachment == range.location + item.offset,
+                                pictureSize: shelf.image(item.ref)?.size)
+            let at = NSRange(location: item.offset, length: 1)
+            shown.addAttribute(.attachment, value: AttachmentCard(look: look), range: at)
+            // No highlighter or selection grey behind the drawing.
+            shown.removeAttribute(.backgroundColor, range: at)
+        }
+        // The line grows to the drawing; a line of words beside it keeps the memo's height at least.
+        let style = ((shown.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        style.minimumLineHeight = max(style.minimumLineHeight, MemoStyle.lineHeight)
+        style.maximumLineHeight = 0
+        shown.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: shown.length))
+        return shown
+    }
+
+    /// The attachment a letter of the text view stands for.
+    static func attachmentRef(in text: NSAttributedString, at location: Int) -> MemoAttachments.Ref? {
+        guard location < text.length, (text.string as NSString).character(at: location) == 0xFFFC else { return nil }
+        return (text.attribute(attachmentKey, at: location, effectiveRange: nil) as? String).flatMap(MemoAttachments.Ref.init(value:))
+    }
+
+    /// The drawn attachment under a point in the text view: its letter's place and file.
+    func attachment(at point: CGPoint) -> (location: Int, ref: MemoAttachments.Ref)? {
+        guard let textView, let text = textView.textStorage else { return nil }
+        var hit: (location: Int, ref: MemoAttachments.Ref)?
+        text.enumerateAttribute(Self.attachmentKey, in: NSRange(location: 0, length: text.length)) { value, part, stop in
+            guard value != nil else { return }
+            for location in part.location..<NSMaxRange(part) {
+                guard let ref = Self.attachmentRef(in: text, at: location) else { continue }
+                if frames(of: NSRange(location: location, length: 1)).contains(where: { $0.contains(point) }) {
+                    hit = (location, ref)
+                    stop.pointee = true
+                    return
+                }
+            }
+        }
+        return hit
+    }
+
+    /// A short note under the caret for a few seconds.
+    func showNotice(_ words: String) {
+        guard let textView else { return }
+        noticeTask?.cancel()
+        notice?.removeFromSuperview()
+        let view = MemoNoticeView(words)
+        let size = view.fittingSize
+        let caret = textView.selectedRange().location
+        let line = frames(of: NSRange(location: min(caret, (textView.string as NSString).length), length: 0)).last
+            ?? CGRect(x: 0, y: textView.visibleRect.minY + Metrics.spaceS, width: 0, height: 0)
+        let x = min(max(0, line.minX), max(0, textView.bounds.width - size.width - Metrics.spaceS))
+        view.frame = CGRect(x: x, y: line.maxY + Metrics.spaceXs, width: size.width, height: size.height)
+        textView.addSubview(view)
+        notice = view
+        noticeTask = Task { @MainActor [weak self, weak view] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            view?.removeFromSuperview()
+            if self?.notice === view { self?.notice = nil }
+        }
     }
 
     /// A timeline line: the time in figures and soft ink, the words from a column after it.
@@ -616,6 +727,7 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     private static let inkKey = NSAttributedString.Key(MemoAttributes.Ink.name)
     private static let mathKey = NSAttributedString.Key(MemoAttributes.Math.name)
     private static let codeKey = NSAttributedString.Key(MemoAttributes.Code.name)
+    static let attachmentKey = NSAttributedString.Key(MemoAttributes.Attachment.name)
 
     /// A formula's LaTeX while written or unreadable: the code block's face.
     nonisolated static let latexSize: CGFloat = 13

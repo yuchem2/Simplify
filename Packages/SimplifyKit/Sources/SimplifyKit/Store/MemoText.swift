@@ -43,6 +43,13 @@ public enum MemoAttributes {
         public static let name = "simplify.memo.table"
     }
 
+    /// An attached file: the one placeholder letter (`MemoAttachments.placeholder`) that stands
+    /// for it, its value `<id>/<original name>`, the file's place under `Attachments/`.
+    public enum Attachment: CodableAttributedStringKey {
+        public typealias Value = String
+        public static let name = "simplify.memo.attachment"
+    }
+
     /// Formula lettering: an italic serif.
     public enum Math: CodableAttributedStringKey {
         public typealias Value = Bool
@@ -110,6 +117,7 @@ public extension AttributeScopes {
         public let paragraph: MemoAttributes.Paragraph
         public let code: MemoAttributes.Code
         public let table: MemoAttributes.Table
+        public let attachment: MemoAttributes.Attachment
         public let math: MemoAttributes.Math
         public let script: MemoAttributes.Script
         public let ink: MemoAttributes.Ink
@@ -141,6 +149,8 @@ public extension AttributeDynamicLookup {
 /// A table row's letters carry `"tl"` (its table's id), which makes the memo version 2; its cells
 /// are split by tab letters, so a version 2 build that does not know the key shows the rows as
 /// lines of tab-split words.
+/// An attached file is one placeholder letter carrying `"fa"` (`<id>/<original name>`), which
+/// makes the memo version 2 too; a build that does not know the key shows the bare letter.
 /// Lists and quotes are letters (`• `, `- `, `1. `, `> `) and need no key.
 public enum MemoText {
     static let version = 2
@@ -158,7 +168,7 @@ public enum MemoText {
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        let needsTwo = runs.contains { $0.u != nil || $0.x != nil || $0.p != nil || $0.tl != nil }
+        let needsTwo = runs.contains { $0.u != nil || $0.x != nil || $0.p != nil || $0.tl != nil || $0.fa != nil }
         return try? encoder.encode(Document(v: needsTwo ? version : 1, runs: runs))
     }
 
@@ -198,6 +208,7 @@ public enum MemoText {
         var x: Bool?
         var p: String?
         var tl: String?
+        var fa: String?
         var k: Bool?
         var m: Bool?
         var s: String?
@@ -208,7 +219,7 @@ public enum MemoText {
         var tb: Bool?
 
         private enum CodingKeys: String, CodingKey {
-            case t, b, i, u, x, p, tl, k, m, s, c, h, td, tx, tb
+            case t, b, i, u, x, p, tl, fa, k, m, s, c, h, td, tx, tb
         }
 
         init(from decoder: any Decoder) throws {
@@ -222,6 +233,7 @@ public enum MemoText {
             x = (try? c.decodeIfPresent(Bool.self, forKey: .x)) ?? nil
             p = (try? c.decodeIfPresent(String.self, forKey: .p)) ?? nil
             tl = (try? c.decodeIfPresent(String.self, forKey: .tl)) ?? nil
+            fa = (try? c.decodeIfPresent(String.self, forKey: .fa)) ?? nil
             k = try c.decodeIfPresent(Bool.self, forKey: .k)
             m = try c.decodeIfPresent(Bool.self, forKey: .m)
             s = try c.decodeIfPresent(String.self, forKey: .s)
@@ -240,6 +252,7 @@ public enum MemoText {
             x = run[MemoAttributes.Strike.self] == true ? true : nil
             p = run[MemoAttributes.Paragraph.self]?.rawValue
             tl = run[MemoAttributes.Table.self]
+            fa = run[MemoAttributes.Attachment.self]
             k = run[MemoAttributes.Code.self] == true ? true : nil
             m = run[MemoAttributes.Math.self] == true ? true : nil
             s = run[MemoAttributes.Script.self]?.rawValue
@@ -253,7 +266,7 @@ public enum MemoText {
         }
 
         func sameFormatting(as other: Run) -> Bool {
-            b == other.b && i == other.i && u == other.u && x == other.x && p == other.p && tl == other.tl && k == other.k && m == other.m && s == other.s && c == other.c && h == other.h && td == other.td && tx == other.tx && tb == other.tb
+            b == other.b && i == other.i && u == other.u && x == other.x && p == other.p && tl == other.tl && fa == other.fa && k == other.k && m == other.m && s == other.s && c == other.c && h == other.h && td == other.td && tx == other.tx && tb == other.tb
         }
 
         var attributed: AttributedString {
@@ -264,6 +277,8 @@ public enum MemoText {
             if x == true { container[MemoAttributes.Strike.self] = true }
             container[MemoAttributes.Paragraph.self] = p.flatMap(MemoParagraph.init(rawValue:))
             if let tl, !tl.isEmpty { container[MemoAttributes.Table.self] = tl }
+            // Only a well-formed value on the placeholder letter, below.
+            let attachment = fa.flatMap(MemoAttachments.Ref.init(value:))
             if k == true { container[MemoAttributes.Code.self] = true }
             if m == true { container[MemoAttributes.Math.self] = true }
             container[MemoAttributes.Script.self] = s.flatMap(MemoScript.init(rawValue:))
@@ -276,6 +291,11 @@ public enum MemoText {
             if container[MemoAttributes.Table.self] != nil {
                 for index in text.characters.indices where text.characters[index].isNewline {
                     text[index..<text.characters.index(after: index)][MemoAttributes.Table.self] = nil
+                }
+            }
+            if let attachment {
+                for index in text.characters.indices where text.characters[index] == MemoAttachments.placeholder {
+                    text[index..<text.characters.index(after: index)][MemoAttributes.Attachment.self] = attachment.value
                 }
             }
             return text

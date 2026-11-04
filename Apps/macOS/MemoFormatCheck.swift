@@ -22,7 +22,7 @@ enum MemoFormatCheck {
             return
         }
         Task {
-            await run(model: model, tablesOnly: mode == "tables")
+            await run(model: model, only: mode)
             let file = FileManager.default.temporaryDirectory.appending(path: "memo-check.txt")
             try? lines.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)
             NSApp.terminate(nil)
@@ -58,7 +58,8 @@ enum MemoFormatCheck {
         log((ok ? "PASS  " : "FAIL  ") + what + (ok ? "" : "  got: \(got())"))
     }
 
-    private static func run(model: AppModel, tablesOnly: Bool = false) async {
+    private static func run(model: AppModel, only: String) async {
+        let tablesOnly = only == "tables"
         let memos = MemoBook(container: try! SimplifyStore.makeContainer(inMemory: true), isSaved: true)
         let calendars = CalendarController(container: try! SimplifyStore.makeCacheContainer(inMemory: true), calendar: model.calendar)
         // The panel's remembered settings are put back at the end.
@@ -112,6 +113,11 @@ enum MemoFormatCheck {
         let delete: (UInt16, String) = (51, "\u{7f}")
         let space: (UInt16, String) = (49, " ")
 
+        if only == "attachments" {
+            await checkAttachments(draft: draft, editor: editor, window: window, reset: reset, key: key)
+            window.close()
+            return
+        }
         if tablesOnly {
             await checkTables(draft: draft, editor: editor, window: window, model: model, reset: reset, type: type, key: key)
             window.close()
@@ -316,6 +322,7 @@ enum MemoFormatCheck {
 
         await checkFormulas(draft: draft, editor: editor, window: window, reset: reset, type: type, key: key)
         await checkTables(draft: draft, editor: editor, window: window, model: model, reset: reset, type: type, key: key)
+        await checkAttachments(draft: draft, editor: editor, window: window, reset: reset, key: key)
 
         // Pictures of every format, light and dark.
         await reset(sample())
@@ -700,12 +707,303 @@ enum MemoFormatCheck {
         return text
     }
 
+    /// Attachments, in a test folder in place of the App Group's: put in from a file, a drop and
+    /// a pasted picture, 25 MB refused, pictures and cards drawn, the three states, click, double-click
+    /// and Space, the card's menu, removal and clearing away, ⌘C, and under a table.
+    private static func checkAttachments(draft: MemoDraft, editor: NSTextView, window: NSWindow, reset: (AttributedString, Int?) async -> Void,
+                                         key: (UInt16, String, NSEvent.ModifierFlags) async -> Void) async {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appending(path: "memo-check-attachments", directoryHint: .isDirectory)
+        try? fm.removeItem(at: folder)
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let shelf = AttachmentShelf.shared
+        let realStore = shelf.store
+        shelf.store = AttachmentStore(root: folder.appending(path: "Attachments", directoryHint: .isDirectory))
+        defer { shelf.store = realStore }
+        check(shelf.store.root.path.hasPrefix(fm.temporaryDirectory.path), "attachments go to a test folder", shelf.store.root.path)
+
+        // Files to attach: a PDF, a wide picture, and one over the limit.
+        let pdf = folder.appending(path: "견적서_v3.pdf")
+        try? Data(repeating: 0x25, count: 248_000).write(to: pdf)
+        let png = folder.appending(path: "화면 캡처 2026-11-03.png")
+        let picture = NSImage(size: NSSize(width: 1600, height: 700), flipped: false) { rect in
+            NSColor(calibratedRed: 0.55, green: 0.68, blue: 0.9, alpha: 1).setFill()
+            rect.fill()
+            NSColor.white.setFill()
+            NSRect(x: 120, y: 120, width: 900, height: 460).fill()
+            return true
+        }
+        if let tiff = picture.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) { try? rep.representation(using: .png, properties: [:])?.write(to: png) }
+        let big = folder.appending(path: "디자인_원본.zip")
+        fm.createFile(atPath: big.path, contents: nil)
+        if let handle = try? FileHandle(forWritingTo: big) {
+            try? handle.truncate(atOffset: UInt64(MemoAttachments.limit + 1))
+            try? handle.close()
+        }
+        var letters: String { String(draft.text.characters) }
+        func found() -> [MemoAttachments.Ref] { MemoAttachments.attachments(in: draft.text).map(\.ref) }
+        /// The card drawn for the attachment letter at `location`.
+        func card(at location: Int) -> AttachmentCard? {
+            guard let layout = editor.textLayoutManager, let storage = editor.textContentStorage,
+                  let place = storage.location(storage.documentRange.location, offsetBy: location),
+                  let fragment = layout.textLayoutFragment(for: place), let paragraph = fragment.textElement as? NSTextParagraph else { return nil }
+            let offset = storage.offset(from: fragment.rangeInElement.location, to: place)
+            guard offset >= 0, offset < paragraph.attributedString.length else { return nil }
+            return paragraph.attributedString.attribute(.attachment, at: offset, effectiveRange: nil) as? AttachmentCard
+        }
+        func placeholder(_ number: Int = 0) -> Int {
+            let string = editor.string as NSString
+            var at = 0, seen = 0
+            while at < string.length {
+                let found = string.range(of: String(MemoAttachments.placeholder), range: NSRange(location: at, length: string.length - at))
+                guard found.location != NSNotFound else { return -1 }
+                if seen == number { return found.location }
+                seen += 1
+                at = NSMaxRange(found)
+            }
+            return -1
+        }
+        func click(_ location: Int, count: Int) async {
+            guard let frame = editor.textLayoutManager.flatMap({ _ in cardFrame(location) }) else { return }
+            let point = editor.convert(CGPoint(x: frame.midX, y: frame.midY), to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 1)!
+                NSApp.postEvent(event, atStart: false)
+            }
+            try? await Task.sleep(for: .seconds(0.5))
+        }
+        func cardFrame(_ location: Int) -> CGRect? {
+            guard let layout = editor.textLayoutManager, let storage = editor.textContentStorage,
+                  let start = storage.location(storage.documentRange.location, offsetBy: location),
+                  let end = storage.location(start, offsetBy: 1), let range = NSTextRange(location: start, end: end) else { return nil }
+            var frame: CGRect?
+            layout.enumerateTextSegments(in: range, type: .standard, options: []) { _, segment, _, _ in
+                frame = segment
+                return false
+            }
+            let origin = editor.textContainerOrigin
+            return frame.map { $0.offsetBy(dx: origin.x, dy: origin.y) }
+        }
+
+        // A file goes in on a line of its own, copied into the folder.
+        await reset(AttributedString("자료"), nil)
+        draft.attach([pdf])
+        try? await Task.sleep(for: .seconds(0.6))
+        let pdfRef = found().first
+        check(letters == "자료\n\(MemoAttachments.placeholder)\n", "파일 첨부 puts the file on its own line", letters.debugDescription)
+        check(pdfRef?.name == "견적서_v3.pdf" && pdfRef.map(shelf.store.exists) == true, "the file is copied into the attachment folder", "\(String(describing: pdfRef))")
+        let saved = MemoText.encode(draft.text).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        check(saved.contains(#""fa":""#) && saved.contains("견적서_v3.pdf") && saved.contains(#""v":2"#), "saved with fa as id/name, version 2", saved)
+        check(editor.selectedRange().location == (editor.string as NSString).length, "the caret is on the line after it")
+
+        // Over 25 MB: refused, and the memo says so.
+        let before = letters
+        draft.attach([big])
+        try? await Task.sleep(for: .seconds(0.4))
+        let notice = editor.subviews.contains { $0 is MemoNoticeView }
+        check(letters == before && notice, "over 25MB is refused with 25MB까지 붙일 수 있어요", "\(letters.debugDescription) notice=\(notice)")
+        check(shelf.store.ids().count == 1, "nothing of the refused file is kept", "\(shelf.store.ids())")
+
+        // A file card: one line, the mockup's 44 pt card with its room around it.
+        let pdfAt = placeholder()
+        let pdfCard = card(at: pdfAt)
+        check(pdfCard?.look.state == .ready(size: 248_000) && pdfCard?.look.pictureSize == nil, "a file is drawn as a card, ready with its size", "\(String(describing: pdfCard?.look))")
+        check(pdfRef.map(shelf.kindName) == "PDF 문서", "the card names the kind in Korean", pdfRef.map(shelf.kindName) ?? "")
+        let cardHeight = cardFrame(pdfAt)?.height ?? 0
+        check(cardHeight >= 2 * AttachmentCard.margin + AttachmentCard.cardHeight && cardHeight <= 64, "the card's line is the card's height", "\(cardHeight)")
+
+        // A picture: across the memo, at most 240 pt high.
+        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+        try? await Task.sleep(for: .seconds(0.3))
+        draft.attach([png])
+        try? await Task.sleep(for: .seconds(0.6))
+        let pngAt = placeholder(1)
+        let pngCard = card(at: pngAt)
+        check(pngCard?.look.pictureSize != nil, "a picture is drawn as itself", "\(String(describing: pngCard?.look))")
+        if let look = pngCard?.look, let frame = cardFrame(pngAt) {
+            let room = (editor.textContainer?.size.width ?? 0) - 2 * (editor.textContainer?.lineFragmentPadding ?? 0)
+            let drawn = AttachmentCard.size(of: look, width: room)
+            let narrow = AttachmentCard.size(of: look, width: 300)
+            // Wide memo: 240 pt high, as wide as that makes it; narrow: the memo's width.
+            check(drawn.height == AttachmentCard.pictureMaxHeight && abs(drawn.width - 240 * 1600 / 700) <= 1
+                  && narrow.width == 300 - 2 * AttachmentCard.margin && narrow.height < 240 && frame.height >= drawn.height,
+                  "the picture fits the memo's width, 240 pt high at most", "\(drawn) \(narrow) \(frame)")
+        } else {
+            check(false, "the picture has a place")
+        }
+
+        // Click picks a card (ink outline); a double-click and Space show it.
+        await click(pdfAt, count: 1)
+        check(editor.selectedRange() == NSRange(location: pdfAt + 1, length: 0) && draft.pickedAttachment?.ref == pdfRef,
+              "a click picks the card, the caret just after it (no selection grey)", "\(editor.selectedRange())")
+        try? await Task.sleep(for: .seconds(0.8))
+        check(card(at: pdfAt)?.look.isPicked == true, "a picked card is drawn with its outline")
+        capture(window, "attach-picked")
+        draft.previewURL = nil
+        await key(49, " ", [])
+        check(draft.previewURL?.lastPathComponent == "견적서_v3.pdf", "Space on a picked card opens 훑어보기", "\(String(describing: draft.previewURL))")
+        await key(8, "c", .command)
+        let copiedFiles = NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        check(NSPasteboard.general.string(forType: .string) == "📎 견적서_v3.pdf" && copiedFiles.first?.lastPathComponent == "견적서_v3.pdf",
+              "⌘C on a picked card copies its file and 📎 name", NSPasteboard.general.string(forType: .string) ?? "nil")
+        draft.previewURL = nil
+        try? await Task.sleep(for: .seconds(0.5))
+        await click(pngAt, count: 1)
+        await click(pngAt, count: 2)
+        check(draft.previewURL?.lastPathComponent == "화면 캡처 2026-11-03.png", "a double-click opens 훑어보기", "\(String(describing: draft.previewURL))")
+        draft.previewURL = nil
+        try? await Task.sleep(for: .seconds(0.5))
+        // Moving the caret away lets the card go.
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        try? await Task.sleep(for: .seconds(0.4))
+        check(draft.pickedAttachment == nil, "the card is no longer picked once the caret moves")
+
+        // The card's menu, as the mockup's.
+        if let picked = MemoAttachments.attachments(in: draft.text).first {
+            let titles = draft.cardMenu(picked.ref, range: picked.range, window: window).compactMap { $0.item?.title }
+            check(titles == ["훑어보기", "기본 앱으로 열기", "Finder에서 보기", "복사", "다른 이름으로 저장…", "첨부 지우기"], "the card's right-click menu", "\(titles)")
+        }
+
+        // ⌘C writes the name after a clip.
+        editor.setSelectedRange(NSRange(location: 0, length: pdfAt + 1))
+        try? await Task.sleep(for: .seconds(0.3))
+        await key(8, "c", .command)
+        check(NSPasteboard.general.string(forType: .string) == "자료\n📎 견적서_v3.pdf", "⌘C copies 📎 and the name",
+              NSPasteboard.general.string(forType: .string)?.debugDescription ?? "nil")
+        let mirror = NotesHTML.body(name: "이름", text: draft.text) ?? ""
+        check(mirror.contains("<div>📎 견적서_v3.pdf</div>") && mirror.contains("📎 화면 캡처 2026-11-03.png"), "the 메모 app's copy has 📎 and the name", mirror)
+
+        // The card's 복사 puts the file on the clipboard; ⌘V there brings the same attachment back.
+        if let pdfRef {
+            shelf.copy(pdfRef)
+            editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+            try? await Task.sleep(for: .seconds(0.3))
+            await key(9, "v", .command)
+            check(found().filter { $0 == pdfRef }.count == 2 && shelf.store.ids().count == 2, "a copied card pastes as the same attachment", "\(found())")
+        }
+
+        // ⌘X and ⌘V move a card with the letters around it, still a card.
+        let beforeCut = found()
+        editor.setSelectedRange(NSRange(location: 0, length: pdfAt + 2))
+        try? await Task.sleep(for: .seconds(0.3))
+        await key(7, "x", .command)
+        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+        try? await Task.sleep(for: .seconds(0.3))
+        await key(9, "v", .command)
+        check(found().count == beforeCut.count && Set(found()) == Set(beforeCut) && letters.hasSuffix("자료\n\(MemoAttachments.placeholder)\n"),
+              "⌘X and ⌘V keep the card", "\(found().count) \(letters.suffix(8).debugDescription)")
+
+        // A pasted picture alone becomes an attachment.
+        NSPasteboard.general.clearContents()
+        if let tiff = picture.tiffRepresentation { NSPasteboard.general.setData(tiff, forType: .tiff) }
+        await key(9, "v", .command)
+        let pasted = found().last
+        check(pasted?.name.hasPrefix("이미지 ") == true && pasted?.fileExtension == "png" && pasted.map(shelf.store.exists) == true,
+              "a pasted picture becomes an attachment", "\(String(describing: pasted))")
+
+        // A file dropped from Finder goes in where it is let go.
+        let count = found().count
+        let board = NSPasteboard(name: NSPasteboard.Name("memo-check-drop"))
+        board.clearContents()
+        board.writeObjects([pdf as NSURL])
+        let dropAt = editor.convert(CGPoint(x: 1, y: 10), to: nil)
+        let drag = CheckDrag(pasteboard: board, location: dropAt, window: window)
+        let entered = editor.draggingEntered(drag)
+        let taken = editor.performDragOperation(drag)
+        try? await Task.sleep(for: .seconds(0.5))
+        check(entered == .copy && taken && found().count == count + 1 && letters.hasPrefix("\(MemoAttachments.placeholder)\n") && found().first?.name == "견적서_v3.pdf",
+              "a file dropped on the memo is attached there", "entered \(entered.rawValue) taken \(taken) \(letters.prefix(6).debugDescription)")
+        let words = NSPasteboard(name: NSPasteboard.Name("memo-check-drop-words"))
+        words.clearContents()
+        words.setString("글", forType: .string)
+        check(MemoFileDrop.files(in: CheckDrag(pasteboard: words, location: dropAt, window: window)).isEmpty, "a drag of words is left to the text view")
+
+        // The three states, light and dark.
+        let waitingRef = MemoAttachments.Ref(id: UUID().uuidString, name: "디자인_원본.zip")
+        let missingRef = MemoAttachments.Ref(id: UUID().uuidString, name: "계약서_초안.docx")
+        shelf.synced(waiting: [waitingRef.id], changed: [])
+        var states = AttributedString("자료\n")
+        for ref in [pdfRef, waitingRef, missingRef].compactMap({ $0 }) + [found().first { $0.fileExtension == "png" }].compactMap({ $0 }) {
+            var mark = AttributeContainer()
+            mark[MemoAttributes.Attachment.self] = ref.value
+            states += AttributedString(String(MemoAttachments.placeholder), attributes: mark) + AttributedString("\n")
+        }
+        states += AttributedString("끝")
+        await reset(states, 0)
+        try? await Task.sleep(for: .seconds(0.4))
+        let looks = (0..<4).compactMap { card(at: placeholder($0))?.look.state }
+        check(looks.count == 4 && looks[0] == .ready(size: 248_000) && looks[1] == .waiting && looks[2] == .missing,
+              "cards show ready, 다른 기기에서 받는 중… and 파일을 찾을 수 없어요", "\(looks)")
+        window.makeFirstResponder(nil)
+        try? await Task.sleep(for: .seconds(0.6))
+        capture(window, "attach-light")
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        try? await Task.sleep(for: .seconds(0.8))
+        capture(window, "attach-dark")
+        NSApp.appearance = nil
+        try? await Task.sleep(for: .seconds(0.4))
+        window.makeFirstResponder(editor)
+        shelf.synced(waiting: [], changed: [])
+
+        // 첨부 지우기 takes the letter and its line; the file waits, then is cleared away with a mark.
+        if let first = MemoAttachments.attachments(in: draft.text).first {
+            draft.removeAttachment(first.range)
+            try? await Task.sleep(for: .seconds(0.4))
+            check(!found().contains(first.ref) && letters.hasPrefix("자료\n\(MemoAttachments.placeholder)"), "첨부 지우기 takes the card and its line",
+                  letters.debugDescription)
+            check(shelf.store.exists(first.ref), "its file stays while undo can bring it back")
+            shelf.store.sweep(referenced: Set(found().map(\.id)), launch: shelf.launch)
+            check(shelf.store.exists(first.ref), "within the run it waits")
+            shelf.store.sweep(referenced: Set(found().map(\.id)), launch: "next run")
+            check(!shelf.store.exists(first.ref) && shelf.store.marks().contains(first.ref.id), "the next run clears it away and marks it")
+        }
+
+        // In a table: under it, not in a cell.
+        var row = AttributeContainer()
+        row[MemoAttributes.Table.self] = "t1"
+        await reset(AttributedString("가\t나", attributes: row) + AttributedString("\n") + AttributedString("다\t라", attributes: row) + AttributedString("\n끝"), 1)
+        draft.attach([pdf])
+        try? await Task.sleep(for: .seconds(0.5))
+        check(letters == "가\t나\n다\t라\n\(MemoAttachments.placeholder)\n끝", "in a table the file goes under it", letters.debugDescription)
+        check(editor.selectedRange().location == ("가\t나\n다\t라\n\(MemoAttachments.placeholder)\n" as NSString).length, "the caret is on the line after it",
+              "\(editor.selectedRange())")
+        try? fm.removeItem(at: folder)
+    }
+
     private static func textView(_ view: NSView) -> NSTextView? {
         if let found = view as? NSTextView, !found.isFieldEditor { return found }
         for subview in view.subviews {
             if let found = textView(subview) { return found }
         }
         return nil
+    }
+
+    /// A drag for the drop check: a pasteboard let go at a point.
+    @MainActor
+    private final class CheckDrag: NSObject, @preconcurrency NSDraggingInfo {
+        let draggingPasteboard: NSPasteboard
+        let draggingLocation: NSPoint
+        let draggingDestinationWindow: NSWindow?
+        init(pasteboard: NSPasteboard, location: NSPoint, window: NSWindow) {
+            draggingPasteboard = pasteboard
+            draggingLocation = location
+            draggingDestinationWindow = window
+        }
+        var draggingSourceOperationMask: NSDragOperation { .copy }
+        var draggedImageLocation: NSPoint { draggingLocation }
+        var draggedImage: NSImage? { nil }
+        var draggingSource: Any? { nil }
+        var draggingSequenceNumber: Int { 1 }
+        func slideDraggedImage(to screenPoint: NSPoint) {}
+        var draggingFormation: NSDraggingFormation = .default
+        var animatesToDestination = false
+        var numberOfValidItemsForDrop = 1
+        func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?, classes classArray: [AnyClass],
+                                    searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+                                    using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+        var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+        func resetSpringLoading() {}
     }
 
     private static func capture(_ window: NSWindow, _ name: String) {

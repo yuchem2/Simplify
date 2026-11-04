@@ -28,8 +28,13 @@ final class MemoBook {
         didSet { todos.onChange = onLocalChange }
     }
 
-    init(container: ModelContainer, isSaved: Bool, mirror: NotesMirror? = nil) {
+    /// Clears away attached files no memo uses; only the app's own book does (not the checks'
+    /// and pictures' books, whose memos are not the stored ones).
+    @ObservationIgnored let sweepsAttachments: Bool
+
+    init(container: ModelContainer, isSaved: Bool, mirror: NotesMirror? = nil, sweepsAttachments: Bool = false) {
         self.container = container
+        self.sweepsAttachments = sweepsAttachments
         context = container.mainContext
         self.isSaved = isSaved
         self.mirror = mirror
@@ -63,6 +68,7 @@ final class MemoBook {
         if let open = draft.period, periods.contains(where: { $0.key == open.key && $0.scope == open.scope }) { draft.storedChanged() }
         if todosChanged { draft.refreshChips() }
         periods.forEach { mirror?.memoSaved($0) }
+        if !notes.isEmpty { sweepAttachments() }
     }
 
     private func readAfresh() {
@@ -106,6 +112,25 @@ final class MemoBook {
         mirror?.memoSaved(period)
         onLocalChange?()
         return true
+    }
+
+    /// Every attachment the stored memos use, by id; nil when a memo cannot be read (it may use
+    /// any) or the store cannot be read.
+    func attachmentsInUse() -> [String: MemoAttachments.Ref]? {
+        guard let notes = try? context.fetch(FetchDescriptor<DiaryNote>()) else { return nil }
+        var found: [String: MemoAttachments.Ref] = [:]
+        for note in notes {
+            guard let text = MemoText.decodeIfReadable(note.body) else { return nil }
+            for item in MemoAttachments.attachments(in: text) { found[item.ref.id] = item.ref }
+        }
+        return found
+    }
+
+    /// Attached files no memo uses are cleared away once their wait is over: when a memo drops
+    /// one, at launch, and after another device's memos arrive.
+    func sweepAttachments() {
+        guard sweepsAttachments, isSaved else { return }
+        AttachmentShelf.shared.sweep(referenced: attachmentsInUse().map { Set($0.keys) })
     }
 
     /// Every period with a memo, for 지금 모두 보내기.

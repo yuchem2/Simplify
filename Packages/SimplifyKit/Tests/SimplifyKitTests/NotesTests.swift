@@ -127,6 +127,15 @@ struct NotesTests {
         #expect(try lines(text) == ["<ul>", "<li><b>굵게</b></li>", "</ul>"])
     }
 
+    @Test func attachmentsBecomeAClipAndTheirName() throws {
+        let value = "0E5B7C2A-1111-4222-8333-944455556666/견적서_v3.pdf"
+        let file = styled(String(MemoAttachments.placeholder)) { $0[MemoAttributes.Attachment.self] = value }
+        #expect(try lines(styled("자료\n") + file + styled("\n끝")) == ["<div>자료</div>", "<div>📎 견적서_v3.pdf</div>", "<div>끝</div>"])
+        // A name with HTML's letters stays text.
+        let odd = styled(String(MemoAttachments.placeholder)) { $0[MemoAttributes.Attachment.self] = "0E5B7C2A-1111-4222-8333-944455556666/a<b>.png" }
+        #expect(try lines(odd) == ["<div>📎 a&lt;b&gt;.png</div>"])
+    }
+
     @Test func tablesBecomeTableTags() throws {
         func row(_ letters: String, _ id: String = "t1") -> AttributedString { styled(letters) { $0[MemoAttributes.Table.self] = id } }
         var text = styled("비용\n") + row("항목\t금액\t") + styled("\n") + row("디자인\t") + styled("1,200,000") { $0[MemoAttributes.Table.self] = "t1"; $0[MemoAttributes.Bold.self] = true }

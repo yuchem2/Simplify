@@ -45,6 +45,9 @@ final class DeviceSync {
     @ObservationIgnored private var waitingPull = false
     @ObservationIgnored private var waitingPush = false
     @ObservationIgnored private var observer: NSObjectProtocol?
+    /// The launch's sweep of unused attachments waits for the first pull, so a memo another
+    /// device changed meanwhile counts.
+    @ObservationIgnored private var sweepsAfterPull = false
 
     static let bookmarkKey = "syncFolderBookmark"
     static let folderNameKey = "syncFolderName"
@@ -73,6 +76,13 @@ final class DeviceSync {
 
     // MARK: The folder
 
+    /// At launch: attachments an earlier run left unused are cleared now, or after the first pull
+    /// when this Mac syncs.
+    func sweepAttachmentsWhenReady() {
+        guard let memos else { return }
+        if engine == nil { memos.sweepAttachments() } else { sweepsAfterPull = true }
+    }
+
     /// 폴더 고르기…: a folder in iCloud Drive, opened at iCloud Drive's top.
     func chooseFolder() {
         let panel = NSOpenPanel()
@@ -95,6 +105,8 @@ final class DeviceSync {
     /// nothing here is deleted; connecting again later joins the other devices afresh.
     func disconnect() {
         close()
+        // Nothing is on its way any more.
+        AttachmentShelf.shared.synced(waiting: [], changed: [])
         defaults.removeObject(forKey: Self.bookmarkKey)
         defaults.removeObject(forKey: Self.folderNameKey)
         DiarySync.forget(in: defaults)
@@ -225,6 +237,8 @@ final class DeviceSync {
         isBusy = true
         isSyncing = true
         do {
+            // Attached files go up before the memos that use them, and come down after.
+            await syncAttachments(engine, uploadsOnly: pull)
             if pull {
                 let applied = try await engine.sync(force: force, prepare: { DeviceSync.shared.prepare() },
                                                     took: { DeviceSync.shared.take($0) })
@@ -232,6 +246,12 @@ final class DeviceSync {
                     // A letter was being composed; try again in a moment.
                     folderChanged()
                 }
+                // Files left unused in an earlier run are cleared once this one has the others' memos.
+                if sweepsAfterPull, applied != nil {
+                    sweepsAfterPull = false
+                    memos?.sweepAttachments()
+                }
+                await syncAttachments(engine)
             } else {
                 try await engine.push()
             }
@@ -252,6 +272,28 @@ final class DeviceSync {
         } else if waitingPush {
             waitingPush = false
             await run(pull: false)
+        }
+    }
+
+    /// One pass over `Simplify Sync/Attachments` (`AttachmentSync`) for the files the stored
+    /// memos use. Nothing when a memo cannot be read, as nothing is then known to be unused.
+    private func syncAttachments(_ engine: DiarySync, uploadsOnly: Bool = false) async {
+        #if DEBUG
+        // The format check puts a test folder in the store's place; none of it goes to the real folder.
+        if ProcessInfo.processInfo.environment["SIMPLIFY_MEMO_CHECK"] != nil { return }
+        #endif
+        guard let memos, let referenced = memos.attachmentsInUse() else { return }
+        let store = AttachmentShelf.shared.store, folder = engine.folder
+        do {
+            let report = try await Task.detached {
+                try AttachmentSync.pass(store: store, syncFolder: folder, referenced: referenced, uploadsOnly: uploadsOnly)
+            }.value
+            // Before the others' memos are read, nothing is known to be on its way yet.
+            if uploadsOnly { return }
+            guard self.engine === engine else { return }
+            AttachmentShelf.shared.synced(waiting: report.waiting, changed: report.changed)
+        } catch {
+            Self.log.error("Attachment sync failed: \(String(describing: error), privacy: .private)")
         }
     }
 

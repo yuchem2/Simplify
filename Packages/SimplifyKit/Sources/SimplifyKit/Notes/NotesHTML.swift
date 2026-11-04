@@ -29,7 +29,7 @@ public enum NotesHTML {
     /// `<ul>` (`class="Apple-dash-list"` for dashes) or `<ol>` items, a level in nested inside
     /// the list above; quote lines are a `<blockquote>`, with any list items in them inside it.
     /// Formulas are their LaTeX in `$…$`, and a formula line's in `$$…$$`. A table's rows are one
-    /// `<table>`, a row's tab-split cells each a `<td>`.
+    /// `<table>`, a row's tab-split cells each a `<td>`. An attached file is `📎` and its name.
     public static func body(name: String, text: AttributedString) -> String? {
         guard !MemoText.isBlank(text) else { return nil }
         let text = MemoMath.upgradingScripts(text)
@@ -168,6 +168,10 @@ public enum NotesHTML {
     /// One run's letters on one line, wrapped in its formatting's tags.
     private static func segment(_ letters: String, run: AttributedString.Runs.Run, afterSpace: Bool) -> String {
         var letters = letters
+        // An attached file: its name after a clip, one per placeholder letter.
+        if let ref = run[MemoAttributes.Attachment.self].flatMap(MemoAttachments.Ref.init(value:)) {
+            letters = letters.map { $0 == MemoAttachments.placeholder ? MemoAttachments.label(ref) : String($0) }.joined()
+        }
         // A chip's box: one box pair that every font has, ticked once the ToDo is done.
         if let todo = run[MemoAttributes.Todo.self], run[MemoAttributes.TodoBox.self] == true {
             letters = todo.isDone ? "☑" : "☐"

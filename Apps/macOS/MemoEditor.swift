@@ -1,4 +1,5 @@
 import AppKit
+import QuickLook
 import SwiftUI
 import SimplifyKit
 
@@ -59,6 +60,18 @@ final class MemoDraft {
     /// The caret's table's columns, 0 outside one; set by `MemoMenuHost`.
     @ObservationIgnored var tableColumns: (() -> Int)?
     @ObservationIgnored var startFormula: ((Int) -> Void)?
+    /// A short note under the caret (`25MB까지 붙일 수 있어요`); set by `MemoMenuHost`.
+    @ObservationIgnored var notify: ((String) -> Void)?
+    /// The picked card's letter in the text view (UTF-16), set by `MemoMenuHost`.
+    @ObservationIgnored var pickedCard: (() -> Int?)?
+    /// The letters last cut or copied from this memo with attachments in them, and the clipboard's
+    /// change count then: pasting that clipboard puts them back whole, cards and all, since the
+    /// clipboard itself carries only `📎 name`.
+    @ObservationIgnored var copiedPiece: (text: AttributedString, changeCount: Int)?
+    /// The attached file Quick Look shows, while it is open.
+    var previewURL: URL?
+    /// The attachments the memo had when last saved, so a save that drops one clears it away later.
+    @ObservationIgnored private var savedAttachments: Set<String> = []
     @ObservationIgnored private var pending: Task<Void, Never>?
     @ObservationIgnored let book: MemoBook
     /// The highlighter ⌘⇧H puts on. Remembered across launches.
@@ -80,6 +93,7 @@ final class MemoDraft {
         isUnreadable = stored == nil
         text = stored ?? AttributedString()
         saved = text
+        savedAttachments = MemoAttachments.ids(in: text)
         selection = AttributedTextSelection()
         // Chips show their ToDo as it is now; a change found here is saved like any other edit.
         refreshChips()
@@ -91,6 +105,7 @@ final class MemoDraft {
         keepParagraphsWhole()
         keepTablesWhole()
         keepChipsWhole()
+        keepAttachmentsWhole()
         catchSearchTrigger()
         guard text != saved else { return }
         pending?.cancel()
@@ -107,7 +122,12 @@ final class MemoDraft {
         pending?.cancel()
         pending = nil
         guard let period, !isUnreadable, text != saved else { return }
-        if book.save(text, for: period) { saved = text }
+        guard book.save(text, for: period) else { return }
+        saved = text
+        // An attachment no longer used here may be used nowhere: it waits to be cleared away.
+        let attachments = MemoAttachments.ids(in: text)
+        if !savedAttachments.subtracting(attachments).isEmpty { book.sweepAttachments() }
+        savedAttachments = attachments
     }
 
     /// The stored memo changed underneath (another device's text arrived after this box was
@@ -127,6 +147,7 @@ final class MemoDraft {
             }
         }
         saved = text
+        savedAttachments = MemoAttachments.ids(in: text)
     }
 
     // MARK: Formatting
@@ -546,7 +567,7 @@ struct MemoEditor: View {
         // Past the end of the lines, or beside a short memo in a wide panel: still the memo.
         .contentShape(Rectangle())
         .onTapGesture { if !draft.isUnreadable { focused = true } }
-        .background { if !isRenderingSnapshot { MemoMenuHost(draft: draft) } }
+        .background { if !isRenderingSnapshot { MemoMenuHost(draft: draft).modifier(AttachmentPreview(draft: draft)) } }
         .onGeometryChange(for: CGRect.self) { proxy in
             let local = CGRect(origin: .zero, size: proxy.size)
             let shown = proxy.bounds(of: .scrollView).map { local.intersection($0) } ?? local
@@ -604,7 +625,8 @@ struct MemoEditor: View {
         }
     }
 
-    private var showsBar: Bool { focused && draft.hasSelectedText && !draft.showsParagraphBar }
+    /// Not for a picked card: its letter is selected, but there are no letters to format.
+    private var showsBar: Bool { focused && draft.hasSelectedText && !draft.showsParagraphBar && draft.pickedAttachment == nil }
 
     /// The bar's top within the memo. Beside the selected line: over it where the panel shows
     /// enough room, otherwise under it. Without the line's place, over the memo or at its foot.
@@ -614,6 +636,15 @@ struct MemoEditor: View {
             return top > barHeight + Metrics.spaceL ? -barHeight - Metrics.spaceS : height - barHeight - Metrics.spaceS
         }
         return top + line.minY > barHeight + Metrics.spaceL ? line.minY - barHeight - Metrics.spaceS : line.maxY + Metrics.spaceS
+    }
+}
+
+/// Quick Look on an attachment: a double-click or Space on its card.
+private struct AttachmentPreview: ViewModifier {
+    @Bindable var draft: MemoDraft
+
+    func body(content: Content) -> some View {
+        content.quickLookPreview($draft.previewURL)
     }
 }
 
@@ -786,6 +817,8 @@ struct MemoCommands: Commands {
                     .keyboardShortcut("[", modifiers: .command)
                 // No shortcut: ⌥⌘T is the 보기 menu's toolbar item.
                 Button("표 넣기") { draft?.tableAction(.insert) }
+                Button("파일 첨부…") { draft?.askToAttach() }
+                    .keyboardShortcut("a", modifiers: [.command, .shift])
                 Divider()
                 Button("할 일로 만들기…") { draft?.askToMakeTodos() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])

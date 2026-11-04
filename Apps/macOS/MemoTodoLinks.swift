@@ -112,10 +112,10 @@ extension MemoDraft {
         todos.pop = pop
     }
 
-    /// The picked letters as plain text, for the right-click menu's copy, formulas in `$…$`.
-    /// The first picked range only, the same one cut deletes.
+    /// The picked letters as plain text, for the right-click menu's copy, formulas in `$…$` and
+    /// attachments as `📎 name`. The first picked range only, the same one cut deletes.
     var selectedPlainText: String {
-        selectedRanges.first { !$0.isEmpty }.map { MemoMath.plainText(AttributedString(text[$0])) } ?? ""
+        selectedRanges.first { !$0.isEmpty }.map { MemoAttachments.plainText(AttributedString(text[$0])) } ?? ""
     }
 
     /// The right-click menu's cut, copy and paste, done on the memo's letters directly: the menu
@@ -125,6 +125,27 @@ extension MemoDraft {
         guard !picked.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(picked, forType: .string)
+        if let range = selectedRanges.first(where: { !$0.isEmpty }) { rememberCopied(AttributedString(text[range])) }
+    }
+
+    /// Keeps letters with attachments in them for `pasteRemembered`; others are forgotten.
+    func rememberCopied(_ piece: AttributedString) {
+        copiedPiece = MemoAttachments.attachments(in: piece).isEmpty ? nil : (piece, NSPasteboard.general.changeCount)
+    }
+
+    /// The letters last cut or copied here, cards and all, in place of the selection; false when
+    /// the clipboard has changed since.
+    func pasteRemembered() -> Bool {
+        guard !isUnreadable, let piece = copiedPiece, piece.changeCount == NSPasteboard.general.changeCount,
+              // Not once a card's file has been cleared away meanwhile: then the words alone.
+              MemoAttachments.attachments(in: piece.text).allSatisfy({ AttachmentShelf.shared.store.exists($0.ref) }),
+              let range = selectedRanges.first(where: { !$0.isEmpty }) ?? selectedRanges.first else { return false }
+        let start = text.characters.distance(from: text.startIndex, to: range.lowerBound)
+        text.transform(updating: &selection) { $0.replaceSubrange(range, with: piece.text) }
+        let caret = text.characters.index(text.startIndex, offsetBy: min(start + piece.text.characters.count, text.characters.count))
+        selection = AttributedTextSelection(insertionPoint: caret, typingAttributes: AttributeContainer())
+        focusRequest += 1
+        return true
     }
 
     func cutSelection() {
@@ -133,6 +154,7 @@ extension MemoDraft {
     }
 
     func paste() {
+        if pasteRemembered() { return }
         guard let pasted = NSPasteboard.general.string(forType: .string) else { return }
         replaceSelection(with: pasted)
     }
@@ -311,6 +333,8 @@ struct MemoMenuHost: NSViewRepresentable {
             draft?.tableColumns = { [weak self] in self?.styler.textView.map(MemoTableKeys.columnCount(in:)) ?? 0 }
             draft?.openFormula = { [weak self] in self?.styler.openFormula }
             draft?.startFormula = { [weak self] location in self?.styler.startEmptyFormula(at: location) }
+            draft?.notify = { [weak self] words in self?.styler.showNotice(words) }
+            draft?.pickedCard = { [weak self] in self?.styler.pickedAttachment }
             // Once the text view is in the window beside this view.
             Task { @MainActor [weak self] in self?.redrawLines() }
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown, .keyDown]) { [weak self] event in
@@ -321,6 +345,11 @@ struct MemoMenuHost: NSViewRepresentable {
                         // Esc closes the 문단 bar.
                         if draft.showsParagraphBar, event.keyCode == Self.keyEscape {
                             draft.showsParagraphBar = false
+                            return true
+                        }
+                        // Space on a picked card shows it; ⌘V with a picture pastes it as an attachment.
+                        if draft.hasFocus, draft.book.todos.pop == nil, let textView = self.styler.textView, window.firstResponder === textView,
+                           self.handleAttachmentKey(event, draft: draft) {
                             return true
                         }
                         // Esc, or → at its end, leaves the formula being written; ⌘C and ⌘X put formulas
@@ -348,6 +377,13 @@ struct MemoMenuHost: NSViewRepresentable {
                         }
                         return true
                     case .leftMouseDown:
+                        // A click picks a card; a double-click shows it.
+                        if self.isInBox(event), let textView = self.styler.textView,
+                           let hit = self.styler.attachment(at: textView.convert(event.locationInWindow, from: nil)) {
+                            self.pick(hit.location, in: textView)
+                            if event.clickCount >= 2 { draft.preview(hit.ref) }
+                            return true
+                        }
                         if self.isInBox(event) {
                             draft.lastBoxClick = ProcessInfo.processInfo.systemUptime
                             draft.lastClickCount = event.clickCount
@@ -357,6 +393,15 @@ struct MemoMenuHost: NSViewRepresentable {
                         }
                         return false
                     default:
+                        // On a card: the card's own menu.
+                        if self.isInBox(event), !draft.isUnreadable, let textView = self.styler.textView,
+                           let hit = self.styler.attachment(at: textView.convert(event.locationInWindow, from: nil)) {
+                            self.pick(hit.location, in: textView)
+                            guard let picked = draft.pickedAttachment else { return true }
+                            InkMenuPresenter.popUp(draft.cardMenu(picked.ref, range: picked.range, window: window),
+                                                   at: window.convertPoint(toScreen: event.locationInWindow), in: window)
+                            return true
+                        }
                         guard self.isInBox(event), let menu = self.menu() else { return false }
                         InkMenuPresenter.popUp(menu, at: window.convertPoint(toScreen: event.locationInWindow), in: window)
                         return true
@@ -365,6 +410,66 @@ struct MemoMenuHost: NSViewRepresentable {
                 return handled ? nil : event
             }
         }
+
+        /// A click on a card picks it: the caret just after it, the card in its outline.
+        @MainActor
+        private func pick(_ location: Int, in textView: NSTextView) {
+            if textView.window?.firstResponder !== textView { textView.window?.makeFirstResponder(textView) }
+            styler.clickedAttachment = location
+            textView.setSelectedRange(NSRange(location: location + 1, length: 0))
+            styler.update()
+            draft?.focusRequest += 1
+        }
+
+        /// Space on a picked card, and ⌘V with a picture (or a card copied with its menu) on the
+        /// clipboard; false for any other key.
+        @MainActor
+        private func handleAttachmentKey(_ event: NSEvent, draft: MemoDraft) -> Bool {
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
+            switch (event.keyCode, modifiers) {
+            case (Self.keySpace, []):
+                guard let picked = draft.pickedAttachment else { return false }
+                draft.preview(picked.ref)
+                return true
+            // A picked card copies as its file, and as `📎 name` for words.
+            case (Self.keyC, [.command]) where ["c", "ㅊ"].contains(event.charactersIgnoringModifiers?.lowercased() ?? ""):
+                guard let picked = draft.pickedAttachment, !draft.hasSelectedText else { return false }
+                AttachmentShelf.shared.copy(picked.ref)
+                NSPasteboard.general.setString(MemoAttachments.label(picked.ref), forType: .string)
+                draft.rememberCopied(AttributedString(draft.text[picked.range]))
+                return true
+            case (Self.keyV, [.command]) where ["v", "ㅍ"].contains(event.charactersIgnoringModifiers?.lowercased() ?? ""):
+                guard !draft.isUnreadable else { return false }
+                // Letters cut or copied here with cards in them come back whole.
+                if draft.pasteRemembered() { return true }
+                let board = NSPasteboard.general
+                let files = (board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+                // A card copied with its menu goes in again as the same attachment, while its file is here.
+                let refs = files.compactMap(AttachmentShelf.shared.ref(at:)).filter(AttachmentShelf.shared.store.exists)
+                if !files.isEmpty {
+                    guard refs.count == files.count else { return false }
+                    draft.insertAttachments(refs)
+                    return true
+                }
+                // A picture alone (a screenshot, a copied image); words on the clipboard paste as words.
+                guard board.string(forType: .string) == nil, let picture = Self.picture(on: board) else { return false }
+                draft.attach(picture: picture)
+                return true
+            default:
+                return false
+            }
+        }
+
+        /// A picture on the clipboard as PNG.
+        private static func picture(on board: NSPasteboard) -> Data? {
+            if let png = board.data(forType: .png) { return png }
+            guard let tiff = board.data(forType: .tiff), let rep = NSBitmapImageRep(data: tiff) else { return nil }
+            return rep.representation(using: .png, properties: [:])
+        }
+
+        /// `kVK_Space`, `kVK_ANSI_V`.
+        private static let keySpace: UInt16 = 49
+        private static let keyV: UInt16 = 9
 
         /// `kVK_ANSI_T`, `kVK_ANSI_C`, `kVK_ANSI_X`, `kVK_RightArrow`.
         private static let keyT: UInt16 = 17
@@ -391,10 +496,11 @@ struct MemoMenuHost: NSViewRepresentable {
                 guard let draft, selection.length > 0, let range = Range(selection, in: draft.text) else { return false }
                 if let open = styler.openFormula, NSIntersectionRange(open, selection) == selection { return false }
                 let picked = AttributedString(draft.text[range])
-                let plain = MemoMath.plainText(picked)
+                let plain = MemoAttachments.plainText(picked)
                 guard plain != String(picked.characters) else { return false }
                 if event.keyCode == Self.keyX { textView.cut(nil) } else { textView.copy(nil) }
                 NSPasteboard.general.setString(plain, forType: .string)
+                draft.rememberCopied(picked)
                 return true
             default:
                 return false
@@ -472,9 +578,24 @@ struct MemoMenuHost: NSViewRepresentable {
                 }
                 styler.attach(to: textView)
             }
+            if let textView = styler.textView { installDrop(on: textView) }
             styler.update()
             // Letters typed after a drawn formula are not part of it.
             if styler.caretIsAfterDrawnFormula { draft.dropFormulaTyping() }
+        }
+
+        /// Files dragged onto the memo go in where they are let go.
+        @MainActor
+        private func installDrop(on textView: NSTextView) {
+            MemoFileDrop.install(on: textView) { [weak self, weak textView] urls, point in
+                guard let draft = self?.draft, let textView, !draft.isUnreadable else { return false }
+                let index = textView.characterIndexForInsertion(at: point)
+                let offset = Range(NSRange(location: min(index, (textView.string as NSString).length), length: 0), in: draft.text)
+                    .map { draft.text.characters.distance(from: draft.text.startIndex, to: $0.lowerBound) }
+                textView.window?.makeFirstResponder(textView)
+                draft.attach(urls, at: offset)
+                return true
+            }
         }
 
         @MainActor
@@ -608,6 +729,7 @@ struct MemoMenuHost: NSViewRepresentable {
                 .item("내어쓰기", detail: "⌘[") { draft.indentLines(by: -1) },
             ]))
             if !draft.isInTable { entries.append(.item("표 넣기") { draft.tableAction(.insert) }) }
+            entries.append(.item("파일 첨부…", detail: "⌘⇧A") { draft.askToAttach() })
             return entries
         }
     }

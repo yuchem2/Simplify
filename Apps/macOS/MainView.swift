@@ -122,6 +122,8 @@ struct MainView: View {
             // Not for the snapshot runs, which bring their own books.
             guard ProcessInfo.processInfo.environment["SIMPLIFY_SNAPSHOT"] == nil else { return }
             DeviceSync.shared.attach(memos: memos, model: model, calendars: calendars)
+            // Attached files an earlier run left unused; not while the format check uses its test folder.
+            if ProcessInfo.processInfo.environment["SIMPLIFY_MEMO_CHECK"] == nil { DeviceSync.shared.sweepAttachmentsWhenReady() }
         }
         .onOpenURL { url in
             memos.reloadIfChangedElsewhere()

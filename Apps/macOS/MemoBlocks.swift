@@ -238,6 +238,7 @@ struct MemoParagraphBar: View {
                 Rectangle().fill(.ink).frame(width: Metrics.line, height: 18).padding(.horizontal, Metrics.spaceXxs)
                 wide("표", "표 넣기", nil, isOn: false, font: TextStyle.body.font) { draft.tableAction(.insert) }
                     .disabled(draft.isInTable)
+                wide("첨부", "파일 첨부", "⌘⇧A", isOn: false, font: TextStyle.body.font) { draft.askToAttach() }
             }
         }
         .padding(Metrics.spaceM)
