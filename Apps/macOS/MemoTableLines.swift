@@ -282,14 +282,20 @@ final class TableFragment: NSTextLayoutFragment {
         let top = point.y + first.typographicBounds.minY
         let height = last.typographicBounds.maxY - first.typographicBounds.minY
         let line = Metrics.line
-        // In the window's appearance: the text view's own can stay light in the dark theme.
-        let appearance = textLayoutManager?.textContainer?.textView?.window?.effectiveAppearance ?? NSAppearance.currentDrawing()
-        var ink = NSColor.black.cgColor
-        var soft = NSColor.gray
-        appearance.performAsCurrentDrawingAppearance {
-            ink = NSColor(Color.ink).cgColor
-            soft = NSColor(cgColor: NSColor(Color.inkSoft).cgColor) ?? .gray
+        func colors(in appearance: NSAppearance) -> (ink: CGColor, soft: CGColor) {
+            var colors = (ink: NSColor.black.cgColor, soft: NSColor.gray.cgColor)
+            appearance.performAsCurrentDrawingAppearance {
+                colors = (NSColor(Color.ink).cgColor, NSColor(Color.inkSoft).cgColor)
+            }
+            return colors
         }
+        // In the window's appearance: the text view's own can stay light in the dark theme.
+        // The window is read on the main thread only; elsewhere the grid takes the current drawing appearance.
+        let view = textLayoutManager?.textContainer?.textView
+        let (ink, softInk) = Thread.isMainThread
+            ? MainActor.assumeIsolated { colors(in: view?.window?.effectiveAppearance ?? NSAppearance.currentDrawing()) }
+            : colors(in: NSAppearance.currentDrawing())
+        let soft = NSColor(cgColor: softInk) ?? .gray
         context.setFillColor(ink)
         for (index, edge) in look.edges.enumerated() {
             let x = left + edge - (index == look.edges.count - 1 ? line : 0)

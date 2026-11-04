@@ -194,7 +194,7 @@ final class FormulaAttachment: NSTextAttachment {
         // TextKit keeps the image; the memo's paragraphs are made again when the appearance changes.
         // Drawn for the text view only; never off the main thread (where SwiftMath's views cannot be).
         guard Thread.isMainThread else { return nil }
-        nonisolated(unsafe) let view = textContainer?.textView
+        let view = textContainer?.textView
         let latex = latex, size = size, display = isDisplay, ink = ink
         return MainActor.assumeIsolated {
             var color = NSColor.labelColor

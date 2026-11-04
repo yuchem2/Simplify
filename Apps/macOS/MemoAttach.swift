@@ -402,7 +402,7 @@ final class AttachmentCard: NSTextAttachment {
     override func image(for bounds: CGRect, attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,
                         textContainer: NSTextContainer?) -> NSImage? {
         guard Thread.isMainThread else { return nil }
-        nonisolated(unsafe) let view = textContainer?.textView
+        let view = textContainer?.textView
         let look = look, size = bounds.size
         return MainActor.assumeIsolated {
             CardArt.image(look, size: size, appearance: view?.window?.effectiveAppearance ?? NSApp.effectiveAppearance)
