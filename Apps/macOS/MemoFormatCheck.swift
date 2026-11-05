@@ -124,6 +124,19 @@ enum MemoFormatCheck {
             return
         }
 
+        // A title and a heading read from the store get their own line heights, not the memo's
+        // exact 26 pt, so their letters do not run into the next line.
+        for (style, height) in [("title", TextStyle.title.lineHeight), ("heading", TextStyle.heading.lineHeight)] {
+            let stored = #"{"runs":[{"p":"\#(style)","t":"온톨로지 특강"},{"t":"\n> 지식 그래프와"}],"v":2}"#
+            await reset(MemoText.decode(stored.data(using: .utf8)!))
+            var heights: [CGFloat] = []
+            editor.textLayoutManager?.enumerateTextLayoutFragments(from: editor.textLayoutManager?.documentRange.location, options: [.ensuresLayout]) {
+                heights.append($0.layoutFragmentFrame.height)
+                return true
+            }
+            check(heights.first == height && heights.count == 2, "a stored \(style) line is \(height) pt tall", "\(heights)")
+        }
+
         // `* ` becomes a bullet; ⌘Z takes it back to the star.
         await reset()
         await type("*")

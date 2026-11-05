@@ -517,9 +517,13 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         guard marker != nil || paragraph != nil else { return nil }
         let shown = NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
         let whole = NSRange(location: 0, length: shown.length)
-        let style = ((shown.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        var style = ((shown.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
         switch paragraph {
         case .title?, .heading?:
+            // The editor's exact 26 pt line comes in a part of the style no setter reaches, and it
+            // wins over the line heights below, so a title loaded from the store would stay 26 pt
+            // tall under its larger letters. A new style carrying only the settings that matter does not.
+            style = Self.plainCopy(of: style)
             // The title and heading tokens' own line heights, and a little room above.
             let height = paragraph == .title ? TextStyle.title.lineHeight : TextStyle.heading.lineHeight
             style.minimumLineHeight = height
@@ -757,6 +761,26 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     static func palette(_ value: Any?) -> Palette? {
         if let palette = value as? Palette { return palette }
         return (value as? String).flatMap(Palette.init(rawValue:))
+    }
+
+    /// A new paragraph style with the public settings of `style` and nothing else.
+    private static func plainCopy(of style: NSParagraphStyle) -> NSMutableParagraphStyle {
+        let copy = NSMutableParagraphStyle()
+        copy.alignment = style.alignment
+        copy.baseWritingDirection = style.baseWritingDirection
+        copy.lineBreakMode = style.lineBreakMode
+        copy.lineBreakStrategy = style.lineBreakStrategy
+        copy.lineSpacing = style.lineSpacing
+        copy.paragraphSpacing = style.paragraphSpacing
+        copy.paragraphSpacingBefore = style.paragraphSpacingBefore
+        copy.headIndent = style.headIndent
+        copy.firstLineHeadIndent = style.firstLineHeadIndent
+        copy.tailIndent = style.tailIndent
+        copy.tabStops = style.tabStops
+        copy.defaultTabInterval = style.defaultTabInterval
+        copy.hyphenationFactor = style.hyphenationFactor
+        copy.allowsDefaultTighteningForTruncation = style.allowsDefaultTighteningForTruncation
+        return copy
     }
 
     /// A paragraph style as the text view keeps it.
