@@ -35,6 +35,9 @@ final class MemoDraft {
     /// Where the selection's first line sits in the box, top-left origin; set by `MemoMenuHost`,
     /// which can ask the text view. Nil when it cannot tell.
     @ObservationIgnored var selectionLineRect: (() -> CGRect?)?
+    /// The caret's line in the box, top-left origin, measured from the text's layout so it is known
+    /// even where the panel has scrolled it out of sight; set by `MemoMenuHost`. Nil without focus.
+    @ObservationIgnored var caretLineRect: (() -> CGRect?)?
     /// The same line in window coordinates, top-left origin, for placing pops beside it.
     @ObservationIgnored var selectionLineInWindow: (() -> CGRect?)?
     /// Gives the focused text view the ink caret and a grey selection.
@@ -517,6 +520,9 @@ struct MemoEditor: View {
     /// The section name, for VoiceOver.
     let title: String
     let placeholder: String
+    /// The caret's line, in the memo's own place, after the caret moves or the memo takes focus:
+    /// the panel scrolls it into view when it is outside.
+    var onCaretLine: ((CGRect) -> Void)? = nil
     @FocusState private var focused: Bool
     @Environment(\.isRenderingSnapshot) private var isRenderingSnapshot
     @Environment(\.undoManager) private var undoManager
@@ -593,7 +599,12 @@ struct MemoEditor: View {
         .onChange(of: focused, initial: true) {
             draft.hasFocus = focused
             // Once the text view has become first responder.
-            if focused { Task { @MainActor in draft.inkTextView?() } }
+            if focused {
+                Task { @MainActor in
+                    draft.inkTextView?()
+                    if let caret = draft.caretLineRect?() { onCaretLine?(inBox(caret)) }
+                }
+            }
             draft.redrawLines?()
         }
         .onChange(of: chosenDay, initial: true) { draft.chosenDay = chosenDay }
@@ -614,7 +625,10 @@ struct MemoEditor: View {
             draft.selectionChanged()
             draft.redrawLines?()
             // After the text view has laid the new selection out.
-            Task { @MainActor in line = draft.selectionLineRect?() }
+            Task { @MainActor in
+                line = draft.selectionLineRect?()
+                if let caret = draft.caretLineRect?() { onCaretLine?(inBox(caret)) }
+            }
         }
         .onChange(of: draft.focusRequest) { focused = true }
         .onDisappear {
@@ -623,6 +637,14 @@ struct MemoEditor: View {
             // A folded panel takes the memo away without a focus change.
             draft.hasFocus = false
         }
+    }
+
+    /// The caret's line kept inside the memo: past the memo's own scrolled part, its text view
+    /// scrolls the line to the nearer edge, so that is where the panel has to show.
+    private func inBox(_ line: CGRect) -> CGRect {
+        var line = line
+        line.origin.y = min(max(0, line.minY), max(0, height - line.height))
+        return line
     }
 
     /// Not for a picked card: its letter is selected, but there are no letters to format.

@@ -325,6 +325,7 @@ struct MemoMenuHost: NSViewRepresentable {
             guard window != nil else { return }
             draft?.selectionLineRect = { [weak self] in self?.selectionLineRect() }
             draft?.selectionLineInWindow = { [weak self] in self?.selectionLineInWindow() }
+            draft?.caretLineRect = { [weak self] in self?.caretLineRect() }
             draft?.inkTextView = { [weak self] in self?.inkTextView() }
             draft?.showMenu = { [weak self] in self?.showMenuUnderSelection() }
             draft?.redrawLines = { [weak self] in self?.redrawLines() }
@@ -547,6 +548,27 @@ struct MemoMenuHost: NSViewRepresentable {
             let rect = convert(window.convertFromScreen(screen), from: nil)
             // Another text field's answer would land outside the box.
             return bounds.insetBy(dx: -2, dy: -MemoStyle.lineHeight).contains(CGPoint(x: rect.minX, y: rect.midY)) ? rect : nil
+        }
+
+        /// The caret's line in this view, from the focused text view's layout: unlike the input
+        /// method's answer it is there while the line is out of sight.
+        @MainActor
+        private func caretLineRect() -> CGRect? {
+            guard let draft, draft.hasFocus, let textView = window?.firstResponder as? NSTextView, !textView.isFieldEditor,
+                  let manager = textView.textLayoutManager, let content = manager.textContentManager else { return nil }
+            let caret = textView.selectedRange().location
+            guard let location = content.location(content.documentRange.location, offsetBy: caret) else { return nil }
+            var found: CGRect?
+            manager.ensureLayout(for: NSTextRange(location: location))
+            manager.enumerateTextSegments(in: NSTextRange(location: location), type: .standard, options: [.rangeNotRequired]) { _, frame, _, _ in
+                found = frame
+                return false
+            }
+            guard var line = found else { return nil }
+            line.origin.x += textView.textContainerOrigin.x
+            line.origin.y += textView.textContainerOrigin.y
+            line.size.height = max(line.height, MemoStyle.lineHeight)
+            return convert(line, from: textView)
         }
 
         @MainActor

@@ -137,6 +137,52 @@ enum MemoFormatCheck {
             check(heights.first == height && heights.count == 2, "a stored \(style) line is \(height) pt tall", "\(heights)")
         }
 
+        // ToDos push the memo under the panel's foot: the panel scrolls to the caret's line.
+        let pushed = (1...25).compactMap { memos.todos.add("할 일 \($0)", to: model.panelPeriod) }
+        try? await Task.sleep(for: .seconds(0.6))
+        // The panel's own scroll view, around the memo's.
+        var outerScroll: NSScrollView? {
+            var view = editor.enclosingScrollView?.superview
+            while let next = view, !(next is NSScrollView) { view = next.superview }
+            return view as? NSScrollView
+        }
+        func caretShows() -> (Bool, String) {
+            guard let outer = outerScroll else { return (false, "no panel scroll view") }
+            let screen = editor.firstRect(forCharacterRange: editor.selectedRange(), actualRange: nil)
+            guard screen != .zero else { return (false, "no caret rect, first responder \(window.firstResponder === editor), range \(editor.selectedRange()), length \(editor.string.count)") }
+            let caret = window.convertFromScreen(screen)
+            let shown = outer.convert(outer.bounds, to: nil)
+            return (shown.minY <= caret.minY && caret.maxY <= shown.maxY, "caret \(caret) panel \(shown)")
+        }
+        let longMemo = AttributedString((1...14).map { "줄 \($0)" }.joined(separator: "\n"))
+        if let outer = outerScroll {
+            outer.contentView.scroll(to: .zero)
+            outer.reflectScrolledClipView(outer.contentView)
+        }
+        try? await Task.sleep(for: .seconds(0.4))
+        window.makeFirstResponder(editor)
+        try? await Task.sleep(for: .seconds(0.3))
+        await reset(longMemo)
+        // As typing there would: the memo's own view keeps its caret in sight.
+        editor.scrollRangeToVisible(editor.selectedRange())
+        try? await Task.sleep(for: .seconds(0.6))
+        let atEnd = caretShows()
+        check(atEnd.0, "the panel scrolls down to a caret under its foot", atEnd.1)
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        editor.scrollRangeToVisible(editor.selectedRange())
+        try? await Task.sleep(for: .seconds(0.6))
+        let atStart = caretShows()
+        check(atStart.0, "the panel scrolls back up to a caret over its top", atStart.1)
+        let offset = outerScroll?.contentView.bounds.origin.y
+        editor.setSelectedRange(NSRange(location: 3, length: 0))
+        try? await Task.sleep(for: .seconds(0.6))
+        check(offset != nil && outerScroll?.contentView.bounds.origin.y == offset, "a caret already in view leaves the panel still", "\(String(describing: offset))")
+        memos.todos.entries(for: model.panelPeriod).filter { entry in pushed.contains { $0.id == entry.todoID } }.forEach(memos.todos.remove)
+        try? await Task.sleep(for: .seconds(0.4))
+        window.makeFirstResponder(editor)
+        try? await Task.sleep(for: .seconds(0.3))
+        check(draft.hasFocus, "the memo has focus again after the scroll checks")
+
         // `* ` becomes a bullet; ⌘Z takes it back to the star.
         await reset()
         await type("*")

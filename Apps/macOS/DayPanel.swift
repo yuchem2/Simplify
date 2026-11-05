@@ -10,6 +10,9 @@ struct DayPanel: View {
     /// The scroll view's height, and the memo's top inside its content: the memo takes what is left.
     @State private var viewport: CGFloat = 0
     @State private var memoTop: CGFloat = 0
+    /// The panel's scroll, moved only to bring the memo's caret line into view.
+    @State private var scroll = ScrollPosition()
+    @State private var scrolledTo: CGFloat = 0
 
     /// Beside the small month, whose list already shows the day's events.
     private var isWide: Bool { model.isPanelWide && !model.isPanelHidden }
@@ -51,7 +54,7 @@ struct DayPanel: View {
             .padding(.top, Metrics.spaceXxl)
             .padding(.bottom, Metrics.spaceM)
 
-            ScrollArea {
+            ScrollArea(position: $scroll) {
                 VStack(alignment: .leading, spacing: Metrics.spaceXxl) {
                     ForEach(sections(for: period.scope), id: \.title) { section in
                         VStack(alignment: .leading, spacing: Metrics.spaceM) {
@@ -83,7 +86,7 @@ struct DayPanel: View {
                                 }
                             } else if section.kind == .memo {
                                 MemoEditor(draft: memos.draft, period: period, chosenDay: model.selectedDay, height: memoHeight,
-                                           title: section.title, placeholder: section.empty)
+                                           title: section.title, placeholder: section.empty, onCaretLine: reveal)
                                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.content)).minY } action: { memoTop = $0 }
                             } else {
                                 TodoList(period: period, model: model, memos: memos)
@@ -96,6 +99,7 @@ struct DayPanel: View {
                 .coordinateSpace(.named(Self.content))
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewport = $0 }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in scrolledTo = offset }
         }
         .background(.paper)
         .overlay { PanelPopLayer(model: model, calendars: calendars, memos: memos) }
@@ -103,6 +107,18 @@ struct DayPanel: View {
         .onChange(of: memos.todos.revision) { memos.draft.refreshChips() }
         // Every pop is about the period on screen (the memo's lines, a place in its letters).
         .onChange(of: period) { memos.todos.pop = nil }
+    }
+
+    /// Scrolls the panel just enough that the memo's caret line, `line` in the memo's own place,
+    /// shows with a line to spare above or under it; a line already in view stays put.
+    private func reveal(_ line: CGRect) {
+        let room = MemoStyle.lineHeight
+        let top = memoTop + line.minY, bottom = memoTop + line.maxY
+        if top - room < scrolledTo {
+            scroll.scrollTo(y: max(0, top - room))
+        } else if bottom + room > scrolledTo + viewport {
+            scroll.scrollTo(y: bottom + room - viewport)
+        }
     }
 
     /// `일정 16 · 할 일 4/9`: the month's events, and its ToDos finished out of all.
