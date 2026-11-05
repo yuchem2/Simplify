@@ -224,10 +224,9 @@ extension MemoDraft {
 
     /// Files each line as a new ToDo under `target` and puts a chip where the line was.
     func makeTodos(fromLines lines: [Int], in target: Period) {
-        guard let period else { return }
+        guard period != nil else { return }
         // Saved first, so the ToDos can name the note they came from.
         flush()
-        let noteID = book.noteID(for: period)
         let all = MemoTodoLines.lines(in: text)
         var made: [(line: Int, item: TodoItem)] = []
         for number in lines where all.indices.contains(number) {
@@ -327,6 +326,10 @@ struct MemoMenuHost: NSViewRepresentable {
             draft?.selectionLineInWindow = { [weak self] in self?.selectionLineInWindow() }
             draft?.caretLineRect = { [weak self] in self?.caretLineRect() }
             draft?.inkTextView = { [weak self] in self?.inkTextView() }
+            draft?.resignEditor = { [weak self] in
+                guard let self, let window = self.window, let textView = self.styler.textView, window.firstResponder === textView else { return }
+                window.makeFirstResponder(nil)
+            }
             draft?.showMenu = { [weak self] in self?.showMenuUnderSelection() }
             draft?.redrawLines = { [weak self] in self?.redrawLines() }
             draft?.editLines = { [weak self] make in self?.editLines(make) ?? false }
@@ -602,6 +605,12 @@ struct MemoMenuHost: NSViewRepresentable {
             }
             if let textView = styler.textView { installDrop(on: textView) }
             styler.update()
+            // After the text view has laid the new letters out.
+            Task { @MainActor [weak self] in
+                guard let self, let draft = self.draft, let textView = self.styler.textView,
+                      let height = MemoTextViews.contentHeight(of: textView), height != draft.contentHeight else { return }
+                draft.contentHeight = height
+            }
             // Letters typed after a drawn formula are not part of it.
             if styler.caretIsAfterDrawnFormula { draft.dropFormulaTyping() }
         }
@@ -622,7 +631,10 @@ struct MemoMenuHost: NSViewRepresentable {
 
         @MainActor
         private func memoTextView(in view: NSView, box: CGRect) -> NSTextView? {
-            if let textView = view as? NSTextView, !textView.isFieldEditor, let content = window?.contentView {
+            // Not a read-only memo of 모아 보기 (`MemoReadOnly`), which may pass under the box while
+            // the memos are laid out again.
+            if let textView = view as? NSTextView, !textView.isFieldEditor, !MemoTextViews.readOnly.contains(textView),
+               let content = window?.contentView {
                 let frame = content.convert((textView.enclosingScrollView ?? textView).bounds, from: textView.enclosingScrollView ?? textView)
                 let top = content.isFlipped ? frame : CGRect(x: frame.minX, y: content.bounds.height - frame.maxY, width: frame.width, height: frame.height)
                 return top.intersects(box) ? textView : nil

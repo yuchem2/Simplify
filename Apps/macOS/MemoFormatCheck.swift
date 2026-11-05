@@ -52,7 +52,11 @@ enum MemoFormatCheck {
 
     private static var kept: [NSWindow] = []
 
-    private static func log(_ line: String) { lines.append(line) }
+    private static func log(_ line: String) {
+        lines.append(line)
+        // As it goes, so a crash midway still leaves what passed.
+        try? lines.joined(separator: "\n").write(to: FileManager.default.temporaryDirectory.appending(path: "memo-check.txt"), atomically: true, encoding: .utf8)
+    }
 
     private static func check(_ ok: Bool, _ what: String, _ got: @autoclosure () -> String = "") {
         log((ok ? "PASS  " : "FAIL  ") + what + (ok ? "" : "  got: \(got())"))
@@ -64,10 +68,13 @@ enum MemoFormatCheck {
         let calendars = CalendarController(container: try! SimplifyStore.makeCacheContainer(inMemory: true), calendar: model.calendar)
         // The panel's remembered settings are put back at the end.
         let kept = (model.isPanelHidden, model.isPanelWide, model.panelWidth, model.miniMonthWidth, model.calendarView)
+        let keptLayout = model.memoLayout
         defer {
             model.calendarView = kept.4
             (model.isPanelHidden, model.isPanelWide, model.panelWidth, model.miniMonthWidth) = (kept.0, kept.1, kept.2, kept.3)
+            model.memoLayout = keptLayout
         }
+        model.memoLayout = .one
         model.calendarView = .month
         model.panelMode = .wide
         model.select(model.today)
@@ -113,6 +120,11 @@ enum MemoFormatCheck {
         let delete: (UInt16, String) = (51, "\u{7f}")
         let space: (UInt16, String) = (49, " ")
 
+        if only == "memos" {
+            await checkMemos(memos: memos, model: model, editor: editor, window: window, reset: reset, type: type, key: key)
+            window.close()
+            return
+        }
         if only == "attachments" {
             await checkAttachments(draft: draft, editor: editor, window: window, reset: reset, key: key)
             window.close()
@@ -1030,6 +1042,261 @@ enum MemoFormatCheck {
         try? fm.removeItem(at: folder)
     }
 
+    /// A period's several memos: making, names, renaming in the tab, leaving an empty one, 모아
+    /// 보기, deleting, ToDos made from a memo and 가져오기, the 메모 app's names, and the caret's line
+    /// kept in view in 모아 보기.
+    private static func checkMemos(memos: MemoBook, model: AppModel, editor: NSTextView, window: NSWindow,
+                                   reset: (AttributedString, Int?) async -> Void, type: (String) async -> Void,
+                                   key: (UInt16, String, NSEvent.ModifierFlags) async -> Void) async {
+        let draft = memos.draft
+        let returnKey: (UInt16, String) = (36, "\r")
+        let escape: (UInt16, String) = (53, "\u{1b}")
+        let tabKey: (UInt16, String) = (48, "\t")
+        func wait(_ seconds: Double = 0.4) async { try? await Task.sleep(for: .seconds(seconds)) }
+        guard let period = draft.period else {
+            log("FAIL  no open period")
+            return
+        }
+        func names() -> [String] { memos.tabs(for: period).map(\.name) }
+        func stored() -> [String] { memos.tabs(for: period).compactMap { tab in tab.id.map { _ in tab.name } } }
+        var nameEditor: NSTextView? { (window.firstResponder as? NSTextView).flatMap { $0.isFieldEditor ? $0 : nil } }
+        /// Until the name's field has taken the keyboard (it does so a moment after it shows).
+        func waitForName() async {
+            for _ in 0..<20 where nameEditor == nil { try? await Task.sleep(for: .seconds(0.1)) }
+        }
+        func renameShowsOnlyACaret() -> (Bool, String) {
+            guard let field = nameEditor, field.isFieldEditor else { return (false, "first responder \(String(describing: window.firstResponder))") }
+            let range = field.selectedRange()
+            return (range.length == 0 && range.location == (field.string as NSString).length, "\(field.string) \(range)")
+        }
+
+        // An empty day shows one empty memo; its first letters save it without a name.
+        check(names() == ["새 메모"] && draft.noteID == nil, "a day with no memo shows one empty 새 메모", "\(names())")
+        window.makeFirstResponder(editor)
+        await reset(AttributedString(), nil)
+        await type("첫 메모")
+        draft.flush()
+        let first = draft.noteID
+        check(first != nil && stored() == ["새 메모"], "typing saves the day's first memo, shown as 새 메모", "\(names())")
+        check(memos.stored(note: first ?? UUID(), calendar: model.calendar).noteName(period) == NotesHTML.noteName(for: period),
+              "a memo without a name keeps the date alone in the 메모 app")
+
+        // + 새 메모: named 새 메모(1), its name in the tab with the caret at its end; Return goes to the memo.
+        draft.newMemo()
+        await wait(0.3)
+        await waitForName()
+        let second = draft.noteID
+        check(second != nil && second != first && names() == ["새 메모", "새 메모(1)"], "+ 새 메모 makes 새 메모(1)", "\(names())")
+        check(draft.renaming == second, "the new memo's name is open in its tab")
+        capture(window, "memos-rename")
+        let caret = renameShowsOnlyACaret()
+        check(caret.0, "the name shows only a caret at its end, nothing picked", caret.1)
+        await key(returnKey.0, returnKey.1, [])
+        await wait()
+        check(draft.renaming == nil && names() == ["새 메모", "새 메모(1)"], "Return keeps the name", "\(names())")
+        check(window.firstResponder === editor && draft.hasFocus, "Return goes on to the memo", "\(String(describing: window.firstResponder))")
+
+        // Left blank under its 새 메모(n) name, it goes once another memo is opened.
+        draft.select(first)
+        await wait()
+        check(names() == ["새 메모"] && draft.noteID == first, "an empty 새 메모(n) goes when it is left", "\(names())")
+
+        // A new one with words stays; numbers take the first free one.
+        draft.newMemo()
+        await wait(0.3)
+        await waitForName()
+        await key(tabKey.0, tabKey.1, [])
+        check(draft.renaming == nil && window.firstResponder === editor, "Tab also leaves the name for the memo")
+        await type("안건 하나\n[ ] 견적서 보내기")
+        draft.flush()
+        let meeting = draft.noteID!
+        draft.newMemo()
+        await wait(0.3)
+        await waitForName()
+        let third = draft.noteID!
+        check(names() == ["새 메모", "새 메모(1)", "새 메모(2)"], "numbers go on to the first free one", "\(names())")
+
+        // Renaming in the tab: typed over, Return; a name another memo has gets (1); Esc puts it back.
+        nameEditor?.selectAll(nil)
+        nameEditor?.insertText("회의록", replacementRange: nameEditor?.selectedRange() ?? NSRange())
+        await key(returnKey.0, returnKey.1, [])
+        await wait()
+        check(names()[2] == "회의록", "a name typed in the tab is kept", "\(names())")
+        await wait(0.6)
+        draft.startRenaming(meeting)
+        await wait(0.3)
+        await waitForName()
+        check(draft.noteID == meeting && renameShowsOnlyACaret().0, "이름 바꾸기 opens the memo and its name with a caret", renameShowsOnlyACaret().1)
+        nameEditor?.selectAll(nil)
+        nameEditor?.insertText("회의록", replacementRange: nameEditor?.selectedRange() ?? NSRange())
+        await key(returnKey.0, returnKey.1, [])
+        await wait()
+        check(names() == ["새 메모", "회의록(1)", "회의록"], "a name another memo has gets (1)", "\(names())")
+        await wait(0.6)
+        draft.startRenaming(meeting)
+        await wait(0.3)
+        await waitForName()
+        nameEditor?.insertText(" 바꿈", replacementRange: nameEditor?.selectedRange() ?? NSRange())
+        await key(escape.0, escape.1, [])
+        await wait()
+        check(names()[1] == "회의록(1)" && draft.renaming == nil, "Esc puts the name back", "\(names())")
+        await wait(0.6)
+        draft.startRenaming(third)
+        await wait(0.3)
+        await waitForName()
+        nameEditor?.selectAll(nil)
+        nameEditor?.deleteBackward(nil)
+        await key(returnKey.0, returnKey.1, [])
+        await wait()
+        check(names()[2] == "새 메모(1)", "a name cleared away takes the 새 메모 rule", "\(names())")
+        await wait(0.6)
+        draft.startRenaming(third)
+        await wait(0.3)
+        await waitForName()
+        nameEditor?.selectAll(nil)
+        nameEditor?.insertText("빈 메모", replacementRange: nameEditor?.selectedRange() ?? NSRange())
+        await key(returnKey.0, returnKey.1, [])
+        draft.select(first)
+        await wait()
+        check(names() == ["새 메모", "회의록(1)", "빈 메모"], "a renamed memo stays though it is empty", "\(names())")
+        check(memos.has(period), "the day keeps its pencil mark")
+
+        // The 메모 app's names: the date and the memo's name.
+        check(memos.stored(note: meeting, calendar: model.calendar).noteName(period) == NotesHTML.noteName(for: period) + " - 회의록(1)",
+              "a named memo's 메모 app note is the date and its name",
+              memos.stored(note: meeting, calendar: model.calendar).noteName(period) ?? "nil")
+
+        // ToDos made from a memo name it; 가져오기 finds its lines under its name.
+        draft.select(meeting)
+        await wait()
+        let lines = memos.todoLines(calendar: model.calendar).filter { $0.note == meeting }
+        check(lines.count == 1 && lines.first?.name == "회의록(1)", "가져오기 finds the memo's ToDo line under its name", "\(lines.map(\.name))")
+        draft.makeTodos(fromLines: [1], in: period)
+        await wait()
+        let made = memos.todos.entries(for: period).first { $0.title == "견적서 보내기" }
+        check(made?.sourceNoteID == meeting, "a ToDo made from the memo names that memo", "\(String(describing: made?.sourceNoteID))")
+        check(memos.label(ofNote: meeting, calendar: model.calendar) == "회의록(1)", "the ToDo's memo link says which memo")
+        // A rewrite of a memo not open lands in it, not in the open one.
+        draft.select(first)
+        await wait()
+        memos.rewrite(note: meeting) { $0.append(AttributedString("\n덧붙임")) }
+        check(memos.text(note: meeting).map { String($0.characters) }?.hasSuffix("덧붙임") == true && String(draft.text.characters) == "첫 메모",
+              "a change to a memo not open goes to that memo", String(draft.text.characters))
+
+        capture(window, "memos-one")
+        // 모아 보기: the memos one under another; only the open one is an editor.
+        draft.resignEditor?()
+        model.memoLayout = .all
+        await wait(1.0)
+        capture(window, "memos-all")
+        let readOnly = textViews(in: window.contentView!).filter { MemoTextViews.readOnly.contains($0) }
+        check(readOnly.count == 2, "모아 보기 draws the other two memos read-only", "\(readOnly.count)")
+        check(readOnly.allSatisfy { $0.textContentStorage?.delegate is MemoLineStyler }, "each is drawn by the memo's own styler")
+        check(readOnly.contains { $0.string.contains("견적서") }, "a read-only memo shows its words")
+        check(UserDefaults.standard.string(forKey: "memoLayout") == "all", "the layout is remembered on this Mac")
+        // Another day in 모아 보기 is opened, its memo the one written.
+        draft.resignEditor?()
+        model.select(model.today.addingTimeInterval(86_400))
+        await wait(0.8)
+        check(draft.period?.key == model.panelPeriod.key && draft.period?.key != period.key, "모아 보기 opens the day picked",
+              "\(String(describing: draft.period?.key))")
+        draft.resignEditor?()
+        model.select(model.today)
+        await wait(0.8)
+        check(draft.period?.key == period.key && draft.noteID == first, "and back on the day, its memo last open", "\(String(describing: draft.period?.key))")
+        // A click on one moves the writing to it.
+        // As drawn now: the day was left and opened again, so these are new text views.
+        if let target = textViews(in: window.contentView!).filter({ MemoTextViews.readOnly.contains($0) }).first(where: { $0.string.contains("안건") }) {
+            await wait(0.6)
+            click(target, in: window)
+            await wait(1.0)
+            check(draft.noteID == meeting, "a click on a read-only memo opens it", "\(String(describing: draft.noteID))")
+            let live = window.firstResponder as? NSTextView
+            check(live.map { !$0.isFieldEditor && !MemoTextViews.readOnly.contains($0) } == true && draft.hasFocus, "and the caret goes into it",
+                  "\(String(describing: window.firstResponder))")
+            check(textViews(in: window.contentView!).filter { MemoTextViews.readOnly.contains($0) }.count == 2, "the memo left is drawn read-only")
+        } else {
+            check(false, "the meeting memo is drawn read-only")
+        }
+        // The caret's line kept in view: ToDos push the memos down, the last memo is written in.
+        let pushed = (1...20).compactMap { memos.todos.add("미는 할 일 \($0)", to: period) }
+        draft.resignEditor?()
+        draft.focusOnAppear = true
+        draft.select(third)
+        await wait(1.0)
+        // The editor takes focus as it appears (`focusOnAppear`).
+        if let live = window.firstResponder as? NSTextView, !live.isFieldEditor, !MemoTextViews.readOnly.contains(live) {
+            live.setSelectedRange(NSRange(location: (live.string as NSString).length, length: 0))
+            live.insertText("마지막 메모의 줄", replacementRange: live.selectedRange())
+            await wait(0.8)
+            var outer: NSScrollView? = live.enclosingScrollView?.superview.flatMap { view in
+                var next: NSView? = view
+                while let current = next, !(current is NSScrollView) { next = current.superview }
+                return next as? NSScrollView
+            }
+            if outer == nil { outer = nil }
+            let screen = live.firstRect(forCharacterRange: live.selectedRange(), actualRange: nil)
+            let caretRect = window.convertFromScreen(screen)
+            let shown = outer.map { $0.convert($0.bounds, to: nil) } ?? .zero
+            check(screen != .zero && shown.minY <= caretRect.minY && caretRect.maxY <= shown.maxY,
+                  "모아 보기 scrolls the panel to the caret's line", "caret \(caretRect) panel \(shown)")
+        } else {
+            check(false, "모아 보기 has an editor for the open memo, with focus", "\(String(describing: window.firstResponder))")
+        }
+        memos.todos.entries(for: period).filter { entry in pushed.contains { $0.id == entry.todoID } }.forEach(memos.todos.remove)
+        await wait(0.4)
+        draft.resignEditor?()
+        model.memoLayout = .one
+        await wait(0.8)
+        check(textViews(in: window.contentView!).filter { MemoTextViews.readOnly.contains($0) }.isEmpty, "하나씩 shows one memo again")
+
+        // 메모 지우기: asked in the panel when the memo has words; straight away when it has none.
+        draft.select(meeting)
+        await wait()
+        draft.askToDelete(meeting)
+        await wait()
+        check(draft.confirmingDelete == meeting && stored().count == 3, "deleting a memo with words asks first")
+        draft.delete(meeting)
+        await wait()
+        check(names() == ["새 메모", "빈 메모"] && draft.noteID == first, "deleting opens the memo before it", "\(names())")
+        check(memos.stored(note: meeting, calendar: model.calendar).isGone, "the deleted memo's 메모 app note goes too")
+        // 빈 메모 took a line in 모아 보기; emptied again, it goes without asking.
+        draft.select(third)
+        await reset(AttributedString(), nil)
+        draft.flush()
+        draft.askToDelete(third)
+        await wait()
+        check(draft.confirmingDelete == nil && names() == ["새 메모"], "an empty memo goes without asking", "\(names())")
+        // Back to one empty memo, as it began.
+        draft.select(first)
+        await reset(AttributedString(), nil)
+        draft.flush()
+        model.select(model.today.addingTimeInterval(86_400))
+        await wait(0.6)
+        check(memos.tabs(for: period).map(\.id) == [nil], "the emptied first memo goes when the day is left", "\(memos.tabs(for: period).map(\.name))")
+        model.select(model.today)
+        await wait(0.4)
+        _ = escape
+    }
+
+    private static func textViews(in view: NSView) -> [NSTextView] {
+        var found: [NSTextView] = []
+        if let textView = view as? NSTextView, !textView.isFieldEditor, textView.window != nil, !textView.isHiddenOrHasHiddenAncestor { found.append(textView) }
+        for subview in view.subviews { found += textViews(in: subview) }
+        return found
+    }
+
+    /// A left click in the middle of `view`, posted to the app as the mouse would send it.
+    private static func click(_ view: NSView, in window: NSWindow) {
+        let point = view.convert(NSPoint(x: min(view.bounds.midX, 40), y: view.bounds.midY), to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                              windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                NSApp.postEvent(event, atStart: false)
+            }
+        }
+    }
+
     private static func textView(_ view: NSView) -> NSTextView? {
         if let found = view as? NSTextView, !found.isFieldEditor { return found }
         for subview in view.subviews {
@@ -1071,6 +1338,19 @@ enum MemoFormatCheck {
         guard let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: FileManager.default.temporaryDirectory.appending(path: "memo-check-\(name).png"))
+    }
+}
+
+extension MemoBook.Stored {
+    /// The 메모 app note's name for this memo, nil when it is gone or unreadable.
+    func noteName(_ period: Period) -> String? {
+        guard case .memo(let period, _, let name) = self else { return nil }
+        return NotesHTML.noteName(for: period, memo: name)
+    }
+
+    var isGone: Bool {
+        if case .gone = self { return true }
+        return false
     }
 }
 #endif

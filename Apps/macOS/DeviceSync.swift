@@ -309,7 +309,7 @@ final class DeviceSync {
     private func take(_ applied: SyncRecords.Applied) {
         guard !applied.isEmpty else { return }
         if !applied.notes.isEmpty || applied.todosChanged {
-            memos?.takeSynced(notes: applied.notes, todosChanged: applied.todosChanged, calendar: model?.calendar ?? .simplify)
+            memos?.takeSynced(notes: applied.notes, periods: applied.periods, todosChanged: applied.todosChanged, calendar: model?.calendar ?? .simplify)
         }
         if !applied.settings.isEmpty {
             model?.takeSyncedSettings()

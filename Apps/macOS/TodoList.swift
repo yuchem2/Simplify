@@ -138,14 +138,15 @@ struct TodoList: View {
     @ViewBuilder
     private func meta(_ entry: TodoEntry, onInk: Bool) -> some View {
         let places = entry.elsewhere.compactMap { $0.period(calendar: model.calendar) }
-        let source = entry.sourceNoteID.flatMap { memos.period(ofNote: $0, calendar: model.calendar) }
+        let source = entry.sourceNoteID.flatMap { id in memos.period(ofNote: id, calendar: model.calendar).map { (id: id, period: $0) } }
         if !places.isEmpty || source != nil {
             HStack(spacing: Metrics.spaceM) {
                 if let source {
-                    Button { show(source) } label: {
+                    Button { show(source.period, note: source.id) } label: {
                         HStack(spacing: Metrics.spaceXxs) {
                             Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .semibold))
-                            Text("\(TodoNames.short(source)) 메모").underline()
+                            Text(memos.label(ofNote: source.id, calendar: model.calendar).map { "\(TodoNames.short(source.period)) · \($0)" }
+                                ?? "\(TodoNames.short(source.period)) 메모").underline()
                         }
                     }
                     .buttonStyle(FocusOnlyStyle())
@@ -239,7 +240,10 @@ struct TodoList: View {
         return true
     }
 
-    private func show(_ period: Period) {
+    /// Opens the memo a ToDo was made from: its period, and that memo among the period's.
+    private func show(_ period: Period, note: UUID) {
+        memos.choose(note, in: period)
+        if memos.draft.period == period { memos.draft.select(note) }
         model.select(period.start)
         model.panelScope = period.scope
     }

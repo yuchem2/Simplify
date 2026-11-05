@@ -1,9 +1,11 @@
 import Foundation
 import SwiftData
 
-/// How records are matched across devices: memos by period, ToDos and links by id.
+/// How records are matched across devices: memos, ToDos and links by id. Before a period could
+/// have several memos (sync format 1), memos went by period.
 public enum SyncKey {
-    /// `day|2026-11-03`: a memo's place, the same on every device.
+    /// `day|2026-11-03`: a memo's period, the same on every device. Format 1 matched memos by it;
+    /// tombstones and histories from then still name memos this way.
     public static func note(scope: PeriodScope, periodKey: String) -> String {
         "\(scope.rawValue)|\(periodKey)"
     }

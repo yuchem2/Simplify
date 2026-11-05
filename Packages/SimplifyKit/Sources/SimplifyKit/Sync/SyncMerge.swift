@@ -6,11 +6,12 @@ import Foundation
 /// Every record keeps the version changed last, and a tombstone newer than a record removes it;
 /// on equal times the device whose id sorts later wins, so both devices reach the same result.
 ///
-/// Memos' texts go by their history instead (`SyncNote.history`): a text that grew out of the
-/// other replaces it, whatever the clocks say (deleting still goes by time). When neither grew out
-/// of the other, both devices wrote it apart: the later text stays and the earlier one is added
-/// after a dividing line, so no one's writing is lost. Two devices that each wrote a day before
-/// they first met keep both texts.
+/// Memos are matched by id, so each of a period's memos stays its own. Their texts go by their
+/// history instead (`SyncNote.history`): a text that grew out of the other replaces it, whatever
+/// the clocks say (deleting still goes by time). When neither grew out of the other, both devices
+/// wrote it apart: the later text stays and the earlier one is added after a dividing line, so no
+/// one's writing is lost. Their names go by time. Two devices that each wrote a day before they
+/// first met keep both memos.
 public enum SyncMerge {
     /// The line between a memo and the other device's text added under it.
     public static let divider = "─── 다른 기기에서 쓴 글 ───"
@@ -38,27 +39,40 @@ public enum SyncMerge {
             return deletion.deletedAt >= changedAt
         }
 
-        // Memos.
+        // Memos, by id. A tombstone from a version before a period could have several (format 1)
+        // names the period instead; it buries the period's memo that version knew: one without a
+        // name of its own, not changed since. Named memos were made with `+ 새 메모` here, which
+        // such a version never sees.
+        func isBuried(_ note: SyncNote) -> Bool {
+            isBuried(.note, note.key, changedAt: note.updatedAt)
+                || (note.title.isEmpty && isBuried(.note, note.periodSlot, changedAt: note.updatedAt))
+        }
         var notes: [String: SyncNote] = [:]
-        var renamedNotes: [UUID: UUID] = [:]
         // Each side meets the tombstones first, so a text deleted since is not joined to a new one.
-        let localNotes = Dictionary(local.notes.filter { !isBuried(.note, $0.key, changedAt: $0.updatedAt) }.map { ($0.key, $0) }, uniquingKeysWith: newest)
-        let remoteNotes = Dictionary(remote.notes.filter { !isBuried(.note, $0.key, changedAt: $0.updatedAt) }.map { ($0.key, $0) }, uniquingKeysWith: newest)
+        let localNotes = Dictionary(local.notes.filter { !isBuried($0) }.map { ($0.key, $0) }, uniquingKeysWith: newest)
+        let remoteNotes = Dictionary(remote.notes.filter { !isBuried($0) }.map { ($0.key, $0) }, uniquingKeysWith: newest)
         for key in Set(localNotes.keys).union(remoteNotes.keys) {
             switch (localNotes[key], remoteNotes[key]) {
             case (let mine?, nil):
                 notes[key] = mine
             case (nil, let theirs?):
                 notes[key] = theirs
-            case (var mine?, let theirs?) where taken[key] == digest(theirs.body):
-                mine.history = remembered(theirs.history + mine.history)
-                notes[key] = mine
             case (let mine?, let theirs?):
-                var note = mergeNote(mine, theirs, remoteIsNewer: remoteIsNewer, now: now)
-                // One id for the memo on every device: the smaller. ToDos made from it follow below.
-                let id = [mine.id, theirs.id].min { $0.uuidString < $1.uuidString }!
-                for other in [mine.id, theirs.id] where other != id { renamedNotes[other] = id }
-                note.id = id
+                // `taken` from before format 2 names the memo by its period.
+                let lastTaken = taken[key] ?? taken[theirs.periodSlot]
+                var note: SyncNote
+                if lastTaken == digest(theirs.body) {
+                    note = mine
+                    note.history = remembered(theirs.history + mine.history)
+                } else {
+                    note = mergeNote(mine, theirs, remoteIsNewer: remoteIsNewer, now: now)
+                }
+                // The name goes by time on its own: renaming does not change the text's history. Taken
+                // from the newer side, the time comes too, so the next merge does not take it back.
+                let named = remoteIsNewer(theirs.updatedAt, mine.updatedAt) ? theirs : mine
+                note.title = named.title
+                note.updatedAt = max(note.updatedAt, named.updatedAt)
+                note.createdAt = min(mine.createdAt, theirs.createdAt)
                 notes[key] = note
             case (nil, nil):
                 break
@@ -66,11 +80,8 @@ public enum SyncMerge {
         }
 
         // ToDos and links: the later version of each, whole.
-        var todos = lastWriterWins(local.todos, remote.todos, id: \.id, changedAt: \.updatedAt, remoteIsNewer: remoteIsNewer)
+        let todos = lastWriterWins(local.todos, remote.todos, id: \.id, changedAt: \.updatedAt, remoteIsNewer: remoteIsNewer)
             .filter { !isBuried(.todo, $0.id.uuidString, changedAt: $0.updatedAt) }
-        for index in todos.indices {
-            if let source = todos[index].sourceNoteID, let renamed = renamedNotes[source] { todos[index].sourceNoteID = renamed }
-        }
         // A link made elsewhere to a ToDo deleted here goes with the ToDo.
         let kept = Set(todos.map(\.id))
         let links = lastWriterWins(local.links, remote.links, id: \.id, changedAt: \.updatedAt, remoteIsNewer: remoteIsNewer)

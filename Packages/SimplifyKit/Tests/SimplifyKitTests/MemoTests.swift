@@ -159,7 +159,7 @@ struct MemoTests {
         #expect(try context.fetch(FetchDescriptor<DiaryNote>()).isEmpty)
     }
 
-    @Test func duplicateNotesFoldIntoTheNewest() throws {
+    @Test func aPeriodsMemosStaySeparate() throws {
         let container = try SimplifyStore.makeContainer(inMemory: true)
         let context = container.mainContext
         let day = Period(containing: PeriodTests.date(2026, 10, 26, in: cal), scope: .day, calendar: cal)
@@ -171,9 +171,9 @@ struct MemoTests {
         }
         try context.save()
 
-        #expect(String(try Memos.text(for: day, in: context).characters) == "새 메모")
+        // Both stay; the first made is the period's first memo.
         try Memos.save(AttributedString("새 메모 고침"), for: day, in: context)
-        #expect(try context.fetch(FetchDescriptor<DiaryNote>()).count == 1)
+        #expect(try Memos.notes(for: day, in: context).count == 2)
     }
 
     @Test func dayWeekAndMonthMemosAreKeptApart() throws {

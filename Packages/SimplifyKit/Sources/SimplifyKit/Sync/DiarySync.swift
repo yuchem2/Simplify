@@ -11,9 +11,10 @@ import SwiftData
 public final class DiarySync {
     public static let folderName = "Simplify Sync"
     static let deviceIDKey = "syncDeviceID"
-    /// By memo key, the history of this device's text (`SyncNote.history`).
+    /// By memo id (by period before format 2), the history of this device's text (`SyncNote.history`).
     static let historyKey = "syncMemoHistory"
-    /// By other device id, then memo key: the digest of that device's text as last taken in.
+    /// By other device id, then memo id (period before format 2): the digest of that device's text
+    /// as last taken in.
     static let takenKey = "syncMemoTaken"
     static let lastSyncedKey = "syncLastSyncedAt"
 
@@ -73,7 +74,11 @@ public final class DiarySync {
     private func local() throws -> SyncSnapshot {
         var snapshot = try SyncRecords.read(from: ModelContext(container), defaults: defaults)
         let history = Self.history(in: defaults)
-        for index in snapshot.notes.indices { snapshot.notes[index].history = history[snapshot.notes[index].key] ?? [] }
+        // Histories from before format 2 are kept under the memo's period.
+        for index in snapshot.notes.indices {
+            let note = snapshot.notes[index]
+            snapshot.notes[index].history = history[note.key] ?? history[note.periodSlot] ?? []
+        }
         return snapshot
     }
 

@@ -163,7 +163,7 @@ private struct ImportPop: View {
     let memos: MemoBook
     let close: () -> Void
     @State private var todos: [TodoItem]
-    @State private var lines: [(period: Period, line: MemoTodoLine)]
+    @State private var lines: [MemoBook.FoundLine]
     @State private var picked: Set<String> = []
 
     init(period: Period, model: AppModel, memos: MemoBook, close: @escaping () -> Void) {
@@ -191,7 +191,8 @@ private struct ImportPop: View {
                     if lines.isEmpty { empty("[ ] 나 TODO: 로 시작하는 줄이 없어요.") }
                     ForEach(lines.indices, id: \.self) { index in
                         let found = lines[index]
-                        pick(lineKey(found), title: found.line.text, detail: "\(TodoNames.long(found.period).components(separatedBy: " · ")[0]) 메모")
+                        let place = TodoNames.long(found.period).components(separatedBy: " · ")[0]
+                        pick(lineKey(found), title: found.line.text, detail: found.name.map { "\(place) · \($0)" } ?? "\(place) 메모")
                     }
                 }
             }
@@ -215,8 +216,8 @@ private struct ImportPop: View {
         Text(text).textStyle(.small).foregroundStyle(.inkSoft).padding(.horizontal, Metrics.spaceM).padding(.vertical, Metrics.spaceXs)
     }
 
-    private func lineKey(_ found: (period: Period, line: MemoTodoLine)) -> String {
-        "\(found.period.scope.rawValue):\(found.period.key):\(found.line.line)"
+    private func lineKey(_ found: MemoBook.FoundLine) -> String {
+        "\(found.note.uuidString):\(found.line.line)"
     }
 
     private func pick(_ key: String, title: String, detail: String) -> some View {
@@ -241,12 +242,11 @@ private struct ImportPop: View {
         }
         // Lines of one memo go in one rewrite, bottom first, so line numbers stay put.
         let chosen = lines.filter { picked.contains(lineKey($0)) }
-        for (memo, group) in Dictionary(grouping: chosen, by: { $0.period }) {
-            let noteID = memos.noteID(for: memo)
+        for (noteID, group) in Dictionary(grouping: chosen, by: \.note) {
             let made = group.compactMap { found in
                 book.add(found.line.title, to: period, sourceNoteID: noteID).map { (found.line.line, $0) }
             }
-            memos.rewrite(memo) { text in
+            memos.rewrite(note: noteID) { text in
                 for (line, item) in made.sorted(by: { $0.0 > $1.0 }) {
                     MemoTodoLines.replaceLine(line, in: &text, with: MemoChips.chip(id: item.id, title: item.title, isDone: false))
                 }
@@ -343,7 +343,10 @@ private struct SearchPop: View {
     }
 
     private func makeNew() {
-        guard let period = memos.draft.period, let item = memos.todos.add(query, to: period, sourceNoteID: memos.noteID(for: period)) else { return }
+        guard let period = memos.draft.period else { return }
+        // Saved first, so a period's first memo has an id for the ToDo to name.
+        memos.draft.flush()
+        guard let item = memos.todos.add(query, to: period, sourceNoteID: memos.draft.noteID) else { return }
         memos.todos.pop = nil
         memos.draft.insertChip(item.id, at: offset)
     }

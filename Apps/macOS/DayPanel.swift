@@ -70,6 +70,8 @@ struct DayPanel: View {
                                         .buttonStyle(DrawnButtonStyle(.text))
                                         .help("다른 날의 할 일과 메모 속 할 일 줄을 가져와요")
                                 } else if section.kind == .memo {
+                                    MemoLayoutSwitch(layout: $model.memoLayout, draft: memos.draft)
+                                    if model.memoLayout == .all { MemoAddButton(draft: memos.draft) }
                                     MemoParagraphButton(draft: memos.draft)
                                 } else if let action = section.action {
                                     Button(action) { model.newEvent(on: period.start, calendars: calendars) }
@@ -85,9 +87,7 @@ struct DayPanel: View {
                                     DayEvents(slots: calendars.slots[period.start] ?? [], day: period.start, model: model, calendars: calendars, calendar: model.calendar, empty: section.empty)
                                 }
                             } else if section.kind == .memo {
-                                MemoEditor(draft: memos.draft, period: period, chosenDay: model.selectedDay, height: memoHeight,
-                                           title: section.title, placeholder: section.empty, onCaretLine: reveal)
-                                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.content)).minY } action: { memoTop = $0 }
+                                memoSection(section, period: period)
                             } else {
                                 TodoList(period: period, model: model, memos: memos)
                             }
@@ -107,6 +107,59 @@ struct DayPanel: View {
         .onChange(of: memos.todos.revision) { memos.draft.refreshChips() }
         // Every pop is about the period on screen (the memo's lines, a place in its letters).
         .onChange(of: period) { memos.todos.pop = nil }
+        // Here as well as in the editor: 모아 보기 draws the editor only for the open memo, which a
+        // new period's memos do not hold until the period is opened. The same calendar check as
+        // the editor's, so a week's new first day opens it again.
+        .onChange(of: [period.key, "\(period.start.timeIntervalSinceReferenceDate)", "\(period.calendar.firstWeekday)"], initial: true) {
+            memos.draft.open(period)
+        }
+    }
+
+    /// The period's memos: under their tabs one at a time, the open one to the panel's foot
+    /// (하나씩), or all of them one under another, each as tall as its text (모아 보기).
+    @ViewBuilder
+    private func memoSection(_ section: Section, period: Period) -> some View {
+        let draft = memos.draft
+        let tabs = memos.tabs(for: period)
+        if let id = draft.confirmingDelete, let tab = tabs.first(where: { $0.id == id }) {
+            MemoDeleteQuestion(draft: draft, id: id, name: tab.name)
+        }
+        if model.memoLayout == .one {
+            MemoTabsRow(draft: draft, tabs: tabs)
+            editor(section, period: period, height: memoHeight)
+        } else {
+            VStack(alignment: .leading, spacing: Metrics.spaceXl) {
+                ForEach(tabs, id: \.id) { tab in
+                    VStack(alignment: .leading, spacing: Metrics.spaceXs) {
+                        MemoTabLabel(draft: draft, tab: tab, isOn: tab.id == draft.noteID, font: .display(17), nsFont: Self.headerFont, isHeader: true)
+                        if tab.id == draft.noteID {
+                            // A line to spare under the last, so a new line does not scroll inside the memo first.
+                            editor(section, period: period, height: max(draft.contentHeight, MemoStyle.lineHeight) + MemoStyle.lineHeight)
+                        } else {
+                            // Not while the open memo's bars may hang over this one.
+                            MemoReadOnly(text: memos.shownText(note: tab.id) ?? AttributedString(), label: tab.name,
+                                         canPick: { memos.todos.pop == nil && !model.isModalOpen && !draft.showsParagraphBar && !draft.hasSelectedText }) {
+                                // The editor leaves its memo for this one's place.
+                                guard tab.id != draft.noteID else { return }
+                                draft.resignEditor?()
+                                draft.focusOnAppear = true
+                                draft.select(tab.id)
+                                // Not opened (no period): no editor is coming to take the focus.
+                                if draft.noteID != tab.id { draft.focusOnAppear = false }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static var headerFont: NSFont { NSFont(name: "GowunBatang-Bold", size: 17) ?? .boldSystemFont(ofSize: 17) }
+
+    private func editor(_ section: Section, period: Period, height: CGFloat) -> some View {
+        MemoEditor(draft: memos.draft, period: period, chosenDay: model.selectedDay, height: height,
+                   title: section.title, placeholder: section.empty, onCaretLine: reveal)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.content)).minY } action: { memoTop = $0 }
     }
 
     /// Scrolls the panel just enough that the memo's caret line, `line` in the memo's own place,

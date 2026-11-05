@@ -22,6 +22,14 @@ public enum NotesHTML {
         }
     }
 
+    /// One memo's note: the period's name, ` - ` and the memo's name, as `2026년 11월 4일 (수) - 회의록`.
+    /// `name` is nil for a memo from before a period could have several, which keeps the period's
+    /// name alone.
+    public static func noteName(for period: Period, memo name: String?) -> String {
+        guard let name, !name.isEmpty else { return noteName(for: period) }
+        return "\(noteName(for: period)) - \(name)"
+    }
+
     /// The note's body, or nil for a blank memo, whose note is deleted instead.
     ///
     /// The memo's 제목, 머리말 and 부머리말 sit under the note's name: `<h2>`, `<h3>` and bold

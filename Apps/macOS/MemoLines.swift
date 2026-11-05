@@ -110,6 +110,17 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         update(force: true)
     }
 
+    /// Gives the text view's paragraphs back (a read-only memo of 모아 보기 that took another memo's
+    /// text view while the memos were laid out again).
+    func detach() {
+        guard let textView else { return }
+        if textView.textContentStorage?.delegate === self { textView.textContentStorage?.delegate = nil }
+        if textView.textLayoutManager?.delegate === self { textView.textLayoutManager?.delegate = nil }
+        if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+        frameObserver = nil
+        self.textView = nil
+    }
+
     /// After the letters, the caret or the focus changed: paragraphs whose look changed are made again.
     func update(force: Bool = false) {
         guard let textView, let storage = textView.textContentStorage, let text = storage.textStorage else { return }

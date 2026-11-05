@@ -88,6 +88,16 @@ final class AppModel {
             }
         }
     }
+    /// A period's memos one at a time under their tabs, or all of them one under another (the
+    /// "메모" rule's 하나씩 | 모아 보기). Remembered on this Mac.
+    var memoLayout = MemoLayout(rawValue: UserDefaults.standard.string(forKey: "memoLayout") ?? "") ?? .one {
+        didSet { UserDefaults.standard.set(memoLayout.rawValue, forKey: "memoLayout") }
+    }
+
+    enum MemoLayout: String, CaseIterable {
+        case one, all
+    }
+
     /// How large event titles are inside day cells (설정 › 일반). Remembered across launches.
     var cellTextSize = CellTextSize(rawValue: UserDefaults.standard.string(forKey: "cellTextSize") ?? "") ?? .medium {
         didSet { UserDefaults.standard.set(cellTextSize.rawValue, forKey: "cellTextSize") }

@@ -3,9 +3,10 @@ import CoreServices
 import Observation
 import SimplifyKit
 
-/// Copies memos into the 메모 app's "Simplify" folder as they are saved: one note per day, week
-/// or month memo, named after it (`NotesHTML`). One way only; the 메모 app's copy is written over
-/// on the next send, and deleted (to its 최근 삭제된 항목) once the memo is blank.
+/// Copies memos into the 메모 app's "Simplify" folder as they are saved: one note per memo, named
+/// after its period and its name (`NotesHTML`). One way only; the 메모 app's copy is written over
+/// on the next send (renamed with it, found by the note id saved here), and deleted (to its 최근
+/// 삭제된 항목) once the memo is blank or gone.
 ///
 /// A saved memo waits a few seconds so a burst of saves goes as one, opening the 메모 app behind
 /// Simplify when it is closed. Copies that cannot go (not allowed, or a failure) wait in a list
@@ -35,7 +36,8 @@ final class NotesMirror {
     }
 
     private(set) var status: Status = .idle
-    /// Period keys whose copy has not gone yet.
+    /// Memo ids whose copy has not gone yet (and period keys from before a period could have
+    /// several, until `adoptPeriodKeys` moves them).
     private(set) var pending = SharedSettings.notesPending(in: SharedSettings.defaults) {
         didSet { SharedSettings.setNotesPending(pending, in: SharedSettings.defaults) }
     }
@@ -44,6 +46,9 @@ final class NotesMirror {
     @ObservationIgnored weak var book: MemoBook?
     @ObservationIgnored private var ids = SharedSettings.notesNoteIDs(in: SharedSettings.defaults) {
         didSet { SharedSettings.setNotesNoteIDs(ids, in: SharedSettings.defaults) }
+    }
+    @ObservationIgnored private var names = SharedSettings.notesNoteNames(in: SharedSettings.defaults) {
+        didSet { SharedSettings.setNotesNoteNames(names, in: SharedSettings.defaults) }
     }
     /// The body last sent for each key this run, so saving an unchanged memo sends nothing.
     @ObservationIgnored private var sent: [String: String] = [:]
@@ -65,14 +70,28 @@ final class NotesMirror {
         }
     }
 
-    /// A memo was saved: its copy goes after a pause.
-    func memoSaved(_ period: Period) {
+    /// A memo was saved, renamed or deleted: its copy goes after a pause.
+    func memoSaved(_ id: UUID) {
         guard isOn, book != nil else { return }
-        pending.insert(period.key)
+        let key = id.uuidString
+        pending.insert(key)
         // Not allowed: it waits for 시스템 설정 rather than opening the 메모 app on every save.
         guard status != .denied else { return }
-        if isSending { savedWhileSending.insert(period.key) }
+        if isSending { savedWhileSending.insert(key) }
         scheduleSend()
+    }
+
+    /// Before a period could have several memos, copies were kept by period key. Each such note
+    /// becomes the copy of the period's memo from then (its oldest without a name), so it is
+    /// written over rather than made again; a period with no memo left keeps its key until its
+    /// note is deleted.
+    func adoptPeriodKeys() {
+        guard let book else { return }
+        for key in Set(ids.keys).union(pending) where UUID(uuidString: key) == nil {
+            guard let note = book.legacyNote(periodKey: key)?.uuidString else { continue }
+            if let id = ids.removeValue(forKey: key), ids[note] == nil { ids[note] = id }
+            if pending.remove(key) != nil { pending.insert(note) }
+        }
     }
 
     private func scheduleSend() {
@@ -111,7 +130,7 @@ final class NotesMirror {
     private func askAndSend(all: Bool) async {
         guard let book else { return }
         if all {
-            pending.formUnion(book.periodsWithMemos().map(\.key))
+            pending.formUnion(book.allNoteIDs().map(\.uuidString))
             // Copies of memos emptied while the mirror was off.
             pending.formUnion(ids.keys)
             sent = [:]
@@ -148,17 +167,34 @@ final class NotesMirror {
         var stopped = false
         let calendar = Calendar.simplify
         while isOn, let key = pending.sorted().first(where: { !failed.contains($0) && !savedWhileSending.contains($0) }) {
-            guard let period = PeriodScope.allCases.lazy.compactMap({ Period(key: key, scope: $0, calendar: calendar) }).first else {
-                pending.remove(key)
-                continue
+            let name: String, body: String?
+            if let id = UUID(uuidString: key) {
+                switch book.stored(note: id, calendar: calendar) {
+                case .memo(let period, let text, let memo):
+                    name = NotesHTML.noteName(for: period, memo: memo)
+                    body = NotesHTML.body(name: name, text: text)
+                case .gone:
+                    // Deleted: its note goes, found by id or by the name it went under.
+                    guard ids[key] != nil || names[key] != nil else {
+                        pending.remove(key)
+                        continue
+                    }
+                    name = names[key] ?? ""
+                    body = nil
+                case .unreadable:
+                    // A memo that cannot be read now leaves its copy alone and waits.
+                    failed.insert(key)
+                    continue
+                }
+            } else {
+                // A period key from before: the period's note, whose memo is gone.
+                guard let period = PeriodScope.allCases.lazy.compactMap({ Period(key: key, scope: $0, calendar: calendar) }).first else {
+                    pending.remove(key)
+                    continue
+                }
+                name = NotesHTML.noteName(for: period)
+                body = nil
             }
-            // A memo that cannot be read now leaves its copy alone and waits.
-            guard let text = book.storedText(for: period) else {
-                failed.insert(key)
-                continue
-            }
-            let name = NotesHTML.noteName(for: period)
-            let body = NotesHTML.body(name: name, text: text)
             guard sent[key] != (body ?? "") else {
                 pending.remove(key)
                 continue
@@ -167,9 +203,11 @@ final class NotesMirror {
             do {
                 if let body {
                     ids[key] = try await script.write(id: ids[key] ?? "", name: name, body: body)
+                    names[key] = name
                 } else {
                     try await script.delete(id: ids[key] ?? "", name: name)
                     ids[key] = nil
+                    names[key] = nil
                 }
                 sent[key] = body ?? ""
                 if !savedWhileSending.contains(key) { pending.remove(key) }

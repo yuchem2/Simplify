@@ -5,8 +5,10 @@ import SwiftData
 public enum SyncRecords {
     /// What taking a merged snapshot in changed on this device.
     public struct Applied: Equatable, Sendable {
-        /// `SyncKey.note` of every memo whose text arrived, changed or went.
-        public var notes: Set<String> = []
+        /// Every memo whose text or name arrived, changed or went, by id.
+        public var notes: Set<UUID> = []
+        /// The periods (`SyncKey.note`) those memos belong to, before and after.
+        public var periods: Set<String> = []
         /// Any ToDo or link changed.
         public var todosChanged = false
         /// `SyncedSettings` keys whose value changed.
@@ -19,12 +21,12 @@ public enum SyncRecords {
 
     /// Everything this device shares, as stored now.
     public static func read(from context: ModelContext, defaults: UserDefaults) throws -> SyncSnapshot {
-        // A period may hold two memos after an older sync; the newest is the one shown.
-        var notes: [String: SyncNote] = [:]
-        for note in try context.fetch(FetchDescriptor<DiaryNote>(sortBy: [SortDescriptor(\.updatedAt, order: .reverse)])) {
-            guard let body = note.body else { continue }
-            let record = SyncNote(id: note.id, scope: note.scopeRaw, periodKey: note.periodKey, body: body, updatedAt: note.updatedAt)
-            if notes[record.key] == nil { notes[record.key] = record }
+        // Every memo, with or without words (one may be kept for its name). Two copies of one id
+        // (never made here) go as the newest.
+        var notes: [UUID: SyncNote] = [:]
+        for note in try context.fetch(FetchDescriptor<DiaryNote>(sortBy: [SortDescriptor(\.updatedAt, order: .reverse)])) where notes[note.id] == nil {
+            notes[note.id] = SyncNote(id: note.id, scope: note.scopeRaw, periodKey: note.periodKey, body: note.body ?? Data(),
+                                      updatedAt: note.updatedAt, title: note.title, createdAt: note.createdAt)
         }
         var todos: [UUID: SyncTodo] = [:]
         for item in try context.fetch(FetchDescriptor<TodoItem>()) where todos[item.id] == nil {
@@ -52,30 +54,44 @@ public enum SyncRecords {
     public static func apply(_ snapshot: SyncSnapshot, to context: ModelContext, defaults: UserDefaults) throws -> Applied {
         var applied = Applied()
 
-        // Memos, by period.
-        let wanted = Dictionary(snapshot.notes.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
-        let stored = Dictionary(grouping: try context.fetch(FetchDescriptor<DiaryNote>(sortBy: [SortDescriptor(\.updatedAt, order: .reverse)])),
-                                by: { "\($0.scopeRaw)|\($0.periodKey)" })
-        for (key, notes) in stored where wanted[key] == nil {
-            notes.forEach(context.delete)
-            applied.notes.insert(key)
-        }
-        for (key, record) in wanted {
-            var notes = stored[key] ?? []
-            let note = notes.isEmpty ? nil : notes.removeFirst()
-            notes.forEach(context.delete)
+        // Memos, by id.
+        let wanted = Dictionary(snapshot.notes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var stored = Dictionary(grouping: try context.fetch(FetchDescriptor<DiaryNote>(sortBy: [SortDescriptor(\.updatedAt, order: .reverse)])),
+                                by: \.id)
+        for record in wanted.values {
+            var copies = stored.removeValue(forKey: record.id) ?? []
+            let note = copies.isEmpty ? nil : copies.removeFirst()
+            copies.forEach(context.delete)
+            let body = record.body.isEmpty ? nil : record.body
             if let note {
-                if note.body != record.body { applied.notes.insert(key) }
-                if note.id != record.id { note.id = record.id }
-                if note.body != record.body { note.body = record.body }
+                // A new creation time moves the memo among its period's tabs.
+                if note.body != body || note.title != record.title || note.scopeRaw != record.scope || note.periodKey != record.periodKey
+                    || note.createdAt != record.createdAt {
+                    applied.notes.insert(record.id)
+                    applied.periods.insert("\(note.scopeRaw)|\(note.periodKey)")
+                    applied.periods.insert(record.periodSlot)
+                }
+                if note.body != body { note.body = body }
+                if note.title != record.title { note.title = record.title }
+                if note.scopeRaw != record.scope { note.scopeRaw = record.scope }
+                if note.periodKey != record.periodKey { note.periodKey = record.periodKey }
                 if note.updatedAt != record.updatedAt { note.updatedAt = record.updatedAt }
+                if note.createdAt != record.createdAt { note.createdAt = record.createdAt }
             } else {
                 let note = DiaryNote(id: record.id, scopeRaw: record.scope, periodKey: record.periodKey)
-                note.body = record.body
+                note.body = body
+                note.title = record.title
+                note.createdAt = record.createdAt
                 note.updatedAt = record.updatedAt
                 context.insert(note)
-                applied.notes.insert(key)
+                applied.notes.insert(record.id)
+                applied.periods.insert(record.periodSlot)
             }
+        }
+        for (id, notes) in stored {
+            notes.forEach(context.delete)
+            applied.notes.insert(id)
+            notes.forEach { applied.periods.insert("\($0.scopeRaw)|\($0.periodKey)") }
         }
 
         // ToDos and links, by id.

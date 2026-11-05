@@ -10,6 +10,15 @@ final class MemoDraft {
     var text = AttributedString()
     var selection = AttributedTextSelection()
     private(set) var period: Period?
+    /// The open memo of `period`; nil for the empty memo of a period that has none yet, saved as a
+    /// memo without a name on its first letter.
+    private(set) var noteID: UUID?
+    /// The memo whose tab (or, in 모아 보기, header) is being renamed in place.
+    var renaming: UUID?
+    /// The name as typed while renaming.
+    var renameText = ""
+    /// The memo 메모 지우기 is asking about, in the panel.
+    var confirmingDelete: UUID?
     /// The stored memo could not be read (written by a newer version, or damaged); it is shown
     /// empty and never saved over.
     private(set) var isUnreadable = false
@@ -23,6 +32,9 @@ final class MemoDraft {
     @ObservationIgnored var tickedByClick: (id: UUID, at: TimeInterval)?
     /// The memo has keyboard focus; ⌘⇧T and ⌃⌘T are caught only then, and its section rule thickens.
     var hasFocus = false
+    /// How tall the open memo's letters are laid out, for 모아 보기, where each memo is as tall as
+    /// its text; set by `MemoMenuHost`.
+    var contentHeight: CGFloat = 0
     /// The day chosen in the calendar: a week or month memo's timeline line names it when today is
     /// outside the memo's period.
     @ObservationIgnored var chosenDay: Date?
@@ -40,6 +52,10 @@ final class MemoDraft {
     @ObservationIgnored var caretLineRect: (() -> CGRect?)?
     /// The same line in window coordinates, top-left origin, for placing pops beside it.
     @ObservationIgnored var selectionLineInWindow: (() -> CGRect?)?
+    /// Lets go of keyboard focus when the memo's text view has it, before the view is taken away
+    /// (모아 보기 moving the editor to another memo, or the layout changing): AppKit must not lose a
+    /// first responder from under it. Set by `MemoMenuHost`.
+    @ObservationIgnored var resignEditor: (() -> Void)?
     /// Gives the focused text view the ink caret and a grey selection.
     @ObservationIgnored var inkTextView: (() -> Void)?
     /// Opens the right-click menu under the selection, for VoiceOver's 메뉴 보기.
@@ -48,6 +64,11 @@ final class MemoDraft {
     @ObservationIgnored var skipsSearchTrigger = false
     /// Bumped to put keyboard focus back in the box after a pop closes.
     var focusRequest = 0
+    /// Bumped to take keyboard focus out of the box, as a name starts being changed in its tab:
+    /// SwiftUI would otherwise give the box its focus back over the name's field.
+    var blurRequest = 0
+    /// The editor about to appear takes keyboard focus (모아 보기 moves the editor to the memo picked).
+    @ObservationIgnored var focusOnAppear = false
     /// The Aa button's 문단 bar is open over the memo.
     var showsParagraphBar = false
     /// Makes a list change in the memo's text view, as typing would (one undo step): given the
@@ -86,13 +107,108 @@ final class MemoDraft {
         self.book = book
     }
 
-    /// Saves what is open, then shows `period`'s memo. The same period under another calendar (the
-    /// week's first day or the zone changed) opens again, so names worked out from it follow.
+    /// Saves what is open, then shows `period`'s memo: the one last open there this run, else its
+    /// first. The same period under another calendar (the week's first day or the zone changed)
+    /// opens again, so names worked out from it follow.
     func open(_ period: Period) {
         guard period != self.period || period.calendar != self.period?.calendar else { return }
+        leave()
+        show(book.chosenNote(in: period), in: period)
+    }
+
+    /// Opens another memo of the open period, saving (and maybe discarding) the one left.
+    func select(_ id: UUID?) {
+        guard let period, id != noteID else { return }
+        leave()
+        show(id, in: period)
+    }
+
+    /// `+ 새 메모`: a new memo of the open period, its name in its tab ready to change.
+    func newMemo() {
+        guard let period else { return }
+        leave()
+        guard let id = book.create(in: period) else {
+            show(book.chosenNote(in: period), in: period)
+            return
+        }
+        show(id, in: period)
+        startRenaming(id)
+    }
+
+    /// 메모 지우기: straight away for a memo with no words, otherwise asked in the panel first.
+    func askToDelete(_ id: UUID) {
+        let words = id == noteID ? text : book.text(note: id)
+        if let words, MemoText.isBlank(words) {
+            delete(id)
+        } else {
+            confirmingDelete = id
+        }
+    }
+
+    func delete(_ id: UUID) {
+        guard let period else { return }
+        confirmingDelete = nil
+        if renaming == id { renaming = nil }
+        let tabs = book.tabs(for: period)
+        let index = tabs.firstIndex { $0.id == id }
+        if id == noteID {
+            pending?.cancel()
+            pending = nil
+            noteID = nil
+        }
+        book.delete(id)
+        // The tab before it, or the one after for the first.
+        let rest = book.tabs(for: period)
+        let next = index.map { rest[max(0, min($0 - 1, rest.count - 1))].id } ?? rest.first?.id
+        if noteID == nil {
+            show(next, in: period)
+        }
+    }
+
+    /// Starts changing memo `id`'s name in its tab, a caret at the end of it; for the empty memo
+    /// of a period with none (`id` nil), the memo is saved first as `새 메모`.
+    func startRenaming(_ id: UUID?) {
+        guard let period else { return }
+        guard let id else {
+            flush()
+            if let noteID { startRenaming(noteID) } else { newMemo() }
+            return
+        }
+        if id != noteID { select(id) }
+        renameText = book.tabs(for: period).first { $0.id == id }?.name ?? Memos.defaultName
+        blurRequest += 1
+        renaming = id
+    }
+
+    /// Return, Tab, or the name losing focus: the name as typed, made unique (`Memos.rename`).
+    /// `toBody` puts the caret in the memo after.
+    func commitRename(toBody: Bool) {
+        guard let id = renaming else { return }
+        renaming = nil
+        book.rename(id, to: renameText)
+        if toBody { focusRequest += 1 }
+    }
+
+    /// Esc: the name as it was.
+    func cancelRename() {
+        guard renaming != nil else { return }
+        renaming = nil
+        focusRequest += 1
+    }
+
+    /// Saves the open memo and lets it go if nobody would miss it (blank, still `새 메모(n)`).
+    private func leave() {
         flush()
+        if renaming != nil { commitRename(toBody: false) }
+        confirmingDelete = nil
+        if let noteID { book.discardIfEmpty(noteID) }
+    }
+
+    private func show(_ id: UUID?, in period: Period) {
         self.period = period
-        let stored = book.text(for: period)
+        noteID = id
+        book.choose(id, in: period)
+        let stored = book.text(note: id)
         isUnreadable = stored == nil
         text = stored ?? AttributedString()
         saved = text
@@ -125,7 +241,8 @@ final class MemoDraft {
         pending?.cancel()
         pending = nil
         guard let period, !isUnreadable, text != saved else { return }
-        guard book.save(text, for: period) else { return }
+        guard case .saved(let id) = book.save(text, note: noteID, in: period) else { return }
+        noteID = id
         saved = text
         // An attachment no longer used here may be used nowhere: it waits to be cleared away.
         let attachments = MemoAttachments.ids(in: text)
@@ -137,7 +254,23 @@ final class MemoDraft {
     /// saved): show what is stored. Text added at the end keeps the caret where it was.
     func storedChanged() {
         guard let period else { return }
-        let stored = book.text(for: period)
+        // The period had no memo here and another device's arrived: it is opened. Letters typed
+        // meanwhile are saved first, as a memo of their own.
+        if noteID == nil {
+            flush()
+            if noteID == nil { show(book.chosenNote(in: period), in: period) }
+            return
+        }
+        // Deleted on the other device: the period's memo there is shown instead.
+        if let noteID, !book.exists(noteID) {
+            pending?.cancel()
+            pending = nil
+            self.noteID = nil
+            if renaming == noteID { renaming = nil }
+            show(book.chosenNote(in: period), in: period)
+            return
+        }
+        let stored = book.text(note: noteID)
         isUnreadable = stored == nil
         let fresh = stored ?? AttributedString()
         if fresh != text {
@@ -631,6 +764,20 @@ struct MemoEditor: View {
             }
         }
         .onChange(of: draft.focusRequest) { focused = true }
+        .onChange(of: draft.blurRequest) { focused = false }
+        .onAppear {
+            guard draft.focusOnAppear else { return }
+            draft.focusOnAppear = false
+            Task { @MainActor in
+                // Its host finds and sets up the text view (the file drop among it) before the
+                // focus does: a focused text view is watched by AppKit and is not changed after.
+                try? await Task.sleep(for: .milliseconds(60))
+                draft.redrawLines?()
+                focused = true
+            }
+        }
+        // Another memo of the period: its undo steps stay with the memo it left, as across days.
+        .onChange(of: draft.noteID) { Task { @MainActor in undoManager?.removeAllActions() } }
         .onDisappear {
             draft.flush()
             draft.showsParagraphBar = false

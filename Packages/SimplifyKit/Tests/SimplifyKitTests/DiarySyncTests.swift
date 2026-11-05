@@ -18,9 +18,17 @@ struct DiarySyncTests {
     private func body(_ text: AttributedString) -> Data { MemoText.encode(text)! }
     private func body(_ text: String) -> Data { body(AttributedString(text)) }
 
-    /// `from`: the earlier texts this one grew out of.
-    private func note(_ text: String, at seconds: Double, id: UUID = UUID(), key: String = "2026-11-03", from: [String] = []) -> SyncNote {
-        SyncNote(id: id, scope: "day", periodKey: key, body: body(text), updatedAt: at(seconds), history: from.map { SyncMerge.digest(body($0)) })
+    /// `from`: the earlier texts this one grew out of. Without `id`, the one memo of the period
+    /// both devices know (`memoID`).
+    private func note(_ text: String, at seconds: Double, id: UUID? = nil, key: String = "2026-11-03", from: [String] = [],
+                      title: String = "") -> SyncNote {
+        SyncNote(id: id ?? memoID(key), scope: "day", periodKey: key, body: body(text), updatedAt: at(seconds),
+                 history: from.map { SyncMerge.digest(body($0)) }, title: title)
+    }
+
+    /// The same id for a period's memo on every device, as after their first meeting.
+    private func memoID(_ key: String) -> UUID {
+        UUID(uuidString: "00000000-0000-0000-0000-" + String(format: "%012d", Int(key.filter(\.isNumber))! % 1_000_000_000_000))!
     }
 
     private func todo(_ id: UUID, _ title: String, done: Bool = false, at seconds: Double) -> SyncTodo {
@@ -68,6 +76,10 @@ struct DiarySyncTests {
         #expect(merge(memo, memoGone).notes.isEmpty)
         let written = SyncSnapshot(notes: [note("다시 씀", at: 30)])
         #expect(merge(written, memoGone).notes.count == 1)
+        // Since format 2 a memo's tombstone names its id: the period's other memo stays.
+        let two = SyncSnapshot(notes: [note("하나", at: 10), note("둘", at: 10, id: UUID())])
+        let oneGone = SyncSnapshot(deletions: [SyncDeletion(kind: .note, key: memoID("2026-11-03").uuidString, deletedAt: at(20))])
+        #expect(merge(two, oneGone).notes.map(text) == ["둘"])
     }
 
     @Test func equalTimesGoTheSameWayOnBothDevices() {
@@ -88,7 +100,7 @@ struct DiarySyncTests {
         var bold = AttributedString("굵은 글")
         bold[MemoAttributes.Bold.self] = true
         let chip = MemoChips.chip(id: UUID(), title: "견적서", isDone: false)
-        let mine = SyncSnapshot(notes: [SyncNote(id: UUID(), scope: "day", periodKey: "2026-11-03", body: body(bold + AttributedString("\n") + chip),
+        let mine = SyncSnapshot(notes: [SyncNote(id: memoID("2026-11-03"), scope: "day", periodKey: "2026-11-03", body: body(bold + AttributedString("\n") + chip),
                                                  updatedAt: at(10), history: [SyncMerge.digest(body("처음"))])])
         let theirs = SyncSnapshot(notes: [note("저쪽에서 고침", at: 20, from: ["처음"])])
 
@@ -183,17 +195,18 @@ struct DiarySyncTests {
     }
 
     @Test func meetingForTheFirstTimeKeepsEverything() {
-        let mine = SyncSnapshot(notes: [note("이 Mac", at: 10), note("이 Mac만", at: 10, key: "2026-11-04")],
+        // Each Mac wrote a memo of the same day before they met: two memos of that day.
+        let mine = SyncSnapshot(notes: [note("이 Mac", at: 10, id: UUID()), note("이 Mac만", at: 10, key: "2026-11-04")],
                                 todos: [todo(UUID(), "이 Mac 할 일", at: 10)])
-        let theirs = SyncSnapshot(notes: [note("저 Mac", at: 20), note("저 Mac만", at: 20, key: "2026-11-05")],
+        let theirs = SyncSnapshot(notes: [note("저 Mac", at: 20, id: UUID()), note("저 Mac만", at: 20, key: "2026-11-05")],
                                   todos: [todo(UUID(), "저 Mac 할 일", at: 20)])
         let result = merge(mine, theirs)
         #expect(result.todos.count == 2)
-        let byKey = Dictionary(uniqueKeysWithValues: result.notes.map { ($0.periodKey, text($0)) })
-        #expect(byKey == ["2026-11-03": "저 Mac\n\n\(SyncMerge.divider)\n이 Mac", "2026-11-04": "이 Mac만", "2026-11-05": "저 Mac만"])
-        // The joined memo remembers both texts, so either coming back adds nothing.
-        #expect(text(merge(result, theirs).notes.first) == byKey["2026-11-03"])
-        #expect(text(merge(result, mine).notes.first) == byKey["2026-11-03"])
+        let byKey = Dictionary(grouping: result.notes, by: \.periodKey).mapValues { Set($0.map(text)) }
+        #expect(byKey == ["2026-11-03": ["이 Mac", "저 Mac"], "2026-11-04": ["이 Mac만"], "2026-11-05": ["저 Mac만"]])
+        // Either coming back changes nothing.
+        #expect(merge(result, theirs).withoutHistory.notes == result.withoutHistory.notes)
+        #expect(merge(result, mine).withoutHistory.notes == result.withoutHistory.notes)
     }
 
     @Test func aClockBehindDoesNotLoseAnEdit() {
@@ -209,16 +222,59 @@ struct DiarySyncTests {
         #expect(SyncStamp.after(at(10), now: at(50)) == at(50))
     }
 
-    @Test func todosFollowTheMemoIdBothDevicesSettleOn() {
-        let low = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-        let high = UUID(uuidString: "FFFFFFFF-0000-0000-0000-000000000001")!
-        var made = todo(UUID(), "메모에서 만든 할 일", at: 10)
-        made.sourceNoteID = high
-        let mine = SyncSnapshot(notes: [note("같은 글", at: 10, id: high)], todos: [made])
-        let theirs = SyncSnapshot(notes: [note("같은 글", at: 20, id: low)])
-        let result = merge(mine, theirs)
-        #expect(result.notes.first?.id == low)
-        #expect(result.todos.first?.sourceNoteID == low)
+    @Test func twoMemosOfOnePeriodSurviveAMerge() {
+        // A made a second memo of the day and named it; B wrote on in the first.
+        let second = UUID()
+        var made = todo(UUID(), "회의록에서 만든 할 일", at: 30)
+        made.sourceNoteID = second
+        let onA = SyncSnapshot(notes: [note("처음", at: 10), note("안건", at: 30, id: second, title: "회의록")], todos: [made])
+        let onB = SyncSnapshot(notes: [note("처음 고침", at: 20, from: ["처음"])])
+        let fromA = merge(onA, onB), fromB = merge(onB, onA, local: "B", remote: "A")
+        #expect(fromA.withoutHistory == fromB.withoutHistory)
+        #expect(Set(fromA.notes.map(text)) == ["처음 고침", "안건"])
+        #expect(fromA.notes.first { $0.id == second }?.title == "회의록")
+        // The ToDo keeps pointing at the memo it was made from.
+        #expect(fromA.todos.first?.sourceNoteID == second)
+    }
+
+    @Test func aNameGoesByTimeAndTheTextByItsHistory() {
+        // B renamed the memo later; A wrote on in it, from the text B has.
+        let onA = SyncSnapshot(notes: [note("처음\n덧붙임", at: 20, from: ["처음"], title: "새 메모")])
+        let onB = SyncSnapshot(notes: [note("처음", at: 30, title: "회의록")])
+        let result = merge(onA, onB)
+        #expect(text(result.notes.first) == "처음\n덧붙임")
+        #expect(result.notes.first?.title == "회의록")
+        // The name's time comes with it, so merging again keeps it.
+        #expect(result.notes.first?.updatedAt == at(30))
+        #expect(merge(result, onA).notes.first?.title == "회의록")
+        #expect(result.withoutHistory == merge(onB, onA, local: "B", remote: "A").withoutHistory)
+    }
+
+    @Test func aFormatOneFileIsTakenInMemoByMemo() throws {
+        // An older version's file: no title or creation time, memos matched by period then.
+        let id = memoID("2026-11-03")
+        let old = Data(#"{"format":1,"device":"B","data":{"notes":[{"id":"\#(id.uuidString)","scope":"day","periodKey":"2026-11-03","body":"\#(body("저쪽 글").base64EncodedString())","updatedAt":\#(at(40).timeIntervalSinceReferenceDate),"history":["\#(SyncMerge.digest(body("처음")))"]}],"todos":[],"links":[],"deletions":[{"kind":"note","key":"day|2026-11-04","deletedAt":\#(at(50).timeIntervalSinceReferenceDate)}],"settings":{}}}"#.utf8)
+        guard case .file(let file) = SyncFile.decode(old) else {
+            Issue.record("a format 1 file is read")
+            return
+        }
+        #expect(file.data.notes.first?.title == "")
+        #expect(file.data.notes.first?.createdAt == SyncNote.unknownCreation)
+        // Here: that memo, renamed after B last wrote, a second one of the day, and the 4th's memo from before its
+        // deletion there (an older version names the period).
+        let second = UUID()
+        let mine = SyncSnapshot(notes: [note("처음", at: 45, title: "회의록"), note("둘째", at: 60, id: second),
+                                        note("4일 메모", at: 30, key: "2026-11-04"), note("4일에 새로", at: 60, id: UUID(), key: "2026-11-04"),
+                                        note("4일 회의록", at: 30, id: UUID(), key: "2026-11-04", title: "회의록")])
+        let result = merge(mine, file.data, remote: "B")
+        let texts = Dictionary(grouping: result.notes, by: \.periodKey).mapValues { Set($0.map(text)) }
+        // The older version's deletion takes the 4th's memo it knew, not one named here since.
+        #expect(texts == ["2026-11-03": ["저쪽 글", "둘째"], "2026-11-04": ["4일에 새로", "4일 회의록"]])
+        // Its text grew out of this one; the name it has here is newer than its file.
+        #expect(result.notes.first { $0.id == id }?.title == "회의록")
+        // Written back as format 2.
+        let written = try SyncFile(device: "A", data: result).encoded()
+        #expect(String(decoding: written, as: UTF8.self).contains(#""format":2"#))
     }
 
     // MARK: Settings
@@ -269,8 +325,8 @@ struct DiarySyncTests {
         let file = SyncFile(device: "A", data: SyncSnapshot(todos: [todo(UUID(), "할 일", at: 1)]))
         let data = try file.encoded()
         #expect(SyncFile.decode(data) == .file(file))
-        let newer = Data(#"{"format":2,"device":"A","everything":"else"}"#.utf8)
-        #expect(SyncFile.decode(newer) == .unknownFormat(2))
+        let newer = Data(#"{"format":3,"device":"A","everything":"else"}"#.utf8)
+        #expect(SyncFile.decode(newer) == .unknownFormat(3))
         #expect(SyncFile.decode(Data("아님".utf8)) == .unreadable)
 
         let folder = try temporaryFolder()
@@ -300,8 +356,9 @@ struct DiarySyncTests {
         #expect(buried == ["link|\(link.linkID!.uuidString)", "todo|\(item.id.uuidString)"])
 
         try Memos.save(AttributedString("오늘"), for: day(3), in: context)
+        let memo = try #require(try Memos.note(for: day(3), in: context))
         try Memos.save(AttributedString(" "), for: day(3), in: context)
-        #expect(try context.fetch(FetchDescriptor<SyncTombstone>()).contains { $0.kindRaw == "note" && $0.key == "day|\(day(3).key)" })
+        #expect(try context.fetch(FetchDescriptor<SyncTombstone>()).contains { $0.kindRaw == "note" && $0.key == memo.id.uuidString })
     }
 
     @Test func aMergedSnapshotGoesIntoTheStoreAndBackOut() throws {
@@ -309,16 +366,20 @@ struct DiarySyncTests {
         let context = container.mainContext
         let defaults = WidgetStoreTests().defaults()
         try Memos.save(AttributedString("지울 메모"), for: day(5), in: context)
+        let goneMemo = try #require(try Memos.note(for: day(5), in: context)).id
         let kept = try #require(try Todos.add("남을 할 일", to: day(3), in: context))
         let gone = try #require(try Todos.add("지울 할 일", to: day(3), in: context))
 
         var snapshot = try SyncRecords.read(from: context, defaults: defaults)
-        snapshot.notes = [note("새 메모", at: 10, key: day(3).key)]
+        let arrived = note("새 메모", at: 10, key: day(3).key, title: "회의록")
+        snapshot.notes = [arrived]
         snapshot.todos.removeAll { $0.id == gone.id }
         snapshot.todos[0].title = "이름 바뀐 할 일"
         snapshot.settings[SharedSettings.firstWeekday] = SyncSetting(value: .int(2), changedAt: at(5))
         let applied = try SyncRecords.apply(snapshot, to: context, defaults: defaults)
-        #expect(applied.notes == ["day|\(day(3).key)", "day|\(day(5).key)"])
+        #expect(applied.notes == [arrived.id, goneMemo])
+        #expect(applied.periods == ["day|\(day(3).key)", "day|\(day(5).key)"])
+        #expect(try Memos.note(for: day(3), in: context)?.title == "회의록")
         #expect(applied.todosChanged)
         #expect(applied.settings == [SharedSettings.firstWeekday])
         #expect(String(try Memos.text(for: day(3), in: context).characters) == "새 메모")
@@ -380,7 +441,7 @@ struct DiarySyncTests {
 
         let applied = try #require(try await b.sync())
         let contextB = ModelContext(storeB)
-        #expect(applied.notes == ["day|\(day(3).key)"])
+        #expect(applied.notes == [try #require(try Memos.note(for: day(3), in: storeA.mainContext)).id])
         #expect(String(try Memos.text(for: day(3), in: contextB).characters) == "A에서 쓴 메모")
         #expect(try Todos.entries(for: day(3), in: contextB).map(\.title) == ["A의 할 일"])
         #expect(SharedSettings.firstWeekday(in: defaultsB) == 2)

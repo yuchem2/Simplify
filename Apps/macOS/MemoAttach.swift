@@ -608,6 +608,10 @@ enum MemoFileDrop {
         drops.setObject(DropBox(take), forKey: textView)
         let original: AnyClass = object_getClass(textView)!
         if NSStringFromClass(original).hasSuffix(suffix) { return }
+        // Being observed (AppKit watches a focused text view's `nextResponder`): swapping its class
+        // then breaks that observing, and AppKit crashes when it lets go. A later pass, once the
+        // text view is let go, swaps it.
+        if textView.observationInfo != nil || NSStringFromClass(original).hasPrefix("NSKVONotifying_") { return }
         guard let subclass = subclass(of: original) else { return }
         object_setClass(textView, subclass)
     }

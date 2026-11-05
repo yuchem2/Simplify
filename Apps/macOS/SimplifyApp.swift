@@ -15,6 +15,11 @@ struct SimplifyApp: App {
         SharedSettings.migrate(from: .standard, to: SharedSettings.defaults)
         var isSaved = true
         do {
+            #if DEBUG
+            // The checks run on memos of their own; the real store is not opened, so a newer
+            // schema never moves it on under the installed app.
+            if ProcessInfo.processInfo.environment["SIMPLIFY_MEMO_CHECK"] != nil { throw CocoaError(.featureUnsupported) }
+            #endif
             container = try SimplifyStore.makeContainer()
         } catch {
             // Keep the app usable if the shared store cannot open; nothing is saved this session,

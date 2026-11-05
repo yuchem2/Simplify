@@ -16,9 +16,13 @@ public enum SharedSettings {
     /// Memos are copied into the 메모 app's "Simplify" folder as they are saved. Off unless turned on.
     /// This Mac's own choice, like the two below: another Mac keeps its own.
     public static let mirrorsToNotes = "mirrorsToNotes"
-    /// Each period key's note id in this Mac's 메모 app, so its copy is found again even renamed.
+    /// Each memo's note id in this Mac's 메모 app (by memo id; by period key before a period could
+    /// have several), so its copy is found again even renamed.
     static let notesNoteIDs = "notesNoteIDs"
-    /// Period keys whose copy has not reached the 메모 app yet.
+    /// The name each memo's note was last sent under, so a memo deleted here can still find its
+    /// note by name when the 메모 app has lost track of the id.
+    static let notesNoteNames = "notesNoteNames"
+    /// Memo ids (period keys before) whose copy has not reached the 메모 app yet.
     static let notesPending = "notesPending"
     /// When a widget last changed the diary store, so the app knows to read it again.
     static let diaryChangedAt = "diaryChangedAt"
@@ -61,6 +65,14 @@ public enum SharedSettings {
 
     public static func setNotesNoteIDs(_ ids: [String: String], in defaults: UserDefaults) {
         defaults.set(ids, forKey: notesNoteIDs)
+    }
+
+    public static func notesNoteNames(in defaults: UserDefaults) -> [String: String] {
+        defaults.dictionary(forKey: notesNoteNames) as? [String: String] ?? [:]
+    }
+
+    public static func setNotesNoteNames(_ names: [String: String], in defaults: UserDefaults) {
+        defaults.set(names, forKey: notesNoteNames)
     }
 
     public static func notesPending(in defaults: UserDefaults) -> Set<String> {
