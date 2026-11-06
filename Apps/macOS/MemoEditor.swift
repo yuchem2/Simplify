@@ -69,8 +69,29 @@ final class MemoDraft {
     var blurRequest = 0
     /// The editor about to appear takes keyboard focus (모아 보기 moves the editor to the memo picked).
     @ObservationIgnored var focusOnAppear = false
-    /// The Aa button's 문단 bar is open over the memo.
+    /// The Aa button's 문단 bar is open under it.
     var showsParagraphBar = false
+    /// The pointer has rested on the Aa button: its shortcut card shows under it.
+    var showsShortcutCard = false
+    /// The Aa button and its open bar in window coordinates (top-left origin): a click outside
+    /// both closes the bar.
+    @ObservationIgnored var aaFrame: CGRect = .null
+    @ObservationIgnored var paragraphBarFrame: CGRect = .null
+    /// When a click closed the bar (system uptime): the Aa button that same click lands on does
+    /// not open it again.
+    @ObservationIgnored var barClosedByClick: TimeInterval = 0
+    /// The memo box's whole frame in SwiftUI's global coordinates (set by the editor), and how far
+    /// SwiftUI's global origin is from the window content's top-left (set by `MemoMenuHost`, which
+    /// knows the box's place in the window): the content can sit under the title bar's toolbar or
+    /// not, so the frames above are moved by it before a click is judged against them.
+    @ObservationIgnored var boxFrame: CGRect = .null
+    @ObservationIgnored var contentOffset: (() -> CGPoint?)?
+
+    /// A frame from SwiftUI's global coordinates in the window content's (top-left origin).
+    func inContent(_ frame: CGRect) -> CGRect {
+        guard !frame.isNull, let offset = contentOffset?() else { return frame }
+        return frame.offsetBy(dx: offset.x, dy: offset.y)
+    }
     /// Makes a list change in the memo's text view, as typing would (one undo step): given the
     /// text view's letters and selection, the change to make, or nil for none. False when nothing
     /// was changed. Set by `MemoMenuHost`, which can reach the text view.
@@ -212,6 +233,8 @@ final class MemoDraft {
         isUnreadable = stored == nil
         text = stored ?? AttributedString()
         saved = text
+        // The bar is about the memo left.
+        showsParagraphBar = false
         savedAttachments = MemoAttachments.ids(in: text)
         selection = AttributedTextSelection()
         // Chips show their ToDo as it is now; a change found here is saved like any other edit.
@@ -305,12 +328,26 @@ final class MemoDraft {
         return values.count == 1 ? values.first! : nil
     }
 
-    /// The caret's or selection's lines are a code block. Judged by the lines, since a caret at the
-    /// start of a code line types with the plain line break before it.
+    /// The caret's or selection's lines are a code block, or the letters picked within a line are
+    /// all inline code. Judged by the lines, since a caret at the start of a code line types with
+    /// the plain line break before it.
     var isCode: Bool {
         let lines = lineRanges(of: selectedRanges)
         guard lines.ranges.contains(where: { !$0.isEmpty }) else { return isOn(MemoAttributes.Code.self) }
-        return text[lines].runs[MemoAttributes.Code.self].allSatisfy { $0.0 == true }
+        if text[lines].runs[MemoAttributes.Code.self].allSatisfy({ $0.0 == true }) { return true }
+        // A caret typing inline code.
+        if !hasSelectedText { return isOn(MemoAttributes.InlineCode.self) }
+        guard let pick = inlinePick else { return false }
+        return text[pick].runs[MemoAttributes.InlineCode.self].allSatisfy { $0.0 == true }
+    }
+
+    /// The picked letters when they are part of one line: one range, no line break in it, short
+    /// of the whole line. `{ }` makes these inline code instead of a code block.
+    var inlinePick: Range<AttributedString.Index>? {
+        let picked = selectedRanges.filter { !$0.isEmpty }
+        guard picked.count == 1, let range = picked.first, !text[range].characters.contains(where: \.isNewline) else { return nil }
+        guard lineRanges(of: [range]).ranges.first != range else { return nil }
+        return range
     }
 
     func toggle<K: AttributedStringKey>(_ key: K.Type) where K.Value == Bool {
@@ -332,8 +369,29 @@ final class MemoDraft {
         setHighlight(shared(MemoAttributes.Highlight.self) == lastHighlight ? nil : lastHighlight)
     }
 
-    /// A code block takes whole lines: every line the selection touches.
+    /// Letters picked within one line become inline code, or plain again when they all are. A code
+    /// block takes whole lines: every line the selection touches, with no pick or a pick across
+    /// lines (or the whole line); a code block line goes back to plain whole, however it is picked.
     func toggleCode() {
+        let lines = lineRanges(of: selectedRanges)
+        let inBlock = lines.ranges.contains { !$0.isEmpty } && text[lines].runs[MemoAttributes.Code.self].allSatisfy { $0.0 == true }
+        // A caret typing inline code stops typing it.
+        if !inBlock, !hasSelectedText, isOn(MemoAttributes.InlineCode.self) {
+            change { $0[MemoAttributes.InlineCode.self] = nil }
+            return
+        }
+        if !inBlock, let pick = inlinePick {
+            let on = !text[pick].runs[MemoAttributes.InlineCode.self].allSatisfy { $0.0 == true }
+            text.transform(updating: &selection) { text in
+                text[pick][MemoAttributes.InlineCode.self] = on ? true : nil
+                if on { text[pick][MemoAttributes.Highlight.self] = nil }
+            }
+            return
+        }
+        toggleCodeBlock()
+    }
+
+    private func toggleCodeBlock() {
         let on = !isCode
         var lines = lineRanges(of: selectedRanges)
         // Off takes the line breaks around the lines too, so no code is left for a later edit to
@@ -341,11 +399,24 @@ final class MemoDraft {
         if !on { widenToLineBreaks(&lines) }
         text.transform(updating: &selection) { text in
             text[lines][MemoAttributes.Code.self] = on ? true : nil
+            // The block takes over any inline code in its lines.
+            text[lines][MemoAttributes.InlineCode.self] = nil
             if on { text[lines][MemoAttributes.Highlight.self] = nil }
         }
         // Also the caret's typing style, so an empty line starts the block. Not for a selection,
         // which may hold a line break that would carry code into the next line.
         if !hasSelectedText { change { $0[MemoAttributes.Code.self] = on ? true : nil } }
+    }
+
+    /// A caret at the front of a line does not go on typing inline code carried over the line
+    /// break (Return at the end of some): inline code is letters within a line.
+    func dropInlineCodeAtLineStart() {
+        guard case .insertionPoint(let caret) = selection.indices(in: text), caret > text.startIndex,
+              text.characters[text.characters.index(before: caret)].isNewline, isOn(MemoAttributes.InlineCode.self) else { return }
+        // The line break it went over too, so no code ground is left at the line's end.
+        let lineBreak = text.characters.index(before: caret)..<caret
+        text.transform(updating: &selection) { $0[lineBreak][MemoAttributes.InlineCode.self] = nil }
+        change { $0[MemoAttributes.InlineCode.self] = nil }
     }
 
     /// The paragraph style the caret's or selection's lines share; nil for body lines or a mix.
@@ -368,6 +439,81 @@ final class MemoDraft {
         if !hasSelectedText { change { $0[MemoAttributes.Paragraph.self] = paragraph } }
     }
 
+    /// The alignment the caret's or selection's lines share; nil for left lines or a mix.
+    var align: MemoAlign? {
+        let lines = lineRanges(of: selectedRanges)
+        guard lines.ranges.contains(where: { !$0.isEmpty }) else { return shared(MemoAttributes.Align.self) }
+        let values = Set(text[lines].runs[MemoAttributes.Align.self].map(\.0))
+        return values.count == 1 ? values.first! : nil
+    }
+
+    /// The caret's line can be centred or right-set (`canTakeAlign`).
+    var canAlign: Bool {
+        guard let caret = selectedRanges.first?.lowerBound else { return false }
+        let string = String(text.characters) as NSString
+        let location = text.characters[..<caret].reduce(0) { $0 + $1.utf16.count }
+        let line = MemoLists.lineContent(of: string.lineRange(for: NSRange(location: location, length: 0)), in: string)
+        // The line's first letter, wherever the caret is on it.
+        var start = caret
+        while start > text.startIndex, !text.characters[text.characters.index(before: start)].isNewline {
+            start = text.characters.index(before: start)
+        }
+        let run = line.length > 0 ? text.runs[start] : nil
+        return canTakeAlign(line, in: string, run: run)
+    }
+
+    /// A line of words: list, quote, table, code block, timeline lines and their children, and
+    /// rules keep to their own columns, so stay left. `run` is the line's first run (nil when empty).
+    private func canTakeAlign(_ line: NSRange, in string: NSString, run: AttributedString.Runs.Run?) -> Bool {
+        guard line.length > 0, let run else { return true }
+        let letters = string.substring(with: line)
+        return MemoLists.marker(in: string, line: line) == nil && !MemoTimeline.isChild(line, in: string)
+            && run[MemoAttributes.Table.self] == nil && run[MemoAttributes.Code.self] != true
+            && MemoTimeline.stampLength(letters) == nil && !MemoTimeline.isRule(letters)
+    }
+
+    /// 왼쪽·가운데·오른쪽 정렬 (nil: left), on every line the selection touches that can take it
+    /// (`canTakeAlign`). A beep when none can.
+    func setAlign(_ align: MemoAlign?) {
+        guard !isUnreadable else { return NSSound.beep() }
+        let string = String(text.characters) as NSString
+        // Judged against the selection itself: a caret is an empty range, which a range set drops.
+        let picked = selectedRanges
+        let characters = text.characters
+        var lines = RangeSet<AttributedString.Index>()
+        var hasEmpty = false
+        var offset = 0
+        for line in MemoTodoLines.lines(in: text) {
+            let length = text[line].characters.reduce(0) { $0 + $1.utf16.count }
+            // The line break after it, in UTF-16 units (`\r\n` is one letter of two).
+            let breakLength = line.upperBound < characters.endIndex ? characters[line.upperBound].utf16.count : 0
+            defer { offset += length + breakLength }
+            let touched = picked.contains { range in
+                range.isEmpty ? line.lowerBound <= range.lowerBound && range.lowerBound <= line.upperBound
+                    : range.overlaps(line) || (line.isEmpty && range.lowerBound <= line.lowerBound && line.lowerBound < range.upperBound)
+            }
+            guard touched else { continue }
+            if line.isEmpty {
+                // Its line break is the line TextKit draws: it takes the alignment too.
+                hasEmpty = true
+                if line.lowerBound < characters.endIndex { lines.insert(line.lowerBound, within: characters) }
+                continue
+            }
+            guard canTakeAlign(NSRange(location: offset, length: length), in: string, run: text.runs[line.lowerBound]) else { continue }
+            lines.insert(contentsOf: line)
+        }
+        guard !lines.isEmpty || hasEmpty else { return NSSound.beep() }
+        // Off takes the line breaks around the lines too, as a paragraph style's does.
+        if align == nil { widenToLineBreaks(&lines) }
+        if !lines.isEmpty {
+            text.transform(updating: &selection) { text in
+                text[lines][MemoAttributes.Align.self] = align
+            }
+        }
+        // An empty line types in the alignment it was given.
+        if !hasSelectedText { change { $0[MemoAttributes.Align.self] = align } }
+    }
+
     /// 지우기: back to plain text. A code block and a paragraph style go whole lines at a time,
     /// as they came.
     func clearFormatting() {
@@ -376,6 +522,7 @@ final class MemoDraft {
         text.transform(updating: &selection) { text in
             text[lines][MemoAttributes.Code.self] = nil
             text[lines][MemoAttributes.Paragraph.self] = nil
+            text[lines][MemoAttributes.Align.self] = nil
         }
         change { container in
             container[MemoAttributes.Bold.self] = nil
@@ -384,6 +531,8 @@ final class MemoDraft {
             container[MemoAttributes.Strike.self] = nil
             container[MemoAttributes.Paragraph.self] = nil
             container[MemoAttributes.Code.self] = nil
+            container[MemoAttributes.InlineCode.self] = nil
+            container[MemoAttributes.Align.self] = nil
             container[MemoAttributes.Math.self] = nil
             container[MemoAttributes.Script.self] = nil
             container[MemoAttributes.Ink.self] = nil
@@ -414,19 +563,26 @@ final class MemoDraft {
         }
     }
 
-    /// A line in two paragraph styles (letters typed at the front of a title, or two lines joined)
-    /// takes the first style in it throughout.
+    /// A line in two paragraph styles or alignments (letters typed at the front of a title, or two
+    /// lines joined) takes the first one in it throughout.
     private func keepParagraphsWhole() {
         if isComposing { return }
-        var fixes: [(line: Range<AttributedString.Index>, paragraph: MemoParagraph)] = []
+        var paragraphs: [(line: Range<AttributedString.Index>, paragraph: MemoParagraph)] = []
+        var aligns: [(line: Range<AttributedString.Index>, align: MemoAlign)] = []
         for line in MemoTodoLines.lines(in: text) where !line.isEmpty {
-            let values = text[line].runs[MemoAttributes.Paragraph.self].map(\.0)
-            guard let first = values.compactMap({ $0 }).first, values.contains(where: { $0 != first }) else { continue }
-            fixes.append((line, first))
+            // Both read in one pass over the line's runs.
+            var values: [MemoParagraph?] = [], sides: [MemoAlign?] = []
+            for (paragraph, side, _) in text[line].runs[MemoAttributes.Paragraph.self, MemoAttributes.Align.self] {
+                values.append(paragraph)
+                sides.append(side)
+            }
+            if let first = values.compactMap({ $0 }).first, values.contains(where: { $0 != first }) { paragraphs.append((line, first)) }
+            if let first = sides.compactMap({ $0 }).first, sides.contains(where: { $0 != first }) { aligns.append((line, first)) }
         }
-        guard !fixes.isEmpty else { return }
+        guard !paragraphs.isEmpty || !aligns.isEmpty else { return }
         text.transform(updating: &selection) { text in
-            for fix in fixes { text[fix.line][MemoAttributes.Paragraph.self] = fix.paragraph }
+            for fix in paragraphs { text[fix.line][MemoAttributes.Paragraph.self] = fix.paragraph }
+            for fix in aligns { text[fix.line][MemoAttributes.Align.self] = fix.align }
         }
     }
 
@@ -484,9 +640,21 @@ enum MemoStyle {
     static let boxSize: CGFloat = 20
 
     static func font(bold: Bool, italic: Bool, code: Bool, math: Bool, script: MemoScript?, box: Bool = false,
-                     paragraph: MemoParagraph? = nil) -> Font {
+                     paragraph: MemoParagraph? = nil, inlineCode: Bool = false) -> Font {
         // In the memo's own face, only larger.
         if box { return .system(size: boxSize) }
+        // Inline code: fixed-width at the code block's size, or at its title's or heading's.
+        if inlineCode && !code {
+            let size: CGFloat = switch paragraph {
+            case .title?: TextStyle.title.size
+            case .heading?: TextStyle.heading.size
+            default: 13
+            }
+            var font: Font = .system(size: size, weight: paragraph == nil ? .regular : .semibold, design: .monospaced)
+            if bold { font = font.bold() }
+            if italic { font = font.italic() }
+            return font
+        }
         // The title and heading tokens, and the memo's letters at 600 for a subheading; no new sizes.
         if let paragraph, !code {
             var font: Font = switch paragraph {
@@ -541,13 +709,14 @@ enum MemoStyle {
             let code = run[MemoAttributes.Code.self] == true
             let script = run[MemoAttributes.Script.self]
             let box = run[MemoAttributes.TodoBox.self] == true
+            let inline = run[MemoAttributes.InlineCode.self] == true
             text[run.range].font = font(bold: run[MemoAttributes.Bold.self] == true, italic: run[MemoAttributes.Italic.self] == true,
                                         code: code, math: run[MemoAttributes.Math.self] == true, script: script, box: box,
-                                        paragraph: run[MemoAttributes.Paragraph.self])
+                                        paragraph: run[MemoAttributes.Paragraph.self], inlineCode: inline)
             let todo = run[MemoAttributes.Todo.self]
             let struck = run[MemoAttributes.Strike.self] == true
             text[run.range].foregroundColor = ink(run[MemoAttributes.Ink.self], todo: todo, struck: struck)
-            text[run.range].backgroundColor = ground(code: code, highlight: run[MemoAttributes.Highlight.self], todo: todo)
+            text[run.range].backgroundColor = ground(code: code || inline, highlight: run[MemoAttributes.Highlight.self], todo: todo)
             text[run.range].strikethroughStyle = strike(todo, box: box, struck: struck)
             text[run.range].underlineStyle = underline(run[MemoAttributes.Underline.self] == true)
             text[run.range].baselineOffset = baselineOffset(script)
@@ -587,7 +756,7 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
                 bold: container[MemoAttributes.Bold.self] == true, italic: container[MemoAttributes.Italic.self] == true,
                 code: container[MemoAttributes.Code.self] == true, math: container[MemoAttributes.Math.self] == true,
                 script: container[MemoAttributes.Script.self], box: container[MemoAttributes.TodoBox.self] == true,
-                paragraph: container[MemoAttributes.Paragraph.self])
+                paragraph: container[MemoAttributes.Paragraph.self], inlineCode: container[MemoAttributes.InlineCode.self] == true)
         }
     }
 
@@ -606,7 +775,7 @@ struct MemoFormatting: AttributedTextFormattingDefinition {
         typealias AttributeKey = AttributeScopes.SwiftUIAttributes.BackgroundColorAttribute
 
         func constrain(_ container: inout Attributes) {
-            container[AttributeKey.self] = MemoStyle.ground(code: container[MemoAttributes.Code.self] == true, highlight: container[MemoAttributes.Highlight.self],
+            container[AttributeKey.self] = MemoStyle.ground(code: container[MemoAttributes.Code.self] == true || container[MemoAttributes.InlineCode.self] == true, highlight: container[MemoAttributes.Highlight.self],
                                                             todo: container[MemoAttributes.Todo.self])
         }
     }
@@ -713,15 +882,10 @@ struct MemoEditor: View {
             let frame = proxy.frame(in: .global)
             return shown.offsetBy(dx: frame.minX, dy: frame.minY)
         } action: { draft.visibleBox = $0 }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { draft.boxFrame = $0 }
         .overlay(alignment: .topLeading) {
             if showsBar {
                 MemoFormatBar(draft: draft).offset(y: barY)
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            // Under the Aa button at the section rule's end.
-            if draft.showsParagraphBar && !draft.isUnreadable {
-                MemoParagraphBar(draft: draft)
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { top = $0 }
@@ -751,10 +915,9 @@ struct MemoEditor: View {
         .onChange(of: draft.text) {
             draft.textChanged()
             draft.redrawLines?()
-            // Nothing stays open over the words being written.
-            draft.showsParagraphBar = false
         }
         .onChange(of: draft.selection) {
+            draft.dropInlineCodeAtLineStart()
             draft.selectionChanged()
             draft.redrawLines?()
             // After the text view has laid the new selection out.
@@ -817,7 +980,8 @@ private struct AttachmentPreview: ViewModifier {
     }
 }
 
-/// Bold, italic, underline, strikethrough, code block and formula, then
+/// Bold, italic, underline, strikethrough, code (inline for letters picked within a line, else a
+/// code block) and formula, then
 /// text colour and highlighter from the palette. Shortcuts show on hover and live in the 서식 menu
 /// too, with 서식 지우기, which the bar has no room for.
 struct MemoFormatBar: View {
@@ -831,7 +995,7 @@ struct MemoFormatBar: View {
                 style("I", "기울임", "⌘I", isOn: draft.isOn(MemoAttributes.Italic.self), font: TextStyle.body.font.italic(), design: .serif) { draft.toggle(MemoAttributes.Italic.self) }
                 style("U", "밑줄", "⌘U", isOn: draft.isOn(MemoAttributes.Underline.self), font: TextStyle.body.font, line: .underline) { draft.toggle(MemoAttributes.Underline.self) }
                 style("S", "취소선", "⌘⇧X", isOn: draft.isOn(MemoAttributes.Strike.self), font: TextStyle.body.font, line: .strike) { draft.toggle(MemoAttributes.Strike.self) }
-                style("{ }", "코드 블록", "⌘⇧C", isOn: draft.isCode, font: TextStyle.cell.font.weight(.semibold), design: .monospaced) { draft.toggleCode() }
+                style("{ }", draft.inlinePick == nil ? "코드 블록" : "코드", "⌘⇧C", isOn: draft.isCode, font: TextStyle.cell.font.weight(.semibold), design: .monospaced) { draft.toggleCode() }
                 Rectangle().fill(.ink).frame(width: Metrics.line, height: 18).padding(.horizontal, Metrics.spaceXxs)
                 style("fx", "수식", "⌥⌘E", isOn: draft.isOn(MemoAttributes.Math.self), font: TextStyle.item.font.italic(), design: .serif) { draft.toggleFormula() }
                 Spacer(minLength: Metrics.spaceM)
@@ -972,6 +1136,15 @@ struct MemoCommands: Commands {
                 Button("본문") { draft?.setParagraph(nil) }
                     .keyboardShortcut("0", modifiers: [.command, .option])
                 Divider()
+                // As in the usual document apps (Left, cEnter, Right). Not ⌘{ ⌘| ⌘}: ⌘| is ⌘⇧\,
+                // the 보기 menu's panel width.
+                Button("왼쪽 정렬") { draft?.setAlign(nil) }
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
+                Button("가운데 정렬") { draft?.setAlign(.center) }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                Button("오른쪽 정렬") { draft?.setAlign(.right) }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                Divider()
                 Button("글머리 기호 목록") { draft?.setList(.bullet) }
                     .keyboardShortcut("7", modifiers: [.command, .shift])
                 Button("대시 목록") { draft?.setList(.dash) }
@@ -998,6 +1171,9 @@ struct MemoCommands: Commands {
                     .keyboardShortcut("t", modifiers: [.command, .control])
             }
             .disabled(draft == nil)
+            Divider()
+            // Whether a memo is focused or not. No shortcut: ⌥⌘T is the 보기 menu's toolbar item.
+            Toggle("서식 막대 늘 보이기", isOn: Binding(get: { MemoBarPin.shared.isPinned }, set: { MemoBarPin.shared.isPinned = $0 }))
         }
     }
 }

@@ -86,8 +86,8 @@ struct MainView: View {
         .toolbar(removing: .title)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-        // The wall shows through the title bar, above the paper.
-        .background(Color.wall.ignoresSafeArea())
+        // The title bar is paper too, parted from the sheet by the shade line along its top.
+        .background(Color.paper.ignoresSafeArea())
         .foregroundStyle(.ink)
         // Every drawn control shows its own focus ring (a paper gap, then ink), so the system's round blue one stays off.
         .focusEffectDisabled()
@@ -146,10 +146,13 @@ struct MainView: View {
 }
 
 /// The title bar: 새 일정 by the window buttons, the view switch in the middle, sync and the panel
-/// on the right. Our own drawn controls, without the system's glass behind them.
+/// on the right. Our own drawn controls, without the system's glass behind them; the one place
+/// they have rounded corners (`titleBarRadius`), as the window's own buttons do.
 struct MainToolbar: ToolbarContent {
     @Bindable var model: AppModel
     let calendars: CalendarController
+    /// The title bar controls' corners: the macOS control size, and nowhere else in the app.
+    static let titleBarRadius: CGFloat = 6
 
     var body: some ToolbarContent {
         // Settings dims the window, title bar included; its controls step out of the way.
@@ -160,6 +163,7 @@ struct MainToolbar: ToolbarContent {
                 .disabled(model.isModalOpen || calendars.writableSources.isEmpty)
                 .help(calendars.writableSources.isEmpty ? "설정에서 Google이나 iCloud를 연결해 주세요" : "새 일정 (⌘N)")
                 .settingsHidden(model.isSettingsOpen)
+                .environment(\.controlCornerRadius, Self.titleBarRadius)
         }
         .sharedBackgroundVisibility(.hidden)
         // Like the menu commands, the title bar waits while settings or an event popover is open.
@@ -168,6 +172,7 @@ struct MainToolbar: ToolbarContent {
                 .disabled(model.isModalOpen)
                 .accessibilityLabel("보기")
                 .settingsHidden(model.isSettingsOpen)
+                .environment(\.controlCornerRadius, Self.titleBarRadius)
         }
         .sharedBackgroundVisibility(.hidden)
         ToolbarItem(placement: .primaryAction) {
@@ -180,15 +185,20 @@ struct MainToolbar: ToolbarContent {
             }
             .disabled(model.isModalOpen)
             .settingsHidden(model.isSettingsOpen)
+            .environment(\.controlCornerRadius, Self.titleBarRadius)
         }
         .sharedBackgroundVisibility(.hidden)
         ToolbarItem(placement: .primaryAction) {
             IconSegments(AppModel.PanelMode.allCases.map { .init($0, label: $0.label, help: $0.help) },
-                         selection: $model.panelMode) { PanelGlyph(mode: $0) }
+                         selection: $model.panelMode, bare: true) { PanelGlyph(mode: $0) }
                 .disabled(model.isModalOpen)
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("패널")
                 .settingsHidden(model.isSettingsOpen)
+                .environment(\.controlCornerRadius, Self.titleBarRadius)
+                // The group's right end on the panel's: the panel's contents stand 20 pt in from
+                // the window's edge, the title bar's last item 8 pt.
+                .padding(.trailing, Metrics.spaceL)
         }
         .sharedBackgroundVisibility(.hidden)
     }

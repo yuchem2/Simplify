@@ -92,10 +92,16 @@ struct DayPanel: View {
                                     DayEvents(slots: calendars.slots[period.start] ?? [], day: period.start, model: model, calendars: calendars, calendar: model.calendar, empty: section.empty)
                                 }
                             } else if section.kind == .memo {
+                                // Pinned: the Aa bar as one line of tools under the rule, for whichever memo is written.
+                                if MemoBarPin.shared.isPinned { MemoFormatStrip(draft: memos.draft) }
                                 memoSection(section, period: period)
                             } else {
                                 TodoList(period: period, model: model, memos: memos)
                             }
+                        }
+                        // The Aa bar and its shortcut card hang under the button, over the tabs and memos.
+                        .overlayPreferenceValue(MemoAaAnchor.self) { anchor in
+                            if section.kind == .memo { MemoAaLayer(draft: memos.draft, anchor: anchor) }
                         }
                     }
                 }
@@ -108,6 +114,8 @@ struct DayPanel: View {
         }
         .background(.paper)
         .overlay { PanelPopLayer(model: model, calendars: calendars, memos: memos) }
+        // Pinned or not, the floating bar closes: the toolbar takes its place, or comes back with Aa.
+        .onChange(of: MemoBarPin.shared.isPinned) { memos.draft.showsParagraphBar = false }
         // A ToDo ticked or renamed anywhere redraws its chips in the open memo.
         .onChange(of: memos.todos.revision) { memos.draft.refreshChips() }
         // Every pop is about the period on screen (the memo's lines, a place in its letters).

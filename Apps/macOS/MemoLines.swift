@@ -441,8 +441,9 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         if let row = tableParagraph(text, range, caret: tableCaret) {
             return NSTextParagraph(attributedString: row)
         }
-        // A code block keeps its own face.
-        if text.attribute(.font, at: range.location, effectiveRange: nil).map({ ($0 as? NSFont)?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true }) == true {
+        // A code block keeps its own face. By its mark: a line starting with inline code is in the
+        // same fixed-width face, and is still a line like any other.
+        if Self.isOn(text.attribute(Self.codeKey, at: range.location, effectiveRange: nil)) {
             return NSTextParagraph(attributedString: dressAttachments(nil, text, range) ?? text.copiedPart(range))
         }
         // The caret as it is now: during an edit the rule's range has already moved.
@@ -565,15 +566,17 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         return Self.width(of: hasRange ? "00.00 00:00-00:00 " : "00.00 00:00 ", font: figures)
     }
 
-    /// A list item, a quote, a timeline line's child, or a title, heading or subheading line as
-    /// drawn; nil for any other.
+    /// A list item, a quote, a timeline line's child, a title, heading or subheading line, or a
+    /// centred or right-set line as drawn; nil for any other.
     private func blockParagraph(_ text: NSTextStorage, _ range: NSRange, _ line: String) -> NSMutableAttributedString? {
         let string = text.string as NSString
         let letters = NSRange(location: range.location, length: (line as NSString).length)
         let isChild = MemoTimeline.isChild(letters, in: string)
         let marker = MemoLists.marker(line, offset: isChild ? 1 : 0)
         let paragraph = Self.paragraph(text.attribute(Self.paragraphKey, at: range.location, effectiveRange: nil))
-        guard marker != nil || paragraph != nil || isChild else { return nil }
+        // Lists, quotes and a timeline line's children keep to their columns, so stay left.
+        let align = marker == nil && !isChild ? Self.align(text.attribute(Self.alignKey, at: range.location, effectiveRange: nil)) : nil
+        guard marker != nil || paragraph != nil || isChild || align != nil else { return nil }
         let shown = text.copiedPart(range)
         let whole = NSRange(location: 0, length: shown.length)
         var style = ((shown.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
@@ -593,6 +596,11 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         case nil:
             break
         }
+        switch align {
+        case .center?: style.alignment = .center
+        case .right?: style.alignment = .right
+        case nil: break
+        }
         // A quote's `> ` hidden; what follows starts past the ink line, wrapped lines too.
         let quoteIndent = marker?.isQuoted == true ? Metrics.lineSpine + Metrics.spaceL : 0
         if let marker, marker.isQuoted {
@@ -600,7 +608,10 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             let font = NSFont.systemFont(ofSize: MemoStyle.size)
             shown.addAttribute(.font, value: font, range: NSRange(location: 0, length: 2))
             shown.addAttribute(.foregroundColor, value: NSColor.clear, range: NSRange(location: 0, length: 1))
-            shown.addAttribute(.kern, value: max(0, quoteIndent - Self.width(of: "> ", font: font)), range: NSRange(location: 1, length: 1))
+            // A list item in it starts `listInset` further, from the `> ` itself, so the quote's
+            // line stays where every quote line has it.
+            let inset = marker.quoted && marker.kind != .quote ? Self.listInset : 0
+            shown.addAttribute(.kern, value: max(0, quoteIndent + inset - Self.width(of: "> ", font: font)), range: NSRange(location: 1, length: 1))
             // Soft ink, except letters given a colour of their own.
             if shown.length > 2 {
                 shown.enumerateAttribute(Self.inkKey, in: NSRange(location: 2, length: shown.length - 2)) { value, part, _ in
@@ -621,7 +632,10 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         if let marker, marker.kind != .quote {
             // A tab a level; the marker, then the words from a column after it, wrapped lines too.
             // As many as the item's level needs, however deep; in a child, from the time's words.
-            let base = quoteIndent + childIndent
+            // Every level starts `listInset` in, so a list stands apart from the lines above it.
+            let base = quoteIndent + childIndent + Self.listInset
+            // In a quote the `> ` already reaches past the inset.
+            if !marker.quoted { style.firstLineHeadIndent = Self.listInset }
             style.tabStops = (1...max(1, marker.level)).map { NSTextTab(textAlignment: .left, location: base + CGFloat($0 - marker.offset) * MemoLists.levelIndent) }
             style.defaultTabInterval = MemoLists.levelIndent
             let label = NSRange(location: marker.labelOffset, length: (marker.label as NSString).length)
@@ -804,6 +818,8 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
 
     /// A number item's marker column, a little wider than a bullet's for two figures.
     private static let numberColumn: CGFloat = 26
+    /// How far in a list's first level starts: the memo's drawing only, not sent to the 메모 app.
+    static let listInset: CGFloat = Metrics.spaceL
     /// A bullet's size and lift against its line's letters.
     private static let bulletScale: CGFloat = 0.5
     private static let bulletRise: CGFloat = 0.15
@@ -812,6 +828,7 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     private static let inkKey = NSAttributedString.Key(MemoAttributes.Ink.name)
     private static let mathKey = NSAttributedString.Key(MemoAttributes.Math.name)
     private static let codeKey = NSAttributedString.Key(MemoAttributes.Code.name)
+    private static let alignKey = NSAttributedString.Key(MemoAttributes.Align.name)
     static let attachmentKey = NSAttributedString.Key(MemoAttributes.Attachment.name)
 
     /// A formula's LaTeX while written or unreadable: the code block's face.
@@ -862,6 +879,12 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         copy.hyphenationFactor = style.hyphenationFactor
         copy.allowsDefaultTighteningForTruncation = style.allowsDefaultTighteningForTruncation
         return copy
+    }
+
+    /// An alignment as the text view keeps it.
+    private static func align(_ value: Any?) -> MemoAlign? {
+        if let align = value as? MemoAlign { return align }
+        return (value as? String).flatMap(MemoAlign.init(rawValue:))
     }
 
     /// A paragraph style as the text view keeps it.
@@ -1024,6 +1047,7 @@ struct MemoPrint: View {
         let lines = MemoTodoLines.lines(in: text)
         let plain = lines.map { String(text[$0].characters) }
         let wide = plain.contains { MemoTimeline.stampLength($0) == 17 }
+        let children = Set(MemoTimeline.childLines(in: String(text.characters) as NSString))
         let figures = Font.system(size: MemoStyle.size).monospacedDigit()
         let column = (NSString(string: wide ? "00.00 00:00-00:00 " : "00.00 00:00 ")
             .size(withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: MemoStyle.size, weight: .regular)]).width).rounded(.up)
@@ -1044,14 +1068,21 @@ struct MemoPrint: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
+                    // As the text view draws it: list, quote, code, table and timeline children stay left.
+                    let run = range.isEmpty ? nil : text.runs[range.lowerBound]
+                    let align = run.flatMap { run in
+                        MemoLists.marker(letters) != nil || children.contains(number) || run[MemoAttributes.Code.self] == true
+                            || run[MemoAttributes.Table.self] != nil ? nil : run[MemoAttributes.Align.self]
+                    }
                     // In a row, as the timeline lines are: a lone wrapping Text is measured a line short here.
                     HStack(alignment: .top, spacing: 0) {
                         Color.clear.frame(width: 0, height: MemoStyle.lineHeight)
                         Text(MemoStyle.rendered(AttributedString(text[range])))
                             .lineHeight(.exact(points: MemoStyle.lineHeight))
+                            .multilineTextAlignment(align == .center ? .center : align == .right ? .trailing : .leading)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: align == .center ? .center : align == .right ? .trailing : .leading)
                 }
             }
         }

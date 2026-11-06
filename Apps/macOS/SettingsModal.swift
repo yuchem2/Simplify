@@ -207,6 +207,10 @@ struct SettingsModal: View {
             .toggleStyle(DrawnCheckboxStyle())
 
             SectionRule("메모").padding(.top, Metrics.spaceM)
+            Toggle(isOn: Binding(get: { MemoBarPin.shared.isPinned }, set: { MemoBarPin.shared.isPinned = $0 })) {
+                labelled("서식 막대 늘 보이기", note: "메모 위에 문단·정렬·목록 도구를 한 줄로 늘 둬요. Aa 막대의 핀과 같아요. 이 Mac에만 적용돼요.")
+            }
+            .toggleStyle(DrawnCheckboxStyle())
             NotesMirrorRow()
 
             SectionRule("기기").padding(.top, Metrics.spaceM)
@@ -1110,7 +1114,8 @@ struct SyncStatusView: View {
         switch calendars.status {
         case .noAccounts:
             Button(action: openSettings) { Label("캘린더 연결", systemImage: "plus") }
-                .buttonStyle(DrawnButtonStyle())
+                // No outline, as the panel switch beside it.
+                .buttonStyle(DrawnButtonStyle(.bare))
         case .syncing:
             HStack(spacing: Metrics.spaceS) {
                 ProgressView().controlSize(.mini)

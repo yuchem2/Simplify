@@ -38,6 +38,9 @@ public enum NotesHTML {
     /// the list above; quote lines are a `<blockquote>`, with any list items in them inside it.
     /// Formulas are their LaTeX in `$…$`, and a formula line's in `$$…$$`. A table's rows are one
     /// `<table>`, a row's tab-split cells each a `<td>`. An attached file is `📎` and its name.
+    /// Inline code is `<tt>` like a code block's letters, and a centred or right-set line's `<div>`
+    /// carries `text-align`. A list's indent in the memo is the memo's own drawing and is not sent:
+    /// the 메모 app indents its lists itself.
     public static func body(name: String, text: AttributedString) -> String? {
         guard !MemoText.isBlank(text) else { return nil }
         let text = MemoMath.upgradingScripts(text)
@@ -93,7 +96,11 @@ public enum NotesHTML {
                 if inFormula { html += "$" }
             }
             let paragraph = text[range].runs.first { $0[MemoAttributes.Paragraph.self] != nil }?[MemoAttributes.Paragraph.self]
-            return Line(html: html, marker: marker, paragraph: paragraph, isBlank: letters.isEmpty)
+            // A centred or right-set line, as the memo draws it: list, quote, code, timeline lines,
+            // their children and rules are always left-set.
+            let keepsLeft = isCode || marker != nil || children.contains(index) || MemoTimeline.stampLength(letters) != nil || MemoTimeline.isRule(letters)
+            let align = keepsLeft ? nil : text[range].runs.first { $0[MemoAttributes.Align.self] != nil }?[MemoAttributes.Align.self]
+            return Line(html: html, marker: marker, paragraph: paragraph, align: align, isBlank: letters.isEmpty)
         }
         while lines.last?.isBlank == true { lines.removeLast() }
         while lines.first?.isBlank == true { lines.removeFirst() }
@@ -130,7 +137,8 @@ public enum NotesHTML {
             }
             guard let marker = line.marker, marker.kind != .quote else {
                 while let list = open.popLast() { out.append(list.close) }
-                out.append("<div>\(paragraphed(line))</div>")
+                let div = line.align.map { "<div style=\"text-align: \($0.rawValue)\">" } ?? "<div>"
+                out.append("\(div)\(paragraphed(line))</div>")
                 continue
             }
             let tag = switch marker.kind {
@@ -160,6 +168,7 @@ public enum NotesHTML {
         var html: String
         var marker: MemoLists.Marker?
         var paragraph: MemoParagraph?
+        var align: MemoAlign? = nil
         var isBlank: Bool
         /// A table row's table id and its cells' HTML.
         var table: String? = nil
@@ -189,7 +198,8 @@ public enum NotesHTML {
             letters = todo.isDone ? "☑" : "☐"
         }
         var html = escape(letters, afterSpace: afterSpace)
-        if run[MemoAttributes.Code.self] == true { html = "<tt>\(html)</tt>" }
+        // A code block's letters and inline code alike: the 메모 app's fixed-width face.
+        if run[MemoAttributes.Code.self] == true || run[MemoAttributes.InlineCode.self] == true { html = "<tt>\(html)</tt>" }
         switch run[MemoAttributes.Script.self] {
         case .raised: html = "<sup>\(html)</sup>"
         case .lowered: html = "<sub>\(html)</sub>"
@@ -201,7 +211,7 @@ public enum NotesHTML {
         if run[MemoAttributes.Bold.self] == true { html = "<b>\(html)</b>" }
         var style: [String] = []
         if let ink = run[MemoAttributes.Ink.self] { style.append("color: \(lightInk(ink))") }
-        if run[MemoAttributes.Code.self] != true, let highlight = run[MemoAttributes.Highlight.self] {
+        if run[MemoAttributes.Code.self] != true, run[MemoAttributes.InlineCode.self] != true, let highlight = run[MemoAttributes.Highlight.self] {
             style.append("background-color: \(lightTint(highlight))")
         }
         if !style.isEmpty { html = "<span style=\"\(style.joined(separator: "; "))\">\(html)</span>" }

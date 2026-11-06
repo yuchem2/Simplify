@@ -331,6 +331,12 @@ struct MemoMenuHost: NSViewRepresentable {
                 window.makeFirstResponder(nil)
             }
             draft?.showMenu = { [weak self] in self?.showMenuUnderSelection() }
+            draft?.contentOffset = { [weak self] in
+                guard let self, let draft = self.draft, !draft.boxFrame.isNull, let content = self.window?.contentView else { return nil }
+                let mine = self.convert(self.bounds, to: content)
+                let top = content.isFlipped ? mine.minY : content.bounds.height - mine.maxY
+                return CGPoint(x: mine.minX - draft.boxFrame.minX, y: top - draft.boxFrame.minY)
+            }
             draft?.redrawLines = { [weak self] in self?.redrawLines() }
             draft?.editLines = { [weak self] make in self?.editLines(make) ?? false }
             draft?.editTable = { [weak self] action in self?.editTable(action) ?? false }
@@ -346,10 +352,13 @@ struct MemoMenuHost: NSViewRepresentable {
                     guard let self, let window = self.window, event.window === window, let draft = self.draft else { return false }
                     switch event.type {
                     case .keyDown:
-                        // Esc closes the 문단 bar.
+                        // Esc closes the 문단 bar; letters typed in the memo close it and go in.
                         if draft.showsParagraphBar, event.keyCode == Self.keyEscape {
                             draft.showsParagraphBar = false
                             return true
+                        }
+                        if draft.showsParagraphBar, draft.hasFocus, Self.typesLetters(event) {
+                            draft.showsParagraphBar = false
                         }
                         // Space on a picked card shows it; ⌘V with a picture pastes it as an attachment.
                         if draft.hasFocus, draft.book.todos.pop == nil, let textView = self.styler.textView, window.firstResponder === textView,
@@ -381,6 +390,15 @@ struct MemoMenuHost: NSViewRepresentable {
                         }
                         return true
                     case .leftMouseDown:
+                        // A click anywhere but the 문단 bar or its Aa closes the bar, and goes on.
+                        if draft.showsParagraphBar, let content = window.contentView {
+                            let point = content.convert(event.locationInWindow, from: nil)
+                            let top = content.isFlipped ? point : CGPoint(x: point.x, y: content.bounds.height - point.y)
+                            if !draft.inContent(draft.paragraphBarFrame).contains(top), !draft.inContent(draft.aaFrame).contains(top) {
+                                draft.showsParagraphBar = false
+                                draft.barClosedByClick = ProcessInfo.processInfo.systemUptime
+                            }
+                        }
                         // A click picks a card; a double-click shows it.
                         if self.isInBox(event), let textView = self.styler.textView,
                            let hit = self.styler.attachment(at: textView.convert(event.locationInWindow, from: nil)) {
@@ -413,6 +431,13 @@ struct MemoMenuHost: NSViewRepresentable {
                 }
                 return handled ? nil : event
             }
+        }
+
+        /// A key that types into the memo: no ⌘ or ⌃, and not a key that only moves or closes.
+        private static func typesLetters(_ event: NSEvent) -> Bool {
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard modifiers.isDisjoint(with: [.command, .control, .function]) else { return false }
+            return !(event.characters ?? "").isEmpty && event.keyCode != keyEscape
         }
 
         /// A click on a card picks it: the caret just after it, the card in its outline.

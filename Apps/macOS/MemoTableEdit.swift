@@ -190,7 +190,7 @@ enum MemoTableKeys {
               textView.shouldChangeText(in: range, replacementString: letters) else { return }
         var attributes = textView.typingAttributes
         for name in [MemoAttributes.Bold.name, MemoAttributes.Italic.name, MemoAttributes.Underline.name, MemoAttributes.Strike.name,
-                     MemoAttributes.Paragraph.name, MemoAttributes.Code.name, MemoAttributes.Math.name, MemoAttributes.Script.name,
+                     MemoAttributes.Paragraph.name, MemoAttributes.Code.name, MemoAttributes.InlineCode.name, MemoAttributes.Align.name, MemoAttributes.Math.name, MemoAttributes.Script.name,
                      MemoAttributes.Ink.name, MemoAttributes.Highlight.name, MemoAttributes.Todo.name, MemoAttributes.TodoBox.name,
                      MemoAttributes.Table.name] {
             attributes[NSAttributedString.Key(name)] = nil

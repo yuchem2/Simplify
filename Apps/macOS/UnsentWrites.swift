@@ -19,7 +19,9 @@ struct UnsentWritesButton: View {
         .buttonStyle(DrawnButtonStyle(.text, active: isOpen))
         .help(calendars.isOffline ? "인터넷에 연결되면 저장돼요" : "보낼 변경 목록")
         .anchoredPop(isPresented: $isOpen) {
+            // A pop stays square, though the title bar's controls are round.
             UnsentWritesList(calendars: calendars)
+                .environment(\.controlCornerRadius, 0)
         }
     }
 }

@@ -38,17 +38,10 @@ public extension View {
             .background(Rectangle().fill(shadow).offset(x: Metrics.shadowOffset, y: Metrics.shadowOffset))
     }
 
-    /// The keyboard focus mark: a paper gap, then an ink ring, outside the view's bounds.
+    /// The keyboard focus mark: a paper gap, then an ink ring, outside the view's bounds. Rounded
+    /// like the control under `controlCornerRadius`.
     func focusRing(_ isShown: Bool) -> some View {
-        overlay {
-            if isShown {
-                Rectangle()
-                    .strokeBorder(.paper, lineWidth: Metrics.focusGap)
-                    .overlay(Rectangle().inset(by: -Metrics.focusRing).strokeBorder(Tokens.focusRing, lineWidth: Metrics.focusRing))
-                    .padding(-Metrics.focusGap)
-                    .allowsHitTesting(false)
-            }
-        }
+        modifier(FocusRing(isShown: isShown))
     }
 
     /// A list row that answers the pointer and shows how it is picked: ink when chosen from many,
@@ -57,6 +50,38 @@ public extension View {
     func selectableRow(chosen: Bool, active: Bool = false, inset: CGFloat = Metrics.spaceXs) -> some View {
         modifier(SelectableRow(chosen: chosen, active: active, inset: inset))
     }
+}
+
+private struct FocusRing: ViewModifier {
+    var isShown: Bool
+    @Environment(\.controlCornerRadius) private var radius
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if isShown && radius > 0 {
+                // Round, the gap and the ring each one step out from the control's corners
+                // (insetting outward grows the radius by the same step).
+                RoundedRectangle(cornerRadius: radius + Metrics.focusGap)
+                    .strokeBorder(.paper, lineWidth: Metrics.focusGap)
+                    .overlay(RoundedRectangle(cornerRadius: radius + Metrics.focusGap).inset(by: -Metrics.focusRing)
+                        .strokeBorder(Tokens.focusRing, lineWidth: Metrics.focusRing))
+                    .padding(-Metrics.focusGap)
+                    .allowsHitTesting(false)
+            } else if isShown {
+                Rectangle()
+                    .strokeBorder(.paper, lineWidth: Metrics.focusGap)
+                    .overlay(Rectangle().inset(by: -Metrics.focusRing).strokeBorder(Tokens.focusRing, lineWidth: Metrics.focusRing))
+                    .padding(-Metrics.focusGap)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+}
+
+public extension EnvironmentValues {
+    /// The corner radius of drawn controls (buttons, segments, their hover fills and focus rings).
+    /// 0, square, everywhere but the title bar, whose controls are 6 pt round (DESIGN.md).
+    @Entry var controlCornerRadius: CGFloat = 0
 }
 
 private struct SelectableRow: ViewModifier {
@@ -110,14 +135,24 @@ public struct SegmentedTabs<Value: Hashable>: View {
                         if marked.contains(option.value) { MemoMark(color: isOn ? .onInk : .inkSoft) }
                     }
                 }
-                .buttonStyle(SegmentStyle(isOn: isOn, fills: fills))
+                .buttonStyle(SegmentStyle(isOn: isOn, fills: fills, first: index == 0, last: index == options.count - 1))
                 .disabled(disabled.contains(option.value))
                 .accessibilityAddTraits(isOn ? .isSelected : [])
                 .accessibilityValue(marked.contains(option.value) ? Text("메모 있음") : Text(verbatim: ""))
             }
         }
         .fixedSize(horizontal: !fills, vertical: true)
-        .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
+        .modifier(SegmentOutline())
+    }
+}
+
+/// The ink outline around a row of segments, square or rounded by `controlCornerRadius`.
+private struct SegmentOutline: ViewModifier {
+    var isShown = true
+    @Environment(\.controlCornerRadius) private var radius
+
+    func body(content: Content) -> some View {
+        content.overlay { if isShown { RoundedRectangle(cornerRadius: radius).strokeBorder(.ink, lineWidth: Metrics.line) } }
     }
 }
 
@@ -139,46 +174,66 @@ public struct IconSegments<Value: Hashable, Icon: View>: View {
 
     let options: [Option]
     @Binding var selection: Value
+    /// Drawn without the ink outline and the lines between: only the chosen segment's fill and
+    /// the hover step show (the title bar's panel switch).
+    var isBare: Bool
     let icon: (Value) -> Icon
 
-    public init(_ options: [Option], selection: Binding<Value>, @ViewBuilder icon: @escaping (Value) -> Icon) {
+    public init(_ options: [Option], selection: Binding<Value>, bare: Bool = false, @ViewBuilder icon: @escaping (Value) -> Icon) {
         self.options = options
         _selection = selection
+        isBare = bare
         self.icon = icon
     }
 
     public var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: isBare ? Metrics.spaceXxs : 0) {
             ForEach(Array(options.enumerated()), id: \.offset) { index, option in
-                if index > 0 { Rectangle().fill(.ink).frame(width: Metrics.line) }
+                if index > 0 && !isBare { Rectangle().fill(.ink).frame(width: Metrics.line) }
                 let isOn = option.value == selection
                 Button { selection = option.value } label: { icon(option.value) }
-                    .buttonStyle(SegmentStyle(isOn: isOn, fills: false))
+                    // Bare segments stand apart, each with its own corners.
+                    .buttonStyle(SegmentStyle(isOn: isOn, fills: false, first: isBare || index == 0, last: isBare || index == options.count - 1,
+                                              bare: isBare))
                     .help(option.help)
                     .accessibilityLabel(option.label)
                     .accessibilityAddTraits(isOn ? .isSelected : [])
             }
         }
         .fixedSize()
-        .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
+        .modifier(SegmentOutline(isShown: !isBare))
     }
 }
 
 private struct SegmentStyle: ButtonStyle {
     var isOn: Bool
     var fills: Bool
+    /// The row's ends, which take the outline's rounded corners when it has them.
+    var first = false
+    var last = false
+    /// No outline around it: unchosen segments are clear on whatever is behind, not paper.
+    var bare = false
 
     func makeBody(configuration: Configuration) -> some View {
-        SegmentBody(configuration: configuration, isOn: isOn, fills: fills)
+        SegmentBody(configuration: configuration, isOn: isOn, fills: fills, first: first, last: last, bare: bare)
     }
 
     private struct SegmentBody: View {
         let configuration: Configuration
         var isOn: Bool
         var fills: Bool
+        var first: Bool
+        var last: Bool
+        var bare: Bool
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.isFocused) private var isFocused
+        @Environment(\.controlCornerRadius) private var radius
         @State private var hovering = false
+
+        private var shape: UnevenRoundedRectangle {
+            UnevenRoundedRectangle(topLeadingRadius: first ? radius : 0, bottomLeadingRadius: first ? radius : 0,
+                                   bottomTrailingRadius: last ? radius : 0, topTrailingRadius: last ? radius : 0)
+        }
 
         var body: some View {
             configuration.label
@@ -188,8 +243,8 @@ private struct SegmentStyle: ButtonStyle {
                 .padding(.horizontal, Metrics.spaceL)
                 .frame(maxWidth: fills ? .infinity : nil)
                 .frame(height: 28)
-                .background(isOn ? Tokens.selection : (hovering || configuration.isPressed) && isEnabled ? Color.hover : Color.paper)
-                .contentShape(Rectangle())
+                .background(isOn ? Tokens.selection : (hovering || configuration.isPressed) && isEnabled ? Color.hover : bare ? Color.clear : Color.paper, in: shape)
+                .contentShape(shape)
                 .onHover { hovering = $0 }
                 .focusRing(ownsFocus(isFocused))
                 .zIndex(ownsFocus(isFocused) ? 1 : 0)
@@ -202,7 +257,7 @@ private struct SegmentStyle: ButtonStyle {
 /// underlined word) do what cannot be undone: delete, drop edits, disconnect. `active`: the menu or
 /// box the button opened is showing, so it stays grey (`rowActive`) until it closes.
 public struct DrawnButtonStyle: ButtonStyle {
-    public enum Kind: Sendable { case plain, primary, toggled, text, dangerText, danger, icon }
+    public enum Kind: Sendable { case plain, primary, toggled, text, dangerText, danger, icon, bare }
     var kind: Kind
     var active: Bool
 
@@ -222,9 +277,11 @@ private struct DrawnButtonBody: View {
     let active: Bool
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.controlCornerRadius) private var radius
     @State private var hovering = false
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: radius)
         Group {
             switch kind {
             case .text, .dangerText:
@@ -233,17 +290,27 @@ private struct DrawnButtonBody: View {
                     .underline()
                     .foregroundStyle(!isEnabled ? Color.inkFaint : kind == .dangerText ? Color.danger : Color.ink)
                     .padding(.horizontal, Metrics.spaceXxs)
-                    .background(active ? Color.rowActive : hovering && isEnabled ? Color.hover : Color.clear)
+                    .background(active ? Color.rowActive : hovering && isEnabled ? Color.hover : Color.clear, in: shape)
                     .opacity(configuration.isPressed ? 0.6 : 1)
                     // A taller target around the small word without changing the layout.
                     .contentShape(Rectangle().inset(by: -4))
+            case .bare:
+                // Words or a glyph with no outline or fill of their own, hover and pressed fills only,
+                // as the title bar's panel switch: the title bar's 캘린더 연결.
+                configuration.label
+                    .textStyle(.body)
+                    .foregroundStyle(isEnabled ? Color.ink : Color.inkFaint)
+                    .padding(.horizontal, Metrics.spaceM)
+                    .frame(minWidth: 28, minHeight: 28)
+                    .background(configuration.isPressed ? Color.rowActive : hovering && isEnabled ? Color.hover : Color.clear, in: shape)
+                    .contentShape(shape)
             case .icon:
                 // A bare glyph (×, ‹ ›) in a 28 pt square: no outline, hover fill only.
                 configuration.label
                     .foregroundStyle(isEnabled ? Color.ink : Color.inkFaint)
                     .frame(width: 28, height: 28)
-                    .background(configuration.isPressed ? Color.rowActive : hovering && isEnabled ? Color.hover : Color.clear)
-                    .contentShape(Rectangle())
+                    .background(configuration.isPressed ? Color.rowActive : hovering && isEnabled ? Color.hover : Color.clear, in: shape)
+                    .contentShape(shape)
             case .plain, .primary, .toggled, .danger:
                 configuration.label
                     .textStyle(.body)
@@ -251,10 +318,10 @@ private struct DrawnButtonBody: View {
                     .foregroundStyle(foreground)
                     .padding(.horizontal, Metrics.spaceL)
                     .frame(minWidth: 28, minHeight: 28)
-                    .background(background(pressed: configuration.isPressed))
+                    .background(background(pressed: configuration.isPressed), in: shape)
                     // Switched on reads by its heavier edge as well as its fill, so it never looks like hover.
-                    .overlay(Rectangle().strokeBorder(outline, lineWidth: kind == .toggled && isEnabled ? Metrics.lineBox : Metrics.line))
-                    .contentShape(Rectangle())
+                    .overlay(shape.strokeBorder(outline, lineWidth: kind == .toggled && isEnabled ? Metrics.lineBox : Metrics.line))
+                    .contentShape(shape)
             }
         }
         .onHover { hovering = $0 }

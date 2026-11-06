@@ -351,6 +351,13 @@ enum Snapshot {
             window.setContentSize(NSSize(width: 1260, height: 800))
             try? await Task.sleep(for: .seconds(1))
             capture("window")
+            // The title bar in the dark theme too.
+            let theme = NSApp.appearance
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+            try? await Task.sleep(for: .seconds(1))
+            capture("window-dark")
+            NSApp.appearance = theme
+            try? await Task.sleep(for: .seconds(0.5))
             model.isSettingsOpen = true
             try? await Task.sleep(for: .seconds(1))
             capture("window-settings")

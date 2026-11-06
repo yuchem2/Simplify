@@ -36,6 +36,20 @@ public enum MemoAttributes {
         public static let name = "simplify.memo.code"
     }
 
+    /// Inline code: picked letters within a line in a fixed-width face on a shaded ground. Not a
+    /// code block, so it is never widened to the whole line.
+    public enum InlineCode: CodableAttributedStringKey {
+        public typealias Value = Bool
+        public static let name = "simplify.memo.inlinecode"
+    }
+
+    /// A line set in the middle or to the right: whole lines, like a paragraph style. Left, the
+    /// usual, has none.
+    public enum Align: CodableAttributedStringKey {
+        public typealias Value = MemoAlign
+        public static let name = "simplify.memo.align"
+    }
+
     /// A table row: the line's cells split by tab letters, every row of one table under its id.
     /// Whole lines, like a paragraph style.
     public enum Table: CodableAttributedStringKey {
@@ -103,6 +117,11 @@ public enum MemoScript: String, Codable, Hashable, Sendable {
     case raised, lowered
 }
 
+/// A line set in the middle or to the right; left lines have none.
+public enum MemoAlign: String, Codable, Hashable, Sendable, CaseIterable {
+    case center, right
+}
+
 /// A line's paragraph style; plain body lines have none.
 public enum MemoParagraph: String, Codable, Hashable, Sendable, CaseIterable {
     case title, heading, sub
@@ -116,6 +135,8 @@ public extension AttributeScopes {
         public let strike: MemoAttributes.Strike
         public let paragraph: MemoAttributes.Paragraph
         public let code: MemoAttributes.Code
+        public let inlineCode: MemoAttributes.InlineCode
+        public let align: MemoAttributes.Align
         public let table: MemoAttributes.Table
         public let attachment: MemoAttributes.Attachment
         public let math: MemoAttributes.Math
@@ -152,6 +173,9 @@ public extension AttributeDynamicLookup {
 /// An attached file is one placeholder letter carrying `"fa"` (`<id>/<original name>`), which
 /// makes the memo version 2 too; a build that does not know the key shows the bare letter.
 /// Lists and quotes are letters (`• `, `- `, `1. `, `> `) and need no key.
+/// A centred or right-set line carries `"al"` (`center` or `right`) and inline code `"kc":true`.
+/// Neither raises the version: a build that does not know them skips the key, as unknown keys
+/// always were, and shows the letters left-set and plain.
 public enum MemoText {
     static let version = 2
 
@@ -210,6 +234,8 @@ public enum MemoText {
         var tl: String?
         var fa: String?
         var k: Bool?
+        var kc: Bool?
+        var al: String?
         var m: Bool?
         var s: String?
         var c: String?
@@ -219,7 +245,7 @@ public enum MemoText {
         var tb: Bool?
 
         private enum CodingKeys: String, CodingKey {
-            case t, b, i, u, x, p, tl, fa, k, m, s, c, h, td, tx, tb
+            case t, b, i, u, x, p, tl, fa, k, kc, al, m, s, c, h, td, tx, tb
         }
 
         init(from decoder: any Decoder) throws {
@@ -235,6 +261,8 @@ public enum MemoText {
             tl = (try? c.decodeIfPresent(String.self, forKey: .tl)) ?? nil
             fa = (try? c.decodeIfPresent(String.self, forKey: .fa)) ?? nil
             k = try c.decodeIfPresent(Bool.self, forKey: .k)
+            kc = (try? c.decodeIfPresent(Bool.self, forKey: .kc)) ?? nil
+            al = (try? c.decodeIfPresent(String.self, forKey: .al)) ?? nil
             m = try c.decodeIfPresent(Bool.self, forKey: .m)
             s = try c.decodeIfPresent(String.self, forKey: .s)
             self.c = try c.decodeIfPresent(String.self, forKey: .c)
@@ -254,11 +282,14 @@ public enum MemoText {
             tl = run[MemoAttributes.Table.self]
             fa = run[MemoAttributes.Attachment.self]
             k = run[MemoAttributes.Code.self] == true ? true : nil
+            // Inside a code block it is the block.
+            kc = k == nil && run[MemoAttributes.InlineCode.self] == true ? true : nil
+            al = run[MemoAttributes.Align.self]?.rawValue
             m = run[MemoAttributes.Math.self] == true ? true : nil
             s = run[MemoAttributes.Script.self]?.rawValue
             c = run[MemoAttributes.Ink.self]?.rawValue
             // A code block has its own shaded ground.
-            h = k == true ? nil : run[MemoAttributes.Highlight.self]?.rawValue
+            h = k == true || kc == true ? nil : run[MemoAttributes.Highlight.self]?.rawValue
             let todo = run[MemoAttributes.Todo.self]
             td = todo?.id.uuidString
             tx = todo?.isDone == true ? true : nil
@@ -266,7 +297,7 @@ public enum MemoText {
         }
 
         func sameFormatting(as other: Run) -> Bool {
-            b == other.b && i == other.i && u == other.u && x == other.x && p == other.p && tl == other.tl && fa == other.fa && k == other.k && m == other.m && s == other.s && c == other.c && h == other.h && td == other.td && tx == other.tx && tb == other.tb
+            b == other.b && i == other.i && u == other.u && x == other.x && p == other.p && tl == other.tl && fa == other.fa && k == other.k && kc == other.kc && al == other.al && m == other.m && s == other.s && c == other.c && h == other.h && td == other.td && tx == other.tx && tb == other.tb
         }
 
         var attributed: AttributedString {
@@ -280,10 +311,12 @@ public enum MemoText {
             // Only a well-formed value on the placeholder letter, below.
             let attachment = fa.flatMap(MemoAttachments.Ref.init(value:))
             if k == true { container[MemoAttributes.Code.self] = true }
+            if kc == true, k != true { container[MemoAttributes.InlineCode.self] = true }
+            container[MemoAttributes.Align.self] = al.flatMap(MemoAlign.init(rawValue:))
             if m == true { container[MemoAttributes.Math.self] = true }
             container[MemoAttributes.Script.self] = s.flatMap(MemoScript.init(rawValue:))
             container[MemoAttributes.Ink.self] = c.flatMap(Palette.init(rawValue:))
-            if k != true { container[MemoAttributes.Highlight.self] = h.flatMap(Palette.init(rawValue:)) }
+            if k != true, kc != true { container[MemoAttributes.Highlight.self] = h.flatMap(Palette.init(rawValue:)) }
             container[MemoAttributes.Todo.self] = td.flatMap(UUID.init(uuidString:)).map { MemoTodo(id: $0, isDone: tx == true) }
             if tb == true, container[MemoAttributes.Todo.self] != nil { container[MemoAttributes.TodoBox.self] = true }
             var text = AttributedString(t, attributes: container)

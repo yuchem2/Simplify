@@ -130,6 +130,11 @@ enum MemoFormatCheck {
             window.close()
             return
         }
+        if only == "aabar" {
+            await checkAaBar(memos: memos, model: model, editor: editor, window: window, reset: reset, type: type, key: key)
+            window.close()
+            return
+        }
         if only == "perf" {
             await checkPerf(memos: memos, model: model, editor: editor, window: window, reset: reset)
             window.close()
@@ -292,8 +297,8 @@ enum MemoFormatCheck {
         let item = x(("11.02 08:30 회의\n\t안건\n\t" as NSString).length)
         let inner = x(("11.02 08:30 회의\n\t안건\n\t1. 견적서\n\t\t" as NSString).length)
         check(abs(child - words) < 1.5, "a child's words start under the time line's words", "words \(words) child \(child)")
-        check(abs(item - words) < 1.5, "a list in a child starts there too", "words \(words) item \(item)")
-        check(abs(inner - words - MemoLists.levelIndent) < 1.5, "and its next level one step in", "words \(words) inner \(inner)")
+        check(abs(item - words - MemoLineStyler.listInset) < 1.5, "a list in a child starts there too, its inset in", "words \(words) item \(item)")
+        check(abs(inner - words - MemoLineStyler.listInset - MemoLists.levelIndent) < 1.5, "and its next level one step in", "words \(words) inner \(inner)")
         capture(window, "timeline-children")
         // Empty items step out a level at a time, to the child, then out of the children.
         for _ in 0..<4 { await key(returnKey.0, returnKey.1) }
@@ -1108,6 +1113,325 @@ enum MemoFormatCheck {
         try? fm.removeItem(at: folder)
     }
 
+    /// `SIMPLIFY_MEMO_CHECK=aabar`: the Aa bar under its button (하나씩 with tabs, 모아 보기), open
+    /// while picking and closed by Esc, typing and a click elsewhere, the shortcut card, alignment,
+    /// the pinned toolbar, inline code against a code block, and the lists' inset.
+    private static func checkAaBar(memos: MemoBook, model: AppModel, editor: NSTextView, window: NSWindow,
+                                   reset: (AttributedString, Int?) async -> Void, type: (String) async -> Void,
+                                   key: (UInt16, String, NSEvent.ModifierFlags) async -> Void) async {
+        let draft = memos.draft
+        let pin = MemoBarPin.shared
+        let wasPinned = pin.isPinned
+        defer { pin.isPinned = wasPinned }
+        pin.isPinned = false
+        func wait(_ seconds: Double = 0.4) async { try? await Task.sleep(for: .seconds(seconds)) }
+        var letters: String { String(draft.text.characters) }
+        /// The accessibility element with this label in the window, as SwiftUI makes them.
+        /// How many of the pinned toolbar show: its place is noted while it is on screen.
+        func strips() -> Int { MemoBarFrames.byName["서식 막대"] == nil ? 0 : 1 }
+        /// A point in the content's top-left coordinates (as SwiftUI's global frames are) in the window's.
+        func inWindow(_ top: CGPoint) -> CGPoint {
+            let content = window.contentView!
+            return content.convert(content.isFlipped ? top : CGPoint(x: top.x, y: content.bounds.height - top.y), to: nil)
+        }
+        /// A real click (down and up) at a point in the content (top-left origin).
+        func click(at top: CGPoint) async {
+            let local = inWindow(top)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let event = NSEvent.mouseEvent(with: type, location: local, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                    NSApp.postEvent(event, atStart: false)
+                }
+            }
+            await wait()
+        }
+        func press(_ label: String) async -> Bool {
+            // Once the panel has settled: a toolbar just put in moves things for a moment.
+            var last = CGRect.null, same = 0
+            for _ in 0..<20 where same < 3 {
+                let now = (MemoBarFrames.byName[label].map(draft.inContent) ?? .null).union(draft.inContent(draft.aaFrame))
+                same = now == last ? same + 1 : 0
+                last = now
+                await wait(0.25)
+            }
+            guard let frame = MemoBarFrames.byName[label].map(draft.inContent) else { return false }
+            // The pinned toolbar's row is right under the rule's Aa (SwiftUI does not always report
+            // the toolbar's own place again once the panel has moved around it).
+            let y = pin.isPinned ? draft.inContent(draft.aaFrame).maxY + Metrics.spaceM + frame.height / 2 : frame.midY
+            // The pin ends the row under Aa's right end.
+            let x = pin.isPinned && label == "서식 막대 고정 풀기" ? draft.inContent(draft.aaFrame).maxX - frame.width / 2 : frame.midX
+            await click(at: CGPoint(x: x, y: y))
+            return true
+        }
+        /// The bar's top against the Aa button's foot, and their right ends.
+        func barUnderAa() -> (Bool, String) {
+            let aa = draft.aaFrame, bar = draft.paragraphBarFrame
+            let ok = !bar.isNull && bar.minY >= aa.maxY - 0.5 && bar.minY - aa.maxY <= Metrics.spaceS && abs(bar.maxX - aa.maxX) < 1.5
+            return (ok, "aa \(aa) bar \(bar)")
+        }
+        guard draft.period != nil else { return log("FAIL  no open period") }
+
+        // The title bar with no calendar connected: 캘린더 연결, light and dark.
+        for (name, look) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            NSApp.appearance = NSAppearance(named: look)
+            await wait(0.6)
+            if let frame = window.contentView?.superview, let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) {
+                frame.cacheDisplay(in: frame.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: FileManager.default.temporaryDirectory.appending(path: "memo-check-titlebar-\(name).png"))
+            }
+        }
+        NSApp.appearance = nil
+        // 하나씩 with two memos, so the tabs stand between the rule and the memo.
+        model.memoLayout = .one
+        await reset(AttributedString("첫 메모"), nil)
+        draft.flush()
+        draft.newMemo()
+        draft.commitRename(toBody: true)
+        await wait(0.6)
+        window.makeFirstResponder(textView(window.contentView!))
+        await wait()
+        guard let live = textView(window.contentView!) else { return log("FAIL  no memo text view") }
+        await reset(AttributedString("회의 메모\n다음 주 일정"), 0)
+        // After the period has opened: opening a memo closes the bar.
+        await wait(0.6)
+        draft.showsParagraphBar = true
+        await wait(0.6)
+        var under = barUnderAa()
+        check(under.0, "하나씩 with tabs: the bar hangs right under Aa, right ends lined up", under.1)
+        capture(window, "aabar-one")
+
+        // Picks keep it open: 제목, then 가운데.
+        check(await press("제목"), "the bar's 제목 is there")
+        check(draft.paragraph == .title && draft.showsParagraphBar, "제목 picked, the bar stays open",
+              "\(String(describing: draft.paragraph)) open \(draft.showsParagraphBar)")
+        check(await press("가운데 정렬"), "the bar has 가운데 정렬")
+        check(draft.align == .center && draft.showsParagraphBar, "가운데 picked as well, still open",
+              "\(String(describing: draft.align)) open \(draft.showsParagraphBar)")
+        check(live.window?.firstResponder === live, "the caret is back in the memo after a pick")
+        await wait()
+        let first = live.firstRect(forCharacterRange: NSRange(location: 0, length: 1), actualRange: nil)
+        let second = live.firstRect(forCharacterRange: NSRange(location: ("회의 메모\n" as NSString).length, length: 1), actualRange: nil)
+        check(first.minX - second.minX > 40, "the centred title is drawn in from the left line", "title \(first.minX) body \(second.minX)")
+        capture(window, "aabar-picked")
+
+        // Esc, typing and a click elsewhere close it.
+        await key(53, "\u{1b}", [])
+        check(!draft.showsParagraphBar, "Esc closes the bar")
+        draft.showsParagraphBar = true
+        await wait()
+        live.setSelectedRange(NSRange(location: (live.string as NSString).length, length: 0))
+        await key(0, "a", [])
+        check(!draft.showsParagraphBar && letters.hasSuffix("a"), "a letter typed closes the bar and goes in", letters.debugDescription)
+        draft.showsParagraphBar = true
+        await wait()
+        let content = window.contentView!
+        await click(at: CGPoint(x: 60, y: 300))
+        check(!draft.showsParagraphBar, "a click outside closes the bar")
+        window.makeFirstResponder(live)
+        await wait()
+
+        // The shortcut card (a posted pointer move does not reach SwiftUI's hover, so it is shown
+        // as the hover would show it): under Aa, and clicks go through it.
+        draft.showsShortcutCard = true
+        await wait(0.6)
+        capture(window, "aabar-card")
+        draft.showsShortcutCard = false
+
+        // 모아 보기: still under Aa.
+        model.memoLayout = .all
+        await wait(1)
+        draft.showsParagraphBar = true
+        await wait(0.6)
+        under = barUnderAa()
+        check(under.0, "모아 보기: the bar hangs right under Aa", under.1)
+        capture(window, "aabar-all")
+        draft.showsParagraphBar = false
+        model.memoLayout = .one
+        await wait(1)
+        guard let one = textView(window.contentView!) else { return log("FAIL  no memo text view") }
+        window.makeFirstResponder(one)
+        await wait()
+
+        // Alignment: the shortcut and the menu, left again, not on a list line.
+        func reset2(_ text: AttributedString, _ caret: Int) async {
+            draft.text = text
+            await wait()
+            one.setSelectedRange(NSRange(location: caret, length: 0))
+            await wait(0.3)
+        }
+        await reset2(AttributedString("오른쪽\n• 목록"), 0)
+        // The 서식 menu's items reach the memo through the scene's focused value, which this
+        // check's own window does not give them; the calls are the ones the items make.
+        draft.setAlign(.right)
+        await wait()
+        check(draft.align == .right, "오른쪽 정렬 sets the line right", String(describing: draft.align))
+        draft.setAlign(nil)
+        await wait()
+        check(draft.align == nil && draft.text.runs.allSatisfy { $0[MemoAttributes.Align.self] == nil }, "왼쪽 정렬 sets it left again",
+              String(describing: draft.align))
+        one.setSelectedRange(NSRange(location: ("오른쪽\n• " as NSString).length, length: 0))
+        await wait(0.3)
+        draft.setAlign(.center)
+        check(draft.text.runs.allSatisfy { $0[MemoAttributes.Align.self] == nil }, "a list line stays left")
+        var centred = AttributeContainer()
+        centred[MemoAttributes.Align.self] = .center
+        let mirrored = NotesHTML.body(name: "이름", text: AttributedString("가운데", attributes: centred)) ?? ""
+        check(mirrored.contains(#"<div style="text-align: center">가운데</div>"#), "the 메모 app's note is centred too", mirrored)
+        var menuKeys: [String] = []
+        func walk(_ menu: NSMenu) {
+            for item in menu.items {
+                if item.title.hasSuffix("정렬") {
+                    let shift = item.keyEquivalentModifierMask.contains(.shift) || item.keyEquivalent != item.keyEquivalent.lowercased()
+                    menuKeys.append("\(item.title) \(shift ? "⇧" : "")\(item.keyEquivalent.lowercased())")
+                }
+                if let sub = item.submenu { walk(sub) }
+            }
+        }
+        if let main = NSApp.mainMenu { walk(main) }
+        check(menuKeys == ["왼쪽 정렬 ⇧l", "가운데 정렬 ⇧e", "오른쪽 정렬 ⇧r"], "서식 has the three alignments with ⌘⇧L E R", "\(menuKeys)")
+        // None of them is another menu item's key.
+        var taken: [String: [String]] = [:]
+        func keys(_ menu: NSMenu) {
+            for item in menu.items {
+                if !item.keyEquivalent.isEmpty {
+                    let mask = item.keyEquivalentModifierMask.intersection([.command, .shift, .option, .control]).rawValue
+                    taken["\(item.keyEquivalent.lowercased())/\(mask | (item.keyEquivalent != item.keyEquivalent.lowercased() ? NSEvent.ModifierFlags.shift.rawValue : 0))", default: []].append(item.title)
+                }
+                if let sub = item.submenu { keys(sub) }
+            }
+        }
+        if let main = NSApp.mainMenu { keys(main) }
+        let clashes = taken.values.filter { $0.count > 1 && $0.contains { $0.hasSuffix("정렬") } }
+        check(clashes.isEmpty, "no other menu item shares an alignment key", "\(clashes)")
+
+        // Pinned: one toolbar under the rule, working on the memo being written; 모아 보기 too.
+        await reset2(AttributedString("고정\n둘째"), 0)
+        pin.isPinned = true
+        await wait(0.6)
+        check(strips() == 1, "pinned: the toolbar under the rule", "\(strips())")
+        capture(window, "aabar-pinned")
+        await wait(1.5)
+        check(await press("가운데 정렬"), "the toolbar has 가운데 정렬")
+        check(draft.align == .center, "the toolbar's 가운데 sets the caret's line", String(describing: draft.align))
+        check(await press("글머리 기호 목록"), "the toolbar has the bullet list")
+        check(letters.hasPrefix("• 고정"), "the toolbar's bullet makes a list item", letters.debugDescription)
+        model.memoLayout = .all
+        await wait(2)
+        check(strips() == 1, "모아 보기 pinned: the toolbar is there", "\(strips())")
+        // The caret on the body line, not the list item.
+        draft.selection = AttributedTextSelection(insertionPoint: draft.text.endIndex)
+        await wait(0.3)
+        check(await press("오른쪽 정렬"), "모아 보기: the toolbar's 오른쪽 정렬")
+        check(draft.align == .right, "모아 보기: it sets the memo being written's line", String(describing: draft.align))
+        capture(window, "aabar-pinned-all")
+        check(await press("서식 막대 고정 풀기"), "the toolbar's pin is at its end")
+        check(!pin.isPinned && strips() == 0, "the pin floats the bar again", "pinned \(pin.isPinned)")
+        model.memoLayout = .one
+        await wait(1)
+        guard let back = textView(window.contentView!) else { return log("FAIL  no memo text view") }
+        window.makeFirstResponder(back)
+        await wait()
+
+        // Inline code: letters picked within a line; a code block otherwise.
+        func reset3(_ text: AttributedString, _ range: NSRange) async {
+            draft.text = text
+            await wait()
+            back.setSelectedRange(range)
+            await wait(0.3)
+        }
+        let line = "설치는 install.sh 로 해요"
+        let pick = (line as NSString).range(of: "install.sh")
+        await reset3(AttributedString(line + "\n다음 줄"), pick)
+        draft.toggleCode()
+        await wait()
+        let inline = draft.text.runs.filter { $0[MemoAttributes.InlineCode.self] == true }.map { String(draft.text[$0.range].characters) }
+        check(inline == ["install.sh"], "{ } on letters within a line: just those letters", "\(inline)")
+        check(draft.text.runs.allSatisfy { $0[MemoAttributes.Code.self] == nil }, "and no code block")
+        check(draft.isCode, "{ } shows switched on for them")
+        back.setSelectedRange(NSRange(location: 0, length: 0))
+        await wait(0.3)
+        let shownFont = back.textStorage?.attribute(.font, at: pick.location, effectiveRange: nil) as? NSFont
+        check(shownFont?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true, "inline code is fixed-width", String(describing: shownFont))
+        let save = MemoText.encode(draft.text).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        check(save.contains(#""kc":true"#) && save.contains(#""v":1"#), "saved as kc, still version 1", save)
+        let again = MemoText.encode(MemoText.decode(MemoText.encode(draft.text))).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        check(again == save, "and read back the same", again)
+        let html = NotesHTML.body(name: "이름", text: draft.text) ?? ""
+        check(html.contains("<tt>install.sh</tt>") && !html.contains("<tt>설치는"), "the 메모 app gets the letters fixed-width", html)
+        // Typing at the line's front does not spread it.
+        back.setSelectedRange(NSRange(location: 0, length: 0))
+        back.insertText("✓ ", replacementRange: back.selectedRange())
+        await wait()
+        let still = draft.text.runs.filter { $0[MemoAttributes.InlineCode.self] == true }.map { String(draft.text[$0.range].characters) }
+        check(still == ["install.sh"], "typing on its line leaves inline code as it was", "\(still)")
+        // Again on the same letters: plain.
+        back.setSelectedRange(NSRange(location: pick.location + 2, length: pick.length))
+        await wait(0.3)
+        draft.toggleCode()
+        await wait()
+        check(draft.text.runs.allSatisfy { $0[MemoAttributes.InlineCode.self] == nil }, "{ } again takes it off")
+        // No pick, the whole line, or across lines: a code block.
+        await reset3(AttributedString(line + "\n다음 줄"), NSRange(location: 3, length: 0))
+        draft.toggleCode()
+        await wait()
+        check(draft.text.runs.filter { $0[MemoAttributes.Code.self] == true }.map { String(draft.text[$0.range].characters) } == [line],
+              "{ } with a caret: the line is a code block")
+        await reset3(AttributedString(line + "\n다음 줄"), NSRange(location: 3, length: (line as NSString).length))
+        draft.toggleCode()
+        await wait()
+        check(draft.text.runs.contains { $0[MemoAttributes.Code.self] == true && String(draft.text[$0.range].characters).contains("다음 줄") }
+              && draft.text.runs.allSatisfy { $0[MemoAttributes.InlineCode.self] == nil }, "{ } across lines: a code block of both")
+        // Return at the end of inline code: the next line is plain; ⌘⇧C with a caret typing it stops it.
+        var codeTail = AttributedString("실행: ")
+        var inlineOn = AttributeContainer()
+        inlineOn[MemoAttributes.InlineCode.self] = true
+        codeTail += AttributedString("make", attributes: inlineOn)
+        await reset3(codeTail, NSRange(location: ("실행: make" as NSString).length, length: 0))
+        await key(36, "\r", [])
+        await type("다음")
+        let carried = draft.text.runs.filter { $0[MemoAttributes.InlineCode.self] == true }
+            .map { String(draft.text[$0.range].characters).trimmingCharacters(in: .newlines) }
+        check(carried == ["make"], "Return after inline code: the next line types plain", "\(carried)")
+        await reset3(codeTail, NSRange(location: ("실행: make" as NSString).length, length: 0))
+        check(draft.isCode, "a caret after inline code shows { } on")
+        draft.toggleCode()
+        await type("다음")
+        check(draft.text.runs.allSatisfy { $0[MemoAttributes.Code.self] == nil }
+              && draft.text.runs.filter { $0[MemoAttributes.InlineCode.self] == true }.map { String(draft.text[$0.range].characters) } == ["make"],
+              "{ } there stops inline code, no code block", "\(draft.text.runs.map { String(draft.text[$0.range].characters) })")
+        // A timeline line's child keeps to the time's column; an empty line goes left whole.
+        await reset3(AttributedString("11.02 08:30 회의\n\t안건"), NSRange(location: ("11.02 08:30 회의\n\t안" as NSString).length, length: 0))
+        check(!draft.canAlign, "a timeline child cannot be aligned")
+        draft.setAlign(.center)
+        check(draft.text.runs.allSatisfy { $0[MemoAttributes.Align.self] == nil }, "and setting it leaves the child left")
+        var centredLines = AttributedString("가운데\n\n", attributes: centred)
+        centredLines += AttributedString("끝")
+        await reset3(centredLines, NSRange(location: ("가운데\n" as NSString).length, length: 0))
+        draft.setAlign(nil)
+        await wait()
+        let emptyBreak = draft.text.runs.first { String(draft.text[$0.range].characters).hasSuffix("\n\n") || String(draft.text[$0.range].characters) == "\n" }
+        check(draft.align == nil && draft.text.runs.filter { $0[MemoAttributes.Align.self] != nil }.allSatisfy { String(draft.text[$0.range].characters).hasPrefix("가운데") && !String(draft.text[$0.range].characters).hasSuffix("\n\n") },
+              "왼쪽 on an empty line takes its line break left too", "\(String(describing: emptyBreak))")
+        capture(window, "aabar-code")
+
+        // Lists start a little in, at every level and in a quote.
+        await reset3(AttributedString("위 문단\n• 하나\n\t• 둘\n> • 인용\n> 인용만"), NSRange(location: 0, length: 0))
+        func x(_ words: String) -> CGFloat {
+            let range = (back.string as NSString).range(of: words)
+            return window.convertFromScreen(back.firstRect(forCharacterRange: NSRange(location: range.location, length: 1), actualRange: nil)).minX
+        }
+        let left = x("위 문단")
+        let bullet = window.convertFromScreen(back.firstRect(forCharacterRange: NSRange(location: ("위 문단\n" as NSString).length, length: 1), actualRange: nil)).minX
+        check(abs(bullet - left - MemoLineStyler.listInset) < 1.5, "a first-level bullet sits 12 pt in", "\(bullet - left)")
+        check(abs(x("둘") - x("하나") - MemoLists.levelIndent) < 1.5, "the next level one step further, as before", "\(x("둘") - x("하나"))")
+        // The words after the bullet: from the quote's words as the list's are from the left line.
+        let quoted = x("인용\n") - x("인용만"), plain = x("하나") - left
+        check(abs(quoted - plain) < 1.5, "a list in a quote is set in from the quote's words as one outside is", "quoted \(quoted) plain \(plain)")
+        let listHTML = NotesHTML.body(name: "이름", text: draft.text) ?? ""
+        check(!listHTML.contains("padding") && !listHTML.contains("margin") && listHTML.contains("<ul>\n<li>하나</li>"), "the 메모 app gets plain lists, no inset", listHTML)
+        capture(window, "aabar-lists")
+    }
+
     /// A period's several memos: making, names, renaming in the tab, leaving an empty one, 모아
     /// 보기, deleting, ToDos made from a memo and 가져오기, the 메모 app's names, and the caret's line
     /// kept in view in 모아 보기.
@@ -1287,7 +1611,8 @@ enum MemoFormatCheck {
             let live = window.firstResponder as? NSTextView
             check(live.map { !$0.isFieldEditor && !MemoTextViews.readOnly.contains($0) } == true && draft.hasFocus, "and the caret goes into it",
                   "\(String(describing: window.firstResponder))")
-            check(textViews(in: window.contentView!).filter { MemoTextViews.readOnly.contains($0) }.count == 2, "the memo left is drawn read-only")
+            check(textViews(in: window.contentView!).filter { MemoTextViews.readOnly.contains($0) }.count == 2, "the memo left is drawn read-only",
+                  "views \(textViews(in: window.contentView!).map { "\(MemoTextViews.readOnly.contains($0) ? "R" : "W"):\($0.string.prefix(8))" })")
         } else {
             check(false, "the meeting memo is drawn read-only")
         }

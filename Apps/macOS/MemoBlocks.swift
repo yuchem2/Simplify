@@ -45,7 +45,10 @@ extension MemoDraft {
     /// after the line break went in, with the caret after it.
     func typeBodyAfterParagraph() {
         guard case .insertionPoint(let caret) = selection.indices(in: text) else { return }
-        selection = AttributedTextSelection(insertionPoint: caret, typingAttributes: AttributeContainer())
+        // The alignment goes on, as it does after a body line.
+        var typing = AttributeContainer()
+        if caret > text.startIndex { typing[MemoAttributes.Align.self] = text.runs[text.characters.index(before: caret)][MemoAttributes.Align.self] }
+        selection = AttributedTextSelection(insertionPoint: caret, typingAttributes: typing)
     }
 }
 
@@ -188,13 +191,163 @@ enum MemoListKeys {
     }
 }
 
-/// The section rule's Aa: opens the 문단 bar for the caret's line. Nothing shows while writing.
+/// Whether the Aa button's 문단 bar is pinned under the "메모" rule as a one-line toolbar, the
+/// floating bar's 핀, the 서식 menu's 서식 막대 늘 보이기 and the setting alike. Remembered on this
+/// Mac; off at first.
+@MainActor
+@Observable
+final class MemoBarPin {
+    static let shared = MemoBarPin()
+    private static let key = "memoParagraphBarPinned"
+
+    var isPinned = UserDefaults.standard.bool(forKey: MemoBarPin.key) {
+        didSet { UserDefaults.standard.set(isPinned, forKey: Self.key) }
+    }
+}
+
+#if DEBUG
+/// Where the bar's and the pinned toolbar's buttons are, by name, in window coordinates (top-left
+/// origin), for `MemoFormatCheck` to click them as the pointer would.
+@MainActor
+enum MemoBarFrames {
+    static var byName: [String: CGRect] = [:]
+}
+#endif
+
+extension View {
+    /// Debug builds note the view's place under `name` for the format check.
+    func barFrame(_ name: String) -> some View {
+        #if DEBUG
+        onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { MemoBarFrames.byName[name] = $0 }
+            .onDisappear { MemoBarFrames.byName[name] = nil }
+        #else
+        self
+        #endif
+    }
+}
+
+/// Where the Aa button is, for the bar and the shortcut card to hang under it.
+struct MemoAaAnchor: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
+    }
+}
+
+/// One of the 문단 bar's buttons: what it is, how it looks, and what it does.
+private struct MemoBarItem {
+    var name: String
+    var shortcut: String?
+    var symbol: String
+
+    var help: String { shortcut.map { "\(name) (\($0))" } ?? name }
+
+    static let alignLeft = MemoBarItem(name: "왼쪽 정렬", shortcut: "⌘⇧L", symbol: "text.alignleft")
+    static let alignCenter = MemoBarItem(name: "가운데 정렬", shortcut: "⌘⇧E", symbol: "text.aligncenter")
+    static let alignRight = MemoBarItem(name: "오른쪽 정렬", shortcut: "⌘⇧R", symbol: "text.alignright")
+    static let bullet = MemoBarItem(name: "글머리 기호 목록", shortcut: "⌘⇧7", symbol: "list.bullet")
+    static let dash = MemoBarItem(name: "대시 목록", shortcut: "⌘⇧8", symbol: "list.dash")
+    static let number = MemoBarItem(name: "번호 목록", shortcut: "⌘⇧9", symbol: "list.number")
+    static let quote = MemoBarItem(name: "인용문", shortcut: "⌘'", symbol: "text.quote")
+    static let table = MemoBarItem(name: "표 넣기", shortcut: nil, symbol: "tablecells")
+    static let attach = MemoBarItem(name: "파일 첨부", shortcut: "⌘⇧A", symbol: "paperclip")
+}
+
+/// The buttons the bar and the pinned toolbar share, for the caret's line.
+@MainActor
+private struct MemoBarButtons {
+    let draft: MemoDraft
+    /// Square side: the floating bar's, or the pinned toolbar's smaller one.
+    var side: CGFloat
+
+    /// Alignment is for lines of words (`MemoDraft.canAlign`).
+    private var canAlign: Bool { draft.canAlign }
+
+    @ViewBuilder var aligns: some View {
+        let align = draft.align
+        square(.alignLeft, isOn: canAlign && align == nil, isEnabled: canAlign) { draft.setAlign(nil) }
+        square(.alignCenter, isOn: canAlign && align == .center, isEnabled: canAlign) { draft.setAlign(.center) }
+        square(.alignRight, isOn: canAlign && align == .right, isEnabled: canAlign) { draft.setAlign(.right) }
+    }
+
+    @ViewBuilder var lists: some View {
+        let kind = draft.listKind
+        square(.bullet, isOn: kind == .bullet) { draft.setList(.bullet) }
+        square(.dash, isOn: kind == .dash) { draft.setList(.dash) }
+        square(.number, isOn: kind == .number) { draft.setList(.number) }
+        square(.quote, isOn: draft.isQuoted) { draft.setList(.quote) }
+    }
+
+    @ViewBuilder var inserts: some View {
+        square(.table, isOn: false, isEnabled: !draft.isInTable) { draft.tableAction(.insert) }
+        square(.attach, isOn: false) { draft.askToAttach() }
+    }
+
+    /// The pin: floats the bar under Aa, or keeps it under the "메모" rule.
+    var pin: some View {
+        let pin = MemoBarPin.shared
+        let name = pin.isPinned ? "서식 막대 고정 풀기" : "서식 막대 고정"
+        return Button {
+            draft.showsParagraphBar = false
+            pin.isPinned.toggle()
+            draft.focusRequest += 1
+        } label: {
+            Image(systemName: pin.isPinned ? "pin.fill" : "pin")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(pin.isPinned ? Color.onInk : Color.ink)
+                .frame(width: side, height: side)
+                .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
+        }
+        .buttonStyle(FormatButtonStyle(isOn: pin.isPinned))
+        .focusable(false)
+        .help(name)
+        .accessibilityLabel(name)
+        .accessibilityAddTraits(pin.isPinned ? .isSelected : [])
+        .barFrame(name)
+    }
+
+    func square(_ item: MemoBarItem, isOn: Bool, isEnabled: Bool = true, action: @escaping () -> Void) -> some View {
+        Button(action: pick(action)) {
+            Image(systemName: item.symbol)
+                .font(.system(size: side > 22 ? 13 : 12))
+                .foregroundStyle(isOn ? Color.onInk : isEnabled ? Color.ink : Color.inkFaint)
+                .frame(width: side + 2, height: side)
+                .overlay(Rectangle().strokeBorder(isEnabled ? Color.ink : Color.inkFaint, lineWidth: Metrics.line))
+        }
+        .buttonStyle(FormatButtonStyle(isOn: isOn))
+        .focusable(false)
+        .disabled(!isEnabled)
+        .help(item.help)
+        .accessibilityLabel(item.name)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+        .barFrame(item.name)
+    }
+
+    /// The line changes and the caret goes back to the memo; the bar stays open for the next pick.
+    func pick(_ action: @escaping () -> Void) -> () -> Void {
+        {
+            action()
+            draft.focusRequest += 1
+        }
+    }
+}
+
+/// The section rule's Aa: opens the 문단 bar for the caret's line, and shows the format shortcuts
+/// a moment after the pointer comes to rest on it. While the bar is pinned it shows switched on
+/// and dimmed; the pinned toolbar is the bar then.
 struct MemoParagraphButton: View {
     @Bindable var draft: MemoDraft
+    @State private var hoverTask: Task<Void, Never>?
 
     var body: some View {
-        let isOn = draft.showsParagraphBar
+        let isPinned = MemoBarPin.shared.isPinned
+        let isOn = draft.showsParagraphBar || isPinned
         Button {
+            hoverTask?.cancel()
+            draft.showsShortcutCard = false
+            // A click judged outside the bar just closed it, though it landed on Aa (should the
+            // frames be out of date): Aa then leaves it closed rather than opening it again.
+            if ProcessInfo.processInfo.systemUptime - draft.barClosedByClick < 0.35 { return }
             draft.showsParagraphBar.toggle()
         } label: {
             Text("Aa")
@@ -206,21 +359,71 @@ struct MemoParagraphButton: View {
         }
         .buttonStyle(FormatButtonStyle(isOn: isOn))
         .focusable(false)
-        .disabled(draft.isUnreadable)
-        .help("문단 서식")
+        .disabled(draft.isUnreadable || isPinned)
+        .opacity(isPinned ? 0.5 : 1)
         .accessibilityLabel("문단 서식")
+        .accessibilityHint(isPinned ? "서식 막대가 메모 위에 고정되어 있어요" : "")
         .accessibilityAddTraits(isOn ? .isSelected : [])
+        // On a wrapper, so the card shows while the button is dimmed by the pin too.
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .onHover { inside in
+                    hoverTask?.cancel()
+                    guard inside else {
+                        draft.showsShortcutCard = false
+                        return
+                    }
+                    hoverTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(300))
+                        guard !Task.isCancelled, !draft.showsParagraphBar else { return }
+                        draft.showsShortcutCard = true
+                    }
+                }
+        }
+        .anchorPreference(key: MemoAaAnchor.self, value: .bounds) { $0 }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { draft.aaFrame = $0 }
+        .onDisappear {
+            hoverTask?.cancel()
+            draft.showsShortcutCard = false
+        }
     }
 }
 
-/// The Aa button's bar: the caret line's paragraph style (제목, 머리말, 부, 본문) and list kind
-/// (bullet, dash, number, quote). Picking one changes the line and closes the bar.
+/// The bar or the shortcut card, hung under the Aa button's right end, over whatever is below.
+/// Drawn over the memo section, so tabs above the memo or 모아 보기's headers never push it down.
+struct MemoAaLayer: View {
+    let draft: MemoDraft
+    let anchor: Anchor<CGRect>?
+
+    var body: some View {
+        GeometryReader { proxy in
+            if let anchor, !draft.isUnreadable, draft.showsParagraphBar || draft.showsShortcutCard {
+                let aa = proxy[anchor]
+                Group {
+                    if draft.showsParagraphBar {
+                        MemoParagraphBar(draft: draft)
+                    } else {
+                        MemoShortcutCard().allowsHitTesting(false)
+                    }
+                }
+                .fixedSize()
+                .frame(width: max(aa.maxX, 0), alignment: .topTrailing)
+                .offset(y: aa.maxY + Metrics.spaceXs)
+            }
+        }
+    }
+}
+
+/// The Aa button's bar: the caret line's paragraph style (제목, 머리말, 부, 본문), alignment and
+/// list kind, a table and an attachment, and the pin. It stays open while picking, so 제목 and
+/// 가운데 go on one after another; Esc, typing, a click elsewhere or Aa close it.
 struct MemoParagraphBar: View {
     let draft: MemoDraft
+    private var buttons: MemoBarButtons { MemoBarButtons(draft: draft, side: 24) }
 
     var body: some View {
         let paragraph = draft.paragraph
-        let kind = draft.listKind
         VStack(alignment: .leading, spacing: Metrics.spaceS) {
             HStack(spacing: Metrics.spaceXs) {
                 label("문단")
@@ -228,22 +431,24 @@ struct MemoParagraphBar: View {
                 wide("머리말", "머리말", "⌥⌘2", isOn: paragraph == .heading, font: .display(13, bold: false)) { draft.setParagraph(.heading) }
                 wide("부", "부머리말", "⌥⌘3", isOn: paragraph == .sub, font: TextStyle.body.font.weight(.semibold)) { draft.setParagraph(.sub) }
                 wide("본문", "본문", "⌥⌘0", isOn: paragraph == nil, font: TextStyle.body.font) { draft.setParagraph(nil) }
+                Spacer(minLength: Metrics.spaceL)
+                buttons.pin
+            }
+            HStack(spacing: Metrics.spaceXs) {
+                label("정렬")
+                buttons.aligns
             }
             HStack(spacing: Metrics.spaceXs) {
                 label("목록")
-                square("•", "글머리 기호 목록", "⌘⇧7", isOn: kind == .bullet) { draft.setList(.bullet) }
-                square("–", "대시 목록", "⌘⇧8", isOn: kind == .dash) { draft.setList(.dash) }
-                square("1.", "번호 목록", "⌘⇧9", isOn: kind == .number, font: TextStyle.cell.font) { draft.setList(.number) }
-                square("❝", "인용문", "⌘'", isOn: draft.isQuoted) { draft.setList(.quote) }
+                buttons.lists
                 Rectangle().fill(.ink).frame(width: Metrics.line, height: 18).padding(.horizontal, Metrics.spaceXxs)
-                wide("표", "표 넣기", nil, isOn: false, font: TextStyle.body.font) { draft.tableAction(.insert) }
-                    .disabled(draft.isInTable)
-                wide("첨부", "파일 첨부", "⌘⇧A", isOn: false, font: TextStyle.body.font) { draft.askToAttach() }
+                buttons.inserts
             }
         }
         .padding(Metrics.spaceM)
-        .frame(width: 296, alignment: .leading)
         .floatingFrame()
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { draft.paragraphBarFrame = $0 }
+        .onDisappear { draft.paragraphBarFrame = .null }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("문단 서식")
     }
@@ -252,8 +457,8 @@ struct MemoParagraphBar: View {
         Text(title).textStyle(.cell).foregroundStyle(.inkSoft).frame(width: 30, alignment: .leading)
     }
 
-    private func wide(_ title: String, _ name: String, _ shortcut: String?, isOn: Bool, font: Font, action: @escaping () -> Void) -> some View {
-        Button(action: pick(action)) {
+    private func wide(_ title: String, _ name: String, _ shortcut: String, isOn: Bool, font: Font, action: @escaping () -> Void) -> some View {
+        Button(action: buttons.pick(action)) {
             Text(title)
                 .font(font)
                 .foregroundStyle(isOn ? Color.onInk : Color.ink)
@@ -263,33 +468,108 @@ struct MemoParagraphBar: View {
         }
         .buttonStyle(FormatButtonStyle(isOn: isOn))
         .focusable(false)
-        .help(shortcut.map { "\(name) (\($0))" } ?? name)
-        .accessibilityLabel(name)
-        .accessibilityAddTraits(isOn ? .isSelected : [])
-    }
-
-    private func square(_ title: String, _ name: String, _ shortcut: String, isOn: Bool, font: Font = TextStyle.body.font,
-                        action: @escaping () -> Void) -> some View {
-        Button(action: pick(action)) {
-            Text(title)
-                .font(font)
-                .foregroundStyle(isOn ? Color.onInk : Color.ink)
-                .frame(width: 26, height: 24)
-                .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
-        }
-        .buttonStyle(FormatButtonStyle(isOn: isOn))
-        .focusable(false)
         .help("\(name) (\(shortcut))")
         .accessibilityLabel(name)
         .accessibilityAddTraits(isOn ? .isSelected : [])
+        .barFrame(name)
+    }
+}
+
+/// What the pointer resting on Aa shows: the paragraph and format shortcuts, so they can be used
+/// without opening the bar.
+struct MemoShortcutCard: View {
+    static let rows: [(name: String, keys: String)] = [
+        ("제목 · 머리말 · 부 · 본문", "⌥⌘1 2 3 0"),
+        ("왼쪽 · 가운데 · 오른쪽", "⌘⇧L E R"),
+        ("글머리 · 대시 · 번호", "⌘⇧7 8 9"),
+        ("인용문", "⌘'"),
+        ("첨부", "⌘⇧A"),
+        ("굵게 · 기울임 · 밑줄", "⌘B I U"),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Metrics.spaceXs) {
+            Text("단축키").textStyle(.cell).foregroundStyle(.inkSoft)
+            Grid(alignment: .leading, horizontalSpacing: Metrics.spaceL, verticalSpacing: Metrics.spaceXxs) {
+                ForEach(Self.rows, id: \.name) { row in
+                    GridRow {
+                        Text(row.name).textStyle(.cell)
+                        Text(row.keys).font(.system(size: 11, design: .monospaced))
+                    }
+                }
+            }
+        }
+        .foregroundStyle(.ink)
+        .padding(Metrics.spaceM)
+        .background(.paper)
+        .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("서식 단축키")
+    }
+}
+
+/// The 문단 bar pinned under the "메모" rule: one line of tools from the left (the paragraph
+/// style as a menu, alignment, lists, a table and an attachment) and the pin at the right end.
+/// One per panel; in 모아 보기 it works on the memo being written.
+struct MemoFormatStrip: View {
+    let draft: MemoDraft
+    @State private var isMenuOpen = false
+    private var buttons: MemoBarButtons { MemoBarButtons(draft: draft, side: 20) }
+
+    var body: some View {
+        HStack(spacing: Metrics.spaceXs) {
+            paragraphMenu
+            divider
+            buttons.aligns
+            divider
+            buttons.lists
+            buttons.inserts
+            Spacer(minLength: Metrics.spaceS)
+            buttons.pin
+        }
+        .disabled(draft.isUnreadable)
+        .padding(.bottom, Metrics.spaceS)
+        .overlay(alignment: .bottom) { Rectangle().fill(.shade).frame(height: Metrics.line) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("서식 막대")
+        .barFrame("서식 막대")
     }
 
-    /// The bar closes, then the line changes, and the caret goes back to the memo.
-    private func pick(_ action: @escaping () -> Void) -> () -> Void {
-        {
-            draft.showsParagraphBar = false
-            action()
-            draft.focusRequest += 1
+    private var divider: some View {
+        Rectangle().fill(.shade).frame(width: Metrics.line, height: 14).padding(.horizontal, Metrics.spaceXxs)
+    }
+
+    private var paragraphMenu: some View {
+        let paragraph = draft.paragraph
+        let name = switch paragraph {
+        case .title?: "제목"
+        case .heading?: "머리말"
+        case .sub?: "부머리말"
+        case nil: "본문"
         }
+        return Button { isMenuOpen = true } label: {
+            HStack(spacing: Metrics.spaceXs) {
+                Text(name).textStyle(.cell)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+            }
+            .foregroundStyle(.ink)
+            .padding(.horizontal, Metrics.spaceS)
+            .frame(height: 20)
+            .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
+        }
+        .buttonStyle(FormatButtonStyle(isOn: false))
+        .focusable(false)
+        .fixedSize()
+        .inkMenu(isPresented: $isMenuOpen) {
+            [(MemoParagraph?.some(.title), "제목", "⌥⌘1"), (.heading, "머리말", "⌥⌘2"), (.sub, "부머리말", "⌥⌘3"), (nil, "본문", "⌥⌘0")].map { item in
+                .item(item.1, detail: item.2, checked: paragraph == item.0) {
+                    draft.setParagraph(item.0)
+                    draft.focusRequest += 1
+                }
+            }
+        }
+        .help("문단 서식")
+        .accessibilityLabel("문단 서식")
+        .accessibilityValue(name)
     }
 }
