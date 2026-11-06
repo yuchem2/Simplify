@@ -123,9 +123,16 @@ extension MemoDraft {
     func copySelection() {
         let picked = selectedPlainText
         guard !picked.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(picked, forType: .string)
-        if let range = selectedRanges.first(where: { !$0.isEmpty }) { rememberCopied(AttributedString(text[range])) }
+        let piece = selectedRanges.first { !$0.isEmpty }.map { AttributedString(text[$0]) }
+        // With a table in it: as words, HTML and the memo's own letters (`MemoTableClipboard`).
+        if let piece, MemoTableClipboard.hasTable(piece) {
+            MemoTableClipboard.write(piece)
+        } else {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(picked, forType: .string)
+            MemoTableClipboard.noteOwnCopy()
+        }
+        if let piece { rememberCopied(piece) }
     }
 
     /// Keeps letters with attachments in them for `pasteRemembered`; others are forgotten.
@@ -141,8 +148,10 @@ extension MemoDraft {
               MemoAttachments.attachments(in: piece.text).allSatisfy({ AttachmentShelf.shared.store.exists($0.ref) }),
               let range = selectedRanges.first(where: { !$0.isEmpty }) ?? selectedRanges.first else { return false }
         let start = text.characters.distance(from: text.startIndex, to: range.lowerBound)
-        text.transform(updating: &selection) { $0.replaceSubrange(range, with: piece.text) }
-        let caret = text.characters.index(text.startIndex, offsetBy: min(start + piece.text.characters.count, text.characters.count))
+        // Its tables under new ids, so they do not join the ones they were copied from.
+        let pasted = MemoTablePaste.renewingTables(piece.text)
+        text.transform(updating: &selection) { $0.replaceSubrange(range, with: pasted) }
+        let caret = text.characters.index(text.startIndex, offsetBy: min(start + pasted.characters.count, text.characters.count))
         selection = AttributedTextSelection(insertionPoint: caret, typingAttributes: AttributeContainer())
         focusRequest += 1
         return true
@@ -155,6 +164,7 @@ extension MemoDraft {
 
     func paste() {
         if pasteRemembered() { return }
+        if pasteTable?() == true { return }
         guard let pasted = NSPasteboard.general.string(forType: .string) else { return }
         replaceSelection(with: pasted)
     }
@@ -331,6 +341,10 @@ struct MemoMenuHost: NSViewRepresentable {
                 window.makeFirstResponder(nil)
             }
             draft?.showMenu = { [weak self] in self?.showMenuUnderSelection() }
+            draft?.pasteTable = { [weak self] in
+                guard let self, let draft = self.draft, let textView = self.styler.textView else { return false }
+                return MemoTableClipboard.paste(into: textView, draft: draft)
+            }
             draft?.contentOffset = { [weak self] in
                 guard let self, let draft = self.draft, !draft.boxFrame.isNull, let content = self.window?.contentView else { return nil }
                 let mine = self.convert(self.bounds, to: content)
@@ -471,6 +485,8 @@ struct MemoMenuHost: NSViewRepresentable {
                 guard !draft.isUnreadable else { return false }
                 // Letters cut or copied here with cards in them come back whole.
                 if draft.pasteRemembered() { return true }
+                // A table from here or elsewhere goes in as a table.
+                if let textView = styler.textView, MemoTableClipboard.paste(into: textView, draft: draft) { return true }
                 let board = NSPasteboard.general
                 let files = (board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
                 // A card copied with its menu goes in again as the same attachment, while its file is here.
@@ -526,9 +542,16 @@ struct MemoMenuHost: NSViewRepresentable {
                 if let open = styler.openFormula, NSIntersectionRange(open, selection) == selection { return false }
                 let picked = AttributedString(draft.text[range])
                 let plain = MemoAttachments.plainText(picked)
-                guard plain != String(picked.characters) else { return false }
+                let hasTable = MemoTableClipboard.hasTable(picked)
                 if event.keyCode == Self.keyX { textView.cut(nil) } else { textView.copy(nil) }
-                NSPasteboard.general.setString(plain, forType: .string)
+                // A table goes as words, HTML and the memo's own letters; formulas and cards as
+                // their words; anything else as the text view wrote it, noted as the memo's own.
+                if hasTable {
+                    MemoTableClipboard.write(picked)
+                } else {
+                    if plain != String(picked.characters) { NSPasteboard.general.setString(plain, forType: .string) }
+                    MemoTableClipboard.noteOwnCopy()
+                }
                 draft.rememberCopied(picked)
                 return true
             default:

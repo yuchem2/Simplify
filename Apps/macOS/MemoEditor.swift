@@ -107,6 +107,9 @@ final class MemoDraft {
     @ObservationIgnored var startFormula: ((Int) -> Void)?
     /// A short note under the caret (`25MB까지 붙일 수 있어요`); set by `MemoMenuHost`.
     @ObservationIgnored var notify: ((String) -> Void)?
+    /// Pastes a table on the clipboard into the text view (`MemoTableClipboard.paste`); false when
+    /// it holds none. Set by `MemoMenuHost`.
+    @ObservationIgnored var pasteTable: (() -> Bool)?
     /// The picked card's letter in the text view (UTF-16), set by `MemoMenuHost`.
     @ObservationIgnored var pickedCard: (() -> Int?)?
     /// The letters last cut or copied from this memo with attachments in them, and the clipboard's

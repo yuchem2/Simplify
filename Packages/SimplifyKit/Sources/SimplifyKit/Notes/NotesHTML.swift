@@ -164,6 +164,14 @@ public enum NotesHTML {
         return out.joined(separator: "\n")
     }
 
+    /// Memo letters as HTML for the clipboard: the same lines, lists and `<table>`s as a note's
+    /// body, without the note's name. Nil for blank letters.
+    public static func fragment(_ text: AttributedString) -> String? {
+        guard let body = body(name: "", text: text) else { return nil }
+        // The name's line is always the first.
+        return body.components(separatedBy: "\n").dropFirst().joined(separator: "\n")
+    }
+
     private struct Line {
         var html: String
         var marker: MemoLists.Marker?

@@ -130,6 +130,11 @@ enum MemoFormatCheck {
             window.close()
             return
         }
+        if only == "tablepaste" {
+            await checkTablePaste(draft: draft, editor: editor, window: window, reset: reset, key: key)
+            window.close()
+            return
+        }
         if only == "aabar" {
             await checkAaBar(memos: memos, model: model, editor: editor, window: window, reset: reset, type: type, key: key)
             window.close()
@@ -1111,6 +1116,203 @@ enum MemoFormatCheck {
         check(editor.selectedRange().location == ("가\t나\n다\t라\n\(MemoAttachments.placeholder)\n" as NSString).length, "the caret is on the line after it",
               "\(editor.selectedRange())")
         try? fm.removeItem(at: folder)
+    }
+
+    /// `SIMPLIFY_MEMO_CHECK=tablepaste`: tables through the clipboard, copied here and pasted back,
+    /// and from Markdown, tab-split lines and HTML as Excel, Google Sheets and Numbers give it;
+    /// filling a table from a cell, and one undo. The clipboard is put back as it was.
+    private static func checkTablePaste(draft: MemoDraft, editor: NSTextView, window: NSWindow,
+                                        reset: (AttributedString, Int?) async -> Void,
+                                        key: (UInt16, String, NSEvent.ModifierFlags) async -> Void) async {
+        let board = NSPasteboard.general
+        // What was on the clipboard, every item and type, to put back at the end.
+        let kept: [[(NSPasteboard.PasteboardType, Data)]] = (board.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        }
+        defer {
+            board.clearContents()
+            board.writeObjects(kept.map { types in
+                let item = NSPasteboardItem()
+                for (type, data) in types { item.setData(data, forType: type) }
+                return item
+            })
+        }
+        func wait(_ seconds: Double = 0.4) async { try? await Task.sleep(for: .seconds(seconds)) }
+        var letters: String { String(draft.text.characters) }
+        func tables() -> [String: [String]] {
+            var found: [String: [String]] = [:]
+            for line in MemoTodoLines.lines(in: draft.text) where !line.isEmpty {
+                if let id = draft.text.runs[line.lowerBound][MemoAttributes.Table.self] { found[id, default: []].append(String(draft.text[line].characters)) }
+            }
+            return found
+        }
+        func put(_ words: String? = nil, html: String? = nil) {
+            board.clearContents()
+            if let html { board.setString(html, forType: .html) }
+            if let words { board.setString(words, forType: .string) }
+        }
+        func caret(_ location: Int) async {
+            window.makeFirstResponder(editor)
+            editor.setSelectedRange(NSRange(location: location, length: 0))
+            await wait(0.3)
+        }
+
+        // Ours: copied with a table in it, pasted back as a new table, formatting kept.
+        var bold = AttributeContainer()
+        bold[MemoAttributes.Bold.self] = true
+        var ours = MemoTablePaste.table([[MemoTablePaste.Cell("품목"), MemoTablePaste.Cell("값")], [MemoTablePaste.Cell("사과"), MemoTablePaste.Cell("1,200", bold: true)]], id: "t1")
+        ours += AttributedString("\n")
+        await reset(ours, nil)
+        draft.selection = AttributedTextSelection(range: draft.text.startIndex..<draft.text.characters.index(before: draft.text.endIndex))
+        await wait(0.3)
+        draft.copySelection()
+        let types = Set(board.types ?? [])
+        check(types.contains(.string) && types.contains(.html) && types.contains(MemoTableClipboard.memoType), "copying a table writes words, HTML and the memo's own", "\(types)")
+        check(board.string(forType: .string) == "품목\t값\n사과\t1,200", "the words are tab-split", board.string(forType: .string)?.debugDescription ?? "nil")
+        check(board.string(forType: .html)?.contains("<table>") == true, "the HTML has a table", board.string(forType: .html) ?? "nil")
+        await caret((editor.string as NSString).length)
+        await key(9, "v", [.command])
+        var found = tables()
+        check(found.count == 2 && found.values.allSatisfy { $0 == ["품목\t값", "사과\t1,200"] }, "⌘V puts it back as a table of its own", "\(found)")
+        check(draft.text.runs.filter { $0[MemoAttributes.Bold.self] == true }.count == 2, "its cell formatting comes too")
+        editor.undoManager?.undo()
+        await wait()
+        check(tables().count == 1 && letters == "품목\t값\n사과\t1,200\n", "one undo takes the paste back", letters.debugDescription)
+
+        // Markdown after words on the caret's line: the table starts on the next line.
+        await reset(AttributedString("앞 글"), nil)
+        put("| 항목 | 수 |\n|---|---:|\n| 사과 | 3 |\n| 배 | 5 |")
+        await key(9, "v", [.command])
+        found = tables()
+        check(letters == "앞 글\n항목\t수\n사과\t3\n배\t5" && found.count == 1, "a Markdown table goes in as a table under the line", letters.debugDescription)
+        capture(window, "tablepaste-markdown")
+
+        // Tab-split lines as the 메모 app's table gives them.
+        await reset(AttributedString(""), nil)
+        put("측정\t결과\n단일 케이스 12개 × 3회 (14:1x)\t화면 요청은 모두 1번이었습니다.\n상품명 10개 × 3회 × 3구조\t평균 S4 14.9초")
+        draft.paste()
+        await wait()
+        found = tables()
+        check(found.values.first?.count == 3 && found.values.first?.first == "측정\t결과", "the 메모 app's table words become a table", "\(found)")
+        // A list with tabs stays words.
+        await reset(AttributedString(""), nil)
+        put("• 하나\t둘\n• 셋\t넷")
+        draft.paste()
+        await wait()
+        check(tables().isEmpty && letters == "• 하나\t둘\n• 셋\t넷", "list lines with tabs stay words", letters.debugDescription)
+
+        // HTML as Excel gives it: a merged cell, a line break in a cell, shown numbers.
+        await reset(AttributedString(""), nil)
+        put("이름\t합계\n사과 빨강\t1,200\t12%", html: """
+        <html><body><table border=0><tr><td>이름</td><td colspan=2 style='font-weight:700'>합계</td></tr>        <tr><td>사과<br>빨강</td><td align=right>1,200</td><td>12%</td></tr></table></body></html>
+        """)
+        draft.paste()
+        await wait()
+        found = tables()
+        check(found.values.first == ["이름\t합계\t", "사과 빨강\t1,200\t12%"], "Excel's HTML: merged cell spread, line break a space", "\(found)")
+        check(draft.text.runs.contains { $0[MemoAttributes.Bold.self] == true && String(draft.text[$0.range].characters) == "합계" }, "a bold cell stays bold")
+        capture(window, "tablepaste-excel")
+        // Google Sheets' HTML, with empty edge rows; words around a web page's table.
+        await reset(AttributedString(""), nil)
+        put("a\tb", html: "<meta charset='utf-8'><google-sheets-html-origin><table><tbody><tr><td></td><td></td></tr><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></tbody></table>")
+        draft.paste()
+        await wait()
+        check(tables().values.first == ["a\tb", "c\td"], "Google Sheets' HTML, empty edge row dropped", "\(tables())")
+        await reset(AttributedString(""), nil)
+        put("x", html: "<p>위 문단</p><table><tr><th>열1</th><th>열2</th></tr><tr><td>1</td><td>2</td></tr></table><p>아래 문단</p>")
+        draft.paste()
+        await wait()
+        check(letters.hasPrefix("위 문단\n열1\t열2\n1\t2\n아래 문단") && tables().count == 1, "a web page's words stay around its table", letters.debugDescription)
+        // HTML without a table: as before (the words).
+        await reset(AttributedString(""), nil)
+        put("그냥 글", html: "<p>그냥 <b>글</b></p>")
+        check(MemoTableClipboard.read() == nil, "HTML with no table is no table paste")
+
+        // In a table cell: the table fills from there, growing where it runs past.
+        var cells = MemoTablePaste.table([[MemoTablePaste.Cell("가"), MemoTablePaste.Cell("나")], [MemoTablePaste.Cell("다"), MemoTablePaste.Cell("라")]], id: "t9")
+        cells += AttributedString("\n끝")
+        await reset(cells, nil)
+        await caret(("가\t" as NSString).length)
+        put("1\t2\n3\t4\n5\t6")
+        draft.paste()
+        await wait()
+        found = tables()
+        check(found["t9"] == ["가\t1\t2", "다\t3\t4", "\t5\t6"] && letters.hasSuffix("\n끝"), "pasting in a cell fills right and down, rows and columns added", "\(found)")
+        check(editor.selectedRange().location == ("가\t1\t2\n다\t3\t4\n\t5\t6" as NSString).length, "the caret ends in the last cell filled", "\(editor.selectedRange())")
+        capture(window, "tablepaste-fill")
+        editor.undoManager?.undo()
+        await wait()
+        check(tables()["t9"] == ["가\t나", "다\t라"], "one undo puts the table back")
+
+        // ⌘C from the keyboard; a row copied with its line break, pasted in a cell, fills.
+        var keyed = MemoTablePaste.table([[MemoTablePaste.Cell("ㄱ"), MemoTablePaste.Cell("ㄴ")], [MemoTablePaste.Cell("ㄷ"), MemoTablePaste.Cell("ㄹ")]], id: "k1")
+        keyed += AttributedString("\n")
+        await reset(keyed, nil)
+        window.makeFirstResponder(editor)
+        editor.setSelectedRange(NSRange(location: 0, length: ("ㄱ\tㄴ\n" as NSString).length))
+        await wait(0.3)
+        await key(8, "c", [.command])
+        check(board.data(forType: MemoTableClipboard.memoType) != nil, "⌘C on a row with its line break writes the memo's own")
+        await caret(("ㄱ\tㄴ\nㄷ\t" as NSString).length)
+        await key(9, "v", [.command])
+        check(tables()["k1"] == ["ㄱ\tㄴ\t", "ㄷ\tㄱ\tㄴ"], "the row fills from the caret's cell, a column added, not split", "\(tables())")
+        // A word inside a cell copies as a word, and pastes into another cell as a word.
+        await reset(keyed, nil)
+        window.makeFirstResponder(editor)
+        editor.setSelectedRange(NSRange(location: 0, length: 1))
+        await wait(0.3)
+        await key(8, "c", [.command])
+        check(board.data(forType: MemoTableClipboard.memoType) == nil, "a word in a cell is not copied as a table")
+        await caret(("ㄱ\tㄴ\nㄷ" as NSString).length)
+        // Not ours: the text view's own paste (the menu's, done directly, as the menu item is
+        // only enabled while this window is the key one).
+        check(MemoTableClipboard.read() == nil, "a word copied in a cell is no table paste")
+        editor.paste(nil)
+        await wait()
+        check(tables()["k1"] == ["ㄱ\tㄴ", "ㄷㄱ\tㄹ"], "and goes into the cell at the caret", "\(tables())")
+        // The memo's own tab-aligned lines (no table) paste back as lines.
+        await reset(AttributedString("이름\t홍길동\n전화\t010\n"), nil)
+        window.makeFirstResponder(editor)
+        editor.setSelectedRange(NSRange(location: 0, length: ("이름\t홍길동\n전화\t010" as NSString).length))
+        await wait(0.3)
+        await key(8, "c", [.command])
+        await caret((editor.string as NSString).length)
+        check(MemoTableClipboard.read() == nil, "the memo's own tab lines are no table paste")
+        editor.paste(nil)
+        await wait()
+        check(tables().isEmpty && letters == "이름\t홍길동\n전화\t010\n이름\t홍길동\n전화\t010", "the memo's tab lines paste back as lines", letters.debugDescription)
+        // RTF alone, as Numbers or Word may give it.
+        if let html = "<table><tr><td>열A</td><td>열B</td></tr><tr><td>1</td><td>2</td></tr></table>".data(using: .utf8),
+           let rich = try? NSAttributedString(data: html, options: [.documentType: NSAttributedString.DocumentType.html,
+                                                                    .characterEncoding: String.Encoding.utf8.rawValue], documentAttributes: nil),
+           let rtf = try? rich.data(from: NSRange(location: 0, length: rich.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
+            await reset(AttributedString(""), nil)
+            board.clearContents()
+            board.setData(rtf, forType: .rtf)
+            board.setString("열A\t열B", forType: .string)
+            draft.paste()
+            await wait()
+            check(tables().values.first == ["열A\t열B", "1\t2"], "an RTF table becomes a table", "\(tables()) \(letters.debugDescription)")
+        }
+
+        // In a cell, words and a table together: under the table, the table left whole.
+        await reset(keyed, nil)
+        await caret(("ㄱ" as NSString).length)
+        put("앞 글\n| a | b |\n|---|---|\n| 1 | 2 |")
+        draft.paste()
+        await wait()
+        found = tables()
+        check(found["k1"] == ["ㄱ\tㄴ", "ㄷ\tㄹ"] && letters.hasPrefix("ㄱ\tㄴ\nㄷ\tㄹ\n앞 글\na\tb\n1\t2"), "words and a table pasted in a cell go under the table",
+              letters.debugDescription)
+
+        // Very large: asked first, nothing in yet.
+        await reset(AttributedString(""), nil)
+        put((0..<210).map { "칸\($0)\t값" }.joined(separator: "\n"))
+        draft.paste()
+        await wait(0.6)
+        check(letters.isEmpty, "a table past 200 rows asks before going in", "\(letters.count) letters")
+        check(NSApp.windows.contains { $0 !== window && $0.isVisible && $0 is NSPanel }, "and the question shows, as an ink menu")
+        await key(53, "\u{1b}", [])
     }
 
     /// `SIMPLIFY_MEMO_CHECK=aabar`: the Aa bar under its button (하나씩 with tabs, 모아 보기), open
