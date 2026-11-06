@@ -109,6 +109,21 @@ struct NotesTests {
         ])
     }
 
+    @Test func deepListsNestAsDeepAsTheyGo() throws {
+        let text = styled("• 하나\n\t• 둘\n\t\t• 셋\n\t\t\t• 넷\n\t\t\t\t1. 다섯\n• 끝")
+        #expect(try lines(text) == [
+            "<ul>", "<li>하나</li>", "<ul>", "<li>둘</li>", "<ul>", "<li>셋</li>", "<ul>", "<li>넷</li>",
+            "<ol>", "<li>다섯</li>", "</ol>", "</ul>", "</ul>", "</ul>", "<li>끝</li>", "</ul>",
+        ])
+    }
+
+    @Test func aTimeLinesChildListsNestFromTheTimeLine() throws {
+        let text = styled("11.02 08:30 회의\n\t1. 견적서\n\t\ta. 시안\n끝")
+        #expect(try lines(text) == [
+            "<div>11.02 08:30 회의</div>", "<ol>", "<li>견적서</li>", "<ol>", "<li>시안</li>", "</ol>", "</ol>", "<div>끝</div>",
+        ])
+    }
+
     @Test func codeLinesAreNotListsAndNumbersKeepTheirStart() throws {
         let code = styled("- name: x\n> out.txt") { $0[MemoAttributes.Code.self] = true }
         #expect(try lines(code) == ["<div><tt>- name: x</tt></div>", "<div><tt>&gt; out.txt</tt></div>"])

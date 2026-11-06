@@ -41,7 +41,9 @@ public enum NotesHTML {
     public static func body(name: String, text: AttributedString) -> String? {
         guard !MemoText.isBlank(text) else { return nil }
         let text = MemoMath.upgradingScripts(text)
-        var lines: [Line] = MemoTodoLines.lines(in: text).map { range in
+        // A timeline line's children count their lists' levels from it, as the memo draws them.
+        let children = Set(MemoTimeline.childLines(in: String(text.characters) as NSString))
+        var lines: [Line] = MemoTodoLines.lines(in: text).enumerated().map { index, range in
             let letters = String(text[range].characters)
             // A code block keeps its `- ` and `> ` as typed, as the editor shows them.
             let isCode = !range.isEmpty && text.runs[range.lowerBound][MemoAttributes.Code.self] == true
@@ -71,7 +73,7 @@ public enum NotesHTML {
                 if inFormula { cells[cells.count - 1] += "$" }
                 return Line(html: "", marker: nil, paragraph: nil, isBlank: false, table: table, cells: cells)
             }
-            let marker = isCode ? nil : MemoLists.marker(letters)
+            let marker = isCode ? nil : MemoLists.marker(letters, offset: children.contains(index) ? 1 : 0)
             let start = text.characters.index(range.lowerBound, offsetBy: marker.map { String(letters.utf16.prefix($0.length))!.count } ?? 0)
             var html = ""
             // Whether the letters so far on this line end in a space (or there are none yet).
@@ -136,12 +138,14 @@ public enum NotesHTML {
             case .dash: "<ul class=\"Apple-dash-list\">"
             default: "<ul>"
             }
-            while open.count > marker.level + 1 { out.append(open.removeLast().close) }
-            if open.count == marker.level + 1, open.last?.tag != tag { out.append(open.removeLast().close) }
-            while open.count < marker.level + 1 {
+            // By the list's own level: a timeline line's child list starts at the outermost.
+            let level = marker.labelLevel
+            while open.count > level + 1 { out.append(open.removeLast().close) }
+            if open.count == level + 1, open.last?.tag != tag { out.append(open.removeLast().close) }
+            while open.count < level + 1 {
                 // A numbered list typed from `3. ` starts at 3 in the note too.
                 let start = marker.number ?? 1
-                out.append(open.count == marker.level && start > 1 ? "<ol start=\"\(start)\">" : tag)
+                out.append(open.count == level && start > 1 ? "<ol start=\"\(start)\">" : tag)
                 open.append((tag, marker.kind == .number ? "</ol>" : "</ul>"))
             }
             out.append("<li>\(paragraphed(line))</li>")

@@ -145,8 +145,8 @@ struct TodoList: View {
                     Button { show(source.period, note: source.id) } label: {
                         HStack(spacing: Metrics.spaceXxs) {
                             Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .semibold))
-                            Text(memos.label(ofNote: source.id, calendar: model.calendar).map { "\(TodoNames.short(source.period)) · \($0)" }
-                                ?? "\(TodoNames.short(source.period)) 메모").underline()
+                            Text(memos.label(ofNote: source.id, calendar: model.calendar).map { "\(TodoNames.short(source.period, now: model.today)) · \($0)" }
+                                ?? "\(TodoNames.short(source.period, now: model.today)) 메모").underline()
                         }
                     }
                     .buttonStyle(FocusOnlyStyle())
@@ -155,7 +155,7 @@ struct TodoList: View {
                 if !places.isEmpty {
                     HStack(spacing: Metrics.spaceXxs) {
                         Image(systemName: "link").font(.system(size: 9, weight: .medium))
-                        Text(places.map(TodoNames.short).joined(separator: " · ") + "에 연결됨")
+                        Text(places.map { TodoNames.short($0, now: model.today) }.joined(separator: " · ") + "에 연결됨")
                     }
                     .foregroundStyle(onInk ? Color.onInk : Color.inkSoft)
                 }
@@ -258,24 +258,31 @@ private struct DropLine: View {
 
 /// Short names for periods under ToDos and in 넘기기.
 enum TodoNames {
-    /// `11/2 하루`, `11월 1주차`, `11월`.
-    static func short(_ period: Period) -> String {
+    /// `11/2`, `11월 1주차`, `11월`; today's day reads `11/6 오늘`.
+    static func short(_ period: Period, now: Date = .now) -> String {
         let c = period.calendar.dateComponents([.month, .day], from: period.start)
         switch period.scope {
-        case .day: return "\(c.month!)/\(c.day!) 하루"
+        case .day: return "\(c.month!)/\(c.day!)" + (period.contains(now) ? " 오늘" : "")
         case .week: return period.title
         case .month: return "\(c.month!)월"
         }
     }
 
-    /// `11월 2일 · 하루`, `11월 1주차 · 한 주`, `2026년 11월 · 한 달`, for lists that mix periods.
-    static func long(_ period: Period) -> String {
+    /// `11월 2일`, `11월 1주차`, `2026년 11월`, for lists that mix periods; the period holding
+    /// today says so after it (`11월 6일 · 오늘`, `11월 1주차 · 이번 주`, `2026년 11월 · 이번 달`).
+    static func long(_ period: Period, now: Date = .now) -> String {
         let c = period.calendar.dateComponents([.month, .day], from: period.start)
-        switch period.scope {
-        case .day: return "\(c.month!)월 \(c.day!)일 · 하루"
-        case .week: return "\(period.title) · 한 주"
-        case .month: return "\(period.title) · 한 달"
+        let name = switch period.scope {
+        case .day: "\(c.month!)월 \(c.day!)일"
+        case .week, .month: period.title
         }
+        guard period.contains(now) else { return name }
+        let current = switch period.scope {
+        case .day: "오늘"
+        case .week: "이번 주"
+        case .month: "이번 달"
+        }
+        return "\(name) · \(current)"
     }
 
     /// The right column of a menu line: `11.4`, `11월 2주차`, `12월`.

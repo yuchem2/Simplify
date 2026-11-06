@@ -130,11 +130,38 @@ enum MemoFormatCheck {
             window.close()
             return
         }
+        if only == "perf" {
+            await checkPerf(memos: memos, model: model, editor: editor, window: window, reset: reset)
+            window.close()
+            return
+        }
         if tablesOnly {
             await checkTables(draft: draft, editor: editor, window: window, model: model, reset: reset, type: type, key: key)
             window.close()
             return
         }
+
+        // Periods by name: 오늘 · 이번 주 · 이번 달 for the ones holding today, dates alone otherwise.
+        let now = model.today
+        let today = Period(containing: now, scope: .day, calendar: model.calendar)
+        let lastYear = Period(containing: model.calendar.date(byAdding: .year, value: -1, to: now)!, scope: .day, calendar: model.calendar)
+        let thisWeek = Period(containing: now, scope: .week, calendar: model.calendar)
+        let thisMonth = Period(containing: now, scope: .month, calendar: model.calendar)
+        check(TodoNames.long(today, now: now).hasSuffix(" · 오늘") && TodoNames.short(today, now: now).hasSuffix(" 오늘"), "today's ToDo place says 오늘",
+              TodoNames.long(today, now: now))
+        check(TodoNames.long(thisWeek, now: now) == thisWeek.title + " · 이번 주" && TodoNames.long(thisMonth, now: now) == thisMonth.title + " · 이번 달",
+              "this week's and month's say 이번 주, 이번 달", TodoNames.long(thisWeek, now: now))
+        check(!TodoNames.long(lastYear, now: now).contains("·") && !TodoNames.short(lastYear, now: now).contains(" "), "another day is its date alone",
+              TodoNames.long(lastYear, now: now))
+        func names(_ chosen: Date) -> [String] {
+            PeriodScope.allCases.map { DayPanel.scopeName($0, chosen: chosen, today: now, calendar: model.calendar) }
+        }
+        check(names(now) == ["오늘", "이번 주", "이번 달"], "the panel's periods read 오늘 · 이번 주 · 이번 달 on today", "\(names(now))")
+        let yearAgo = model.calendar.date(byAdding: .year, value: -1, to: now)!
+        check(names(yearAgo) == ["일", "주", "월"], "and 일 · 주 · 월 on a day a year ago", "\(names(yearAgo))")
+        let sameMonth = model.calendar.date(byAdding: .day, value: model.calendar.component(.day, from: now) > 8 ? -8 : 8, to: now)!
+        check(names(sameMonth) == ["일", "주", "이번 달"], "a day of this month in another week reads 일 · 주 · 이번 달", "\(names(sameMonth))")
+        window.makeFirstResponder(editor)
 
         // A title and a heading read from the store get their own line heights, not the memo's
         // exact 26 pt, so their letters do not run into the next line.
@@ -233,6 +260,45 @@ enum MemoFormatCheck {
         check(letters == "• 하나\n둘", "Delete at an item's start takes only the bullet", letters.debugDescription)
         await key(delete.0, delete.1)
         check(letters == "• 하나둘", "Delete again joins the lines as usual", letters.debugDescription)
+
+        // Lists go deeper than three levels, the bullets starting over.
+        await reset(AttributedString("• 하나\n\t\t\t• 넷"))
+        editor.setSelectedRange(NSRange(location: (letters as NSString).length, length: 0))
+        await key(tab.0, tab.1)
+        check(letters == "• 하나\n\t\t\t\t• 넷", "Tab takes an item past the third level", letters.debugDescription)
+        func x(_ location: Int) -> CGFloat {
+            window.convertFromScreen(editor.firstRect(forCharacterRange: NSRange(location: location, length: 1), actualRange: nil)).minX
+        }
+        let deepBullet = ("• 하나\n\t\t\t\t" as NSString).length
+        check(abs(x(deepBullet) - x(0) - 4 * MemoLists.levelIndent) < 1.5, "a fifth-level bullet sits four levels in",
+              "\(x(deepBullet) - x(0))")
+        await key(returnKey.0, returnKey.1)
+        await type("다섯")
+        check(letters == "• 하나\n\t\t\t\t• 넷\n\t\t\t\t• 다섯", "Return goes on at the fifth level", letters.debugDescription)
+
+        // A timeline line's children: lines with a tab under it start at its words, lists too.
+        await reset(AttributedString("11.02 08:30 회의\n\t안건"))
+        await key(returnKey.0, returnKey.1)
+        check(letters == "11.02 08:30 회의\n\t안건\n\t", "Return on a time line's child makes another child", letters.debugDescription)
+        await type("1. 견적서")
+        await key(returnKey.0, returnKey.1)
+        await type("시안")
+        await key(tab.0, tab.1)
+        check(letters == "11.02 08:30 회의\n\t안건\n\t1. 견적서\n\t\ta. 시안", "a list in a child counts from 1. and goes in with Tab",
+              letters.debugDescription)
+        try? await Task.sleep(for: .seconds(0.4))
+        let words = x(("11.02 08:30 " as NSString).length)
+        let child = x(("11.02 08:30 회의\n\t" as NSString).length)
+        let item = x(("11.02 08:30 회의\n\t안건\n\t" as NSString).length)
+        let inner = x(("11.02 08:30 회의\n\t안건\n\t1. 견적서\n\t\t" as NSString).length)
+        check(abs(child - words) < 1.5, "a child's words start under the time line's words", "words \(words) child \(child)")
+        check(abs(item - words) < 1.5, "a list in a child starts there too", "words \(words) item \(item)")
+        check(abs(inner - words - MemoLists.levelIndent) < 1.5, "and its next level one step in", "words \(words) inner \(inner)")
+        capture(window, "timeline-children")
+        // Empty items step out a level at a time, to the child, then out of the children.
+        for _ in 0..<4 { await key(returnKey.0, returnKey.1) }
+        check(letters == "11.02 08:30 회의\n\t안건\n\t1. 견적서\n\t\ta. 시안\n", "Return on empty children steps out to a plain line",
+              letters.debugDescription)
 
         // A code block keeps `* ` and Return as typed.
         var code = AttributeContainer()
@@ -1189,8 +1255,15 @@ enum MemoFormatCheck {
         model.memoLayout = .all
         await wait(1.0)
         capture(window, "memos-all")
-        let readOnly = textViews(in: window.contentView!).filter { MemoTextViews.readOnly.contains($0) }
-        check(readOnly.count == 2, "모아 보기 draws the other two memos read-only", "\(readOnly.count)")
+        var readOnly = textViews(in: window.contentView!).filter { MemoTextViews.readOnly.contains($0) }
+        var waited = 0
+        while readOnly.count < 2, waited < 30 {
+            await wait(0.1)
+            waited += 1
+            readOnly = textViews(in: window.contentView!).filter { MemoTextViews.readOnly.contains($0) }
+        }
+        check(readOnly.count == 2, "모아 보기 draws the other two memos read-only", "\(readOnly.count) after \(waited * 100) ms more")
+        if waited > 0 { log("NOTE  the read-only memos took \(waited * 100) ms more to be found") }
         check(readOnly.allSatisfy { $0.textContentStorage?.delegate is MemoLineStyler }, "each is drawn by the memo's own styler")
         check(readOnly.contains { $0.string.contains("견적서") }, "a read-only memo shows its words")
         check(UserDefaults.standard.string(forKey: "memoLayout") == "all", "the layout is remembered on this Mac")
@@ -1245,6 +1318,51 @@ enum MemoFormatCheck {
         }
         memos.todos.entries(for: period).filter { entry in pushed.contains { $0.id == entry.todoID } }.forEach(memos.todos.remove)
         await wait(0.4)
+
+        // The memos scroll on their own, to the panel's foot, as 하나씩's memo does: a long last
+        // memo written at its end moves the memos' scroll, not the panel's.
+        /// The scroll views around `view`, nearest first (the memo's own, then the memos', then the panel's).
+        func scrollViews(around view: NSView) -> [NSScrollView] {
+            var found: [NSScrollView] = []
+            var next = view.superview
+            while let current = next {
+                if let scroll = current as? NSScrollView { found.append(scroll) }
+                next = current.superview
+            }
+            return found
+        }
+        if let live = window.firstResponder as? NSTextView, !live.isFieldEditor, !MemoTextViews.readOnly.contains(live) {
+            live.setSelectedRange(NSRange(location: (live.string as NSString).length, length: 0))
+            for line in 1...30 {
+                live.insertText("\n긴 메모 줄 \(line)", replacementRange: live.selectedRange())
+                await wait(0.05)
+            }
+            await wait(1.0)
+            let around = scrollViews(around: live)
+            check(around.count >= 3, "모아 보기's memos have a scroll view of their own inside the panel's", "\(around.count)")
+            if around.count >= 3 {
+                let memosScroll = around[1], panel = around[2]
+                let inner = memosScroll.convert(memosScroll.bounds, to: nil), outer = panel.convert(panel.bounds, to: nil)
+                // AppKit's window coordinates: y grows upward, so the foot is minY.
+                check(abs(inner.minY - outer.minY) <= Metrics.spaceXxl + 2, "the memos reach the panel's foot", "memos \(inner) panel \(outer)")
+                check(panel.contentView.bounds.minY == 0 || panel.contentView.bounds.origin.y.magnitude < 1, "the panel itself did not scroll",
+                      "\(panel.contentView.bounds)")
+                check(memosScroll.contentView.bounds.origin.y.magnitude > 1, "the memos scrolled to the caret", "\(memosScroll.contentView.bounds)")
+                let caret = window.convertFromScreen(live.firstRect(forCharacterRange: live.selectedRange(), actualRange: nil))
+                check(inner.minY <= caret.minY && caret.maxY <= inner.maxY, "the caret's line shows in the memos", "caret \(caret) memos \(inner)")
+                // Scrolled back to the top, a read-only memo there still opens on a click.
+                memosScroll.contentView.scroll(to: .zero)
+                memosScroll.reflectScrolledClipView(memosScroll.contentView)
+                await wait(0.8)
+                if let target = textViews(in: window.contentView!).filter({ MemoTextViews.readOnly.contains($0) }).first(where: { $0.string.contains("첫 메모") }) {
+                    click(target, in: window)
+                    await wait(1.0)
+                    check(draft.noteID == first, "after scrolling the memos, a click on a read-only memo opens it", "\(String(describing: draft.noteID))")
+                } else {
+                    check(false, "the first memo is drawn read-only after scrolling the memos")
+                }
+            }
+        }
         draft.resignEditor?()
         model.memoLayout = .one
         await wait(0.8)
@@ -1277,6 +1395,138 @@ enum MemoFormatCheck {
         model.select(model.today)
         await wait(0.4)
         _ = escape
+    }
+
+    /// The app's memory as Activity Monitor counts it (physical footprint), in MB.
+    private static func footprint() -> Double {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        return result == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576 : -1
+    }
+
+    /// `SIMPLIFY_MEMO_CHECK=perf`: memory while typing (하나씩 and 모아 보기) and how long the
+    /// panel takes to switch periods. Numbers only, logged as `PERF` lines.
+    private static func checkPerf(memos: MemoBook, model: AppModel, editor: NSTextView, window: NSWindow,
+                                  reset: (AttributedString, Int?) async -> Void) async {
+        let draft = memos.draft
+        func wait(_ seconds: Double) async { try? await Task.sleep(for: .seconds(seconds)) }
+        func perf(_ line: String) { log("PERF  " + line) }
+        func mb(_ value: Double) -> String { String(format: "%.1f MB", value) }
+        /// From a change to the panel drawn: laid out and displayed, and the run loop's turn over.
+        func timed(_ change: () -> Void) async -> Double {
+            let start = ProcessInfo.processInfo.systemUptime
+            change()
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            await withCheckedContinuation { done in DispatchQueue.main.async { done.resume() } }
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            return (ProcessInfo.processInfo.systemUptime - start) * 1000
+        }
+        func stats(_ values: [Double]) -> String {
+            let sorted = values.sorted()
+            return String(format: "median %.1f ms, max %.1f ms (n=%d)", sorted[sorted.count / 2], sorted.last ?? 0, sorted.count)
+        }
+        /// Types `count` letters one by one, the way keys come, and logs the footprint as it grows.
+        func typeLetters(_ count: Int, label: String) async -> [Double] {
+            let words = Array("오늘 회의에서 정한 것들을 적어 둔다. 다음 주까지 견적을 보내고 일정을 맞춘다.\n")
+            var times: [Double] = []
+            for index in 0..<count {
+                let letter = String(words[index % words.count])
+                let start = ProcessInfo.processInfo.systemUptime
+                editor.insertText(letter, replacementRange: editor.selectedRange())
+                await withCheckedContinuation { done in DispatchQueue.main.async { done.resume() } }
+                times.append((ProcessInfo.processInfo.systemUptime - start) * 1000)
+                try? await Task.sleep(for: .milliseconds(8))
+                if (index + 1) % 500 == 0 { perf("\(label) after \(index + 1) letters: \(mb(footprint()))") }
+            }
+            return times
+        }
+
+        let switchOnly = ProcessInfo.processInfo.environment["SIMPLIFY_PERF_ONLY"] == "switch"
+        model.memoLayout = .one
+        await reset(sample(), nil)
+        window.makeFirstResponder(editor)
+        await wait(1)
+        if !switchOnly {
+            let base = footprint()
+            perf("하나씩 before typing: \(mb(base))")
+            let oneTimes = await typeLetters(2000, label: "하나씩")
+            await wait(2)
+            let oneAfter = footprint()
+            perf("하나씩 idle after: \(mb(oneAfter)) (+\(mb(oneAfter - base)))")
+            perf("하나씩 per letter: \(stats(oneTimes))")
+            draft.flush()
+
+            // 모아 보기 with four memos of the sample under the one being written.
+            guard let period = draft.period else { return }
+            for _ in 0..<4 {
+                draft.newMemo()
+                await wait(0.4)
+                draft.commitRename(toBody: true)
+                await wait(0.3)
+                draft.text = sample()
+                draft.flush()
+            }
+            model.memoLayout = .all
+            await wait(1.5)
+            let first = memos.tabs(for: period).first?.id
+            draft.select(first)
+            await wait(1)
+            let written = textViews(in: window.contentView!).first { $0.isEditable }
+            if let written {
+                window.makeFirstResponder(written)
+                written.setSelectedRange(NSRange(location: (written.string as NSString).length, length: 0))
+            }
+            await wait(0.5)
+            let allBase = footprint()
+            perf("모아 보기 (\(memos.tabs(for: period).count) memos) before typing: \(mb(allBase))")
+            var allTimes: [Double] = []
+            if let written {
+                for index in 0..<1000 {
+                    let start = ProcessInfo.processInfo.systemUptime
+                    written.insertText(index % 40 == 39 ? "\n" : "가", replacementRange: written.selectedRange())
+                    await withCheckedContinuation { done in DispatchQueue.main.async { done.resume() } }
+                    allTimes.append((ProcessInfo.processInfo.systemUptime - start) * 1000)
+                    try? await Task.sleep(for: .milliseconds(8))
+                    if (index + 1) % 500 == 0 { perf("모아 보기 after \(index + 1) letters: \(mb(footprint()))") }
+                }
+            }
+            await wait(2)
+            let allAfter = footprint()
+            perf("모아 보기 idle after: \(mb(allAfter)) (+\(mb(allAfter - allBase)))")
+            if !allTimes.isEmpty { perf("모아 보기 per letter: \(stats(allTimes))") }
+            draft.flush()
+
+        }
+        if switchOnly { await wait(8) }
+        // Switching the panel's period, in both layouts.
+        for layout in [AppModel.MemoLayout.one, .all] {
+            model.memoLayout = layout
+            await wait(0.8)
+            var times: [Double] = []
+            for _ in 0..<(switchOnly ? 30 : 6) {
+                for scope in [PeriodScope.week, .month, .day] {
+                    times.append(await timed { model.panelScope = scope })
+                    await wait(0.25)
+                }
+            }
+            perf("switch \(layout == .one ? "하나씩" : "모아 보기"): \(stats(times))")
+        }
+        // Moving day by day.
+        model.memoLayout = .one
+        var days: [Double] = []
+        for step in 1...12 {
+            days.append(await timed { model.select(model.today.addingTimeInterval(Double(step % 2 == 0 ? 0 : 86_400))) })
+            await wait(0.25)
+        }
+        perf("day change: \(stats(days))")
+        perf("end: \(mb(footprint()))")
+        // For `heap` and `vmmap` from outside: the app stays a while before it quits.
+        if let hold = ProcessInfo.processInfo.environment["SIMPLIFY_PERF_HOLD"].flatMap(Double.init) { await wait(hold) }
     }
 
     private static func textViews(in view: NSView) -> [NSTextView] {

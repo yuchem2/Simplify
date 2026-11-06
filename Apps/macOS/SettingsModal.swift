@@ -171,7 +171,7 @@ struct SettingsModal: View {
             }
 
             SectionRule("달력").padding(.top, Metrics.spaceM)
-            settingRow("주 시작 요일", note: "달력과 한 주 메모가 이 요일부터 시작해요.") {
+            settingRow("주 시작 요일", note: "달력과 주간 메모가 이 요일부터 시작해요.") {
                 SegmentedTabs(AppModel.WeekStart.allCases.map { ($0, $0.label) }, selection: $model.weekStart)
                     .accessibilityLabel("주 시작 요일")
             }

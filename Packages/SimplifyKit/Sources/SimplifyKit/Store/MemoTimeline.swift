@@ -39,6 +39,46 @@ public enum MemoTimeline {
         return length
     }
 
+    /// A timeline line's child: a line starting with a tab right under it, or under another of its
+    /// children. Its words start at the timeline line's words, and a list in it counts its levels
+    /// from there (`\t• `, `\t1. `). `line` is the line's letters without its line break.
+    public static func isChild(_ line: NSRange, in string: NSString) -> Bool {
+        guard line.length > 0, line.location < string.length, string.character(at: line.location) == 0x09 else { return false }
+        var start = line.location
+        while start > 0 {
+            let above = string.lineRange(for: NSRange(location: start - 1, length: 0))
+            let letters = string.substring(with: above).trimmingCharacters(in: .newlines)
+            if letters.hasPrefix("\t") {
+                start = above.location
+                continue
+            }
+            return !isRule(letters) && stampLength(letters) != nil
+        }
+        return false
+    }
+
+    /// Which lines (counted from 0) are timeline lines' children, top to bottom. By line, not by
+    /// place: letters typed above a child do not make it another line.
+    public static func childLines(in string: NSString) -> [Int] {
+        var found: [Int] = []
+        var start = 0, index = 0
+        var underStamp = false
+        while start < string.length {
+            let line = string.lineRange(for: NSRange(location: start, length: 0))
+            let startsWithTab = string.character(at: line.location) == 0x09
+            if startsWithTab, underStamp {
+                found.append(index)
+            } else if !startsWithTab {
+                // Only the first letters matter: a stamp is at most 18 letters.
+                let head = string.substring(with: NSRange(location: line.location, length: min(18, line.length))).trimmingCharacters(in: .newlines)
+                underStamp = head.first?.isNumber == true && stampLength(head) != nil
+            }
+            start = NSMaxRange(line)
+            index += 1
+        }
+        return found
+    }
+
     /// `11.03 14:25`: the month and day of `day` and the hour and minute of `now`, in figures.
     public static func stamp(day: Date, now: Date, calendar: Calendar) -> String {
         let date = calendar.dateComponents([.month, .day], from: day)

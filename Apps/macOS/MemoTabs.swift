@@ -264,7 +264,8 @@ private struct MemoReadHost: NSViewRepresentable {
         view.measured = measured
         view.pick = pick
         view.canPick = canPick
-        place.moved = { [weak view] in Task { @MainActor in view?.redraw() } }
+        // Moved only (scrolled): found again if need be, not drawn again.
+        place.moved = { [weak view] in Task { @MainActor in view?.redraw(force: false) } }
         return view
     }
 
@@ -276,8 +277,12 @@ private struct MemoReadHost: NSViewRepresentable {
         view.measured = measured
         view.pick = pick
         view.canPick = canPick
+        // Drawn again in full only for new letters: the panel is laid out again on every key
+        // typed in the memo being written, and this memo has not changed.
+        let changed = view.text != text
+        view.text = text
         // After the text view has taken the letters.
-        Task { @MainActor in view.redraw() }
+        Task { @MainActor in view.redraw(force: changed) }
     }
 
     final class HostView: NSView {
@@ -285,6 +290,8 @@ private struct MemoReadHost: NSViewRepresentable {
         var measured: ((CGFloat) -> Void)?
         var pick: (() -> Void)?
         var canPick: (() -> Bool)?
+        /// The letters last drawn.
+        var text: AttributedString?
         private let styler = MemoLineStyler()
         private var last: CGFloat?
         private var monitor: Any?
@@ -331,8 +338,9 @@ private struct MemoReadHost: NSViewRepresentable {
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+        /// `force` false: only found again if it moved, and measured; its paragraphs stay as made.
         @MainActor
-        func redraw() {
+        func redraw(force: Bool = true) {
             guard let window, let content = window.contentView, let here = place?.frame, !here.isNull else { return }
             // While the memos are laid out again a text view may first be taken for another memo's:
             // one that is no longer where this memo is goes back.
@@ -342,13 +350,15 @@ private struct MemoReadHost: NSViewRepresentable {
                 styler.detach()
                 last = nil
             }
+            var force = force
             if !styler.isAttached {
                 guard let textView = MemoTextViews.find(in: content, at: here) else { return }
                 styler.attach(to: textView)
                 // Passed over by the editor looking for its own text view.
                 if styler.textView === textView { MemoTextViews.readOnly.add(textView) }
+                force = true
             }
-            styler.update(force: true)
+            styler.update(force: force)
             guard let textView = styler.textView, let height = MemoTextViews.contentHeight(of: textView), height != last else { return }
             last = height
             measured?(height)

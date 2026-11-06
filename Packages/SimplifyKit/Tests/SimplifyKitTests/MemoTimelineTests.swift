@@ -140,4 +140,55 @@ struct PanelLayoutTests {
         #expect(PanelLayout.miniWidth(400) == 360)
         #expect(PanelLayout.miniWidth(250) == 250)
     }
+
+    @Test func linesWithATabUnderATimeLineAreItsChildren() {
+        let text = "11.02 08:30 회의\n\t안건 정리\n\t• 견적서\n\t\t• 시안\n그냥 줄\n\t탭 줄\n11.02 09:00\n\n\t빈 줄 다음"
+        let string = text as NSString
+        func line(_ index: Int) -> NSRange {
+            var start = 0
+            for _ in 0..<index { start = NSMaxRange(string.lineRange(for: NSRange(location: start, length: 0))) }
+            return MemoLists.lineContent(of: string.lineRange(for: NSRange(location: start, length: 0)), in: string)
+        }
+        #expect((0..<9).map { MemoTimeline.isChild(line($0), in: string) } == [false, true, true, true, false, false, false, false, false])
+        #expect(MemoTimeline.childLines(in: string) == [1, 2, 3])
+        // A list in a child counts its levels from the time line: `\t1. ` is a first-level item.
+        let item = MemoLists.marker(in: string, line: line(2))
+        #expect(item?.level == 1 && item?.offset == 1 && item?.labelLevel == 0)
+        #expect(MemoLists.marker(in: string, line: line(3))?.labelLevel == 1)
+        let numbered = "11.02 08:30 회의\n\t1. 하나" as NSString
+        #expect(MemoLists.marker(in: numbered, line: NSRange(location: 15, length: 6))?.number == 1)
+    }
+
+    @Test func returnOnAChildKeepsItUnderTheTimeLine() {
+        func applied(_ change: MemoLists.Change?, to text: String) -> String? {
+            guard let change else { return nil }
+            var string = text as NSString
+            for edit in change.edits { string = string.replacingCharacters(in: edit.range, with: edit.text) as NSString }
+            return string as String
+        }
+        func end(_ text: String) -> Int { (text as NSString).length }
+        // A child's next line is a child.
+        let plain = "11.02 08:30 회의\n\t안건"
+        let next = MemoLists.returnKey(in: plain, caret: end(plain))
+        #expect(applied(next, to: plain) == plain + "\n\t")
+        #expect(next?.selection.location == end(plain) + 2)
+        // An empty child ends them.
+        let empty = "11.02 08:30 회의\n\t안건\n\t"
+        #expect(applied(MemoLists.returnKey(in: empty, caret: end(empty)), to: empty) == "11.02 08:30 회의\n\t안건\n")
+        // The time line itself, and a tab line elsewhere, break as usual.
+        #expect(MemoLists.returnKey(in: "11.02 08:30 회의", caret: 14) == nil)
+        #expect(MemoLists.returnKey(in: "그냥\n\t탭", caret: 5) == nil)
+        // A list in a child numbers from 1. and ends into the child.
+        let list = "11.02 08:30 회의\n\t1. 하나"
+        #expect(applied(MemoLists.returnKey(in: list, caret: end(list)), to: list) == list + "\n\t2. ")
+        let emptyItem = "11.02 08:30 회의\n\t1. 하나\n\t2. "
+        #expect(applied(MemoLists.returnKey(in: emptyItem, caret: end(emptyItem)), to: emptyItem) == "11.02 08:30 회의\n\t1. 하나\n\t")
+        // Tab takes it a level in with that level's letters; ⇧Tab stops at the child.
+        let tabbed = MemoLists.indent(in: list + "\n\t2. 둘", selection: NSRange(location: end(list) + 3, length: 0), by: 1)
+        #expect(applied(tabbed, to: list + "\n\t2. 둘") == list + "\n\t\ta. 둘")
+        #expect(MemoLists.indent(in: list, selection: NSRange(location: end(list), length: 0), by: -1) == nil)
+        // The 서식 menu's number list on a child starts at 1., not a.
+        let made = MemoLists.setKind(.number, in: plain, selection: NSRange(location: end(plain), length: 0))
+        #expect(applied(made, to: plain) == "11.02 08:30 회의\n\t1. 안건")
+    }
 }

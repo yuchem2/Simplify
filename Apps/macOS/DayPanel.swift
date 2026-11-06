@@ -13,6 +13,11 @@ struct DayPanel: View {
     /// The panel's scroll, moved only to bring the memo's caret line into view.
     @State private var scroll = ScrollPosition()
     @State private var scrolledTo: CGFloat = 0
+    /// 모아 보기's memos scroll on their own, under the events and ToDos: where they are scrolled,
+    /// and the memo being written's top among them.
+    @State private var memosScroll = ScrollPosition()
+    @State private var memosScrolledTo: CGFloat = 0
+    @State private var editorTop: CGFloat = 0
 
     /// Beside the small month, whose list already shows the day's events.
     private var isWide: Bool { model.isPanelWide && !model.isPanelHidden }
@@ -30,7 +35,7 @@ struct DayPanel: View {
                 if !memos.isSaved {
                     NoticeBar("이번 실행에서 쓴 메모는 남지 않아요.", title: "메모를 저장할 수 없어요.")
                 }
-                SegmentedTabs([(PeriodScope.day, "하루"), (.week, "한 주"), (.month, "한 달")], selection: $model.panelScope,
+                SegmentedTabs(PeriodScope.allCases.map { ($0, scopeName($0)) }, selection: $model.panelScope,
                               marked: Set(PeriodScope.allCases.filter { memos.has(Period(containing: model.selectedDay, scope: $0, calendar: model.calendar)) }),
                               fillsWidth: true)
                 HStack(alignment: .firstTextBaseline) {
@@ -56,7 +61,7 @@ struct DayPanel: View {
 
             ScrollArea(position: $scroll) {
                 VStack(alignment: .leading, spacing: Metrics.spaceXxl) {
-                    ForEach(sections(for: period.scope), id: \.title) { section in
+                    ForEach(sections(for: period.scope), id: \.kind) { section in
                         VStack(alignment: .leading, spacing: Metrics.spaceM) {
                             // The memo being written thickens its rule to the spine's weight: with
                             // no box around it, that and the caret are its keyboard focus.
@@ -127,31 +132,48 @@ struct DayPanel: View {
         if model.memoLayout == .one {
             MemoTabsRow(draft: draft, tabs: tabs)
             editor(section, period: period, height: memoHeight)
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.content)).minY } action: { memoTop = $0 }
         } else {
-            VStack(alignment: .leading, spacing: Metrics.spaceXl) {
-                ForEach(tabs, id: \.id) { tab in
-                    VStack(alignment: .leading, spacing: Metrics.spaceXs) {
-                        MemoTabLabel(draft: draft, tab: tab, isOn: tab.id == draft.noteID, font: .display(17), nsFont: Self.headerFont, isHeader: true)
-                        if tab.id == draft.noteID {
-                            // A line to spare under the last, so a new line does not scroll inside the memo first.
-                            editor(section, period: period, height: max(draft.contentHeight, MemoStyle.lineHeight) + MemoStyle.lineHeight)
-                        } else {
-                            // Not while the open memo's bars may hang over this one.
-                            MemoReadOnly(text: memos.shownText(note: tab.id) ?? AttributedString(), label: tab.name,
-                                         canPick: { memos.todos.pop == nil && !model.isModalOpen && !draft.showsParagraphBar && !draft.hasSelectedText }) {
-                                // The editor leaves its memo for this one's place.
-                                guard tab.id != draft.noteID else { return }
-                                draft.resignEditor?()
-                                draft.focusOnAppear = true
-                                draft.select(tab.id)
-                                // Not opened (no period): no editor is coming to take the focus.
-                                if draft.noteID != tab.id { draft.focusOnAppear = false }
-                            }
+            // To the panel's foot, as 하나씩's memo is, and scrolled inside: the events and ToDos stay put.
+            ScrollArea(position: $memosScroll) {
+                allMemos(section, period: period, tabs: tabs)
+                    .coordinateSpace(.named(Self.memos))
+            }
+            .frame(height: memoHeight)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.content)).minY } action: { memoTop = $0 }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in memosScrolledTo = offset }
+        }
+    }
+
+    /// 모아 보기: every memo of the period one under another, each as tall as its text.
+    private func allMemos(_ section: Section, period: Period, tabs: [MemoBook.Tab]) -> some View {
+        let draft = memos.draft
+        return VStack(alignment: .leading, spacing: Metrics.spaceXl) {
+            ForEach(tabs, id: \.id) { tab in
+                VStack(alignment: .leading, spacing: Metrics.spaceXs) {
+                    MemoTabLabel(draft: draft, tab: tab, isOn: tab.id == draft.noteID, font: .display(17), nsFont: Self.headerFont, isHeader: true)
+                    if tab.id == draft.noteID {
+                        // A line to spare under the last, so a new line does not scroll inside the memo first.
+                        editor(section, period: period, height: max(draft.contentHeight, MemoStyle.lineHeight) + MemoStyle.lineHeight)
+                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.memos)).minY } action: { editorTop = $0 }
+                    } else {
+                        // Not while the open memo's bars may hang over this one.
+                        MemoReadOnly(text: memos.shownText(note: tab.id) ?? AttributedString(), label: tab.name,
+                                     canPick: { memos.todos.pop == nil && !model.isModalOpen && !draft.showsParagraphBar && !draft.hasSelectedText }) {
+                            // The editor leaves its memo for this one's place.
+                            guard tab.id != draft.noteID else { return }
+                            draft.resignEditor?()
+                            draft.focusOnAppear = true
+                            draft.select(tab.id)
+                            // Not opened (no period): no editor is coming to take the focus.
+                            if draft.noteID != tab.id { draft.focusOnAppear = false }
                         }
                     }
                 }
             }
         }
+        // Under the last memo, room for the caret line's spare line when scrolled to the end.
+        .padding(.bottom, Metrics.spaceXs)
     }
 
     private static var headerFont: NSFont { NSFont(name: "GowunBatang-Bold", size: 17) ?? .boldSystemFont(ofSize: 17) }
@@ -159,18 +181,48 @@ struct DayPanel: View {
     private func editor(_ section: Section, period: Period, height: CGFloat) -> some View {
         MemoEditor(draft: memos.draft, period: period, chosenDay: model.selectedDay, height: height,
                    title: section.title, placeholder: section.empty, onCaretLine: reveal)
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.content)).minY } action: { memoTop = $0 }
     }
 
-    /// Scrolls the panel just enough that the memo's caret line, `line` in the memo's own place,
-    /// shows with a line to spare above or under it; a line already in view stays put.
+    /// Scrolls just enough that the memo's caret line, `line` in the memo's own place, shows with
+    /// a line to spare above or under it; a line already in view stays put. In 모아 보기 the memos'
+    /// own scroll moves first, then the panel, if the memos are partly under its foot.
     private func reveal(_ line: CGRect) {
+        guard model.memoLayout == .all else { return revealInPanel(line) }
+        let room = MemoStyle.lineHeight
+        let top = editorTop + line.minY, bottom = editorTop + line.maxY
+        var offset = memosScrolledTo
+        if top - room < offset {
+            offset = max(0, top - room)
+        } else if bottom + room > offset + memoHeight {
+            offset = bottom + room - memoHeight
+        }
+        if offset != memosScrolledTo { memosScroll.scrollTo(y: offset) }
+        revealInPanel(line.offsetBy(dx: 0, dy: editorTop - offset))
+    }
+
+    /// The panel's own scroll: `line` is in the memo area's place (하나씩's memo, 모아 보기's memos).
+    private func revealInPanel(_ line: CGRect) {
         let room = MemoStyle.lineHeight
         let top = memoTop + line.minY, bottom = memoTop + line.maxY
         if top - room < scrolledTo {
             scroll.scrollTo(y: max(0, top - room))
         } else if bottom + room > scrolledTo + viewport {
             scroll.scrollTo(y: bottom + room - viewport)
+        }
+    }
+
+    /// `오늘`, `이번 주`, `이번 달` while the chosen day's day, week or month holds today; `일`,
+    /// `주`, `월` otherwise. Each button on its own: a day last week reads `일 · 주 · 이번 달`.
+    private func scopeName(_ scope: PeriodScope) -> String {
+        Self.scopeName(scope, chosen: model.selectedDay, today: model.today, calendar: model.calendar)
+    }
+
+    static func scopeName(_ scope: PeriodScope, chosen: Date, today: Date, calendar: Calendar) -> String {
+        let holdsToday = Period(containing: chosen, scope: scope, calendar: calendar).contains(today)
+        return switch scope {
+        case .day: holdsToday ? "오늘" : "일"
+        case .week: holdsToday ? "이번 주" : "주"
+        case .month: holdsToday ? "이번 달" : "월"
         }
     }
 
@@ -191,6 +243,7 @@ struct DayPanel: View {
     }
 
     private nonisolated static let content = "panelContent"
+    private nonisolated static let memos = "panelMemos"
 
     /// A wide panel leaves the events to the small month's list.
     private func sections(for scope: PeriodScope) -> [Section] {

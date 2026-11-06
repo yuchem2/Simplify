@@ -185,13 +185,13 @@ private struct ImportPop: View {
                     ForEach(todos, id: \.id) { item in
                         let key = item.id.uuidString
                         let home = Period(key: item.periodKey, scope: item.scope, calendar: model.calendar)
-                        pick(key, title: item.title, detail: home.map(TodoNames.long) ?? "")
+                        pick(key, title: item.title, detail: home.map { TodoNames.long($0, now: model.today) } ?? "")
                     }
                     PopGroup(title: "메모 속 할 일 줄")
                     if lines.isEmpty { empty("[ ] 나 TODO: 로 시작하는 줄이 없어요.") }
                     ForEach(lines.indices, id: \.self) { index in
                         let found = lines[index]
-                        let place = TodoNames.long(found.period).components(separatedBy: " · ")[0]
+                        let place = TodoNames.long(found.period, now: model.today).components(separatedBy: " · ")[0]
                         pick(lineKey(found), title: found.line.text, detail: found.name.map { "\(place) · \($0)" } ?? "\(place) 메모")
                     }
                 }

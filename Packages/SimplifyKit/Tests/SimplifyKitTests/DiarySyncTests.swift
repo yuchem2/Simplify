@@ -61,6 +61,13 @@ struct DiarySyncTests {
         #expect(fromA.todos.count == 3)
     }
 
+    @Test func deepListsArriveAsWritten() {
+        let deep = "• 하나\n\t• 둘\n\t\t• 셋\n\t\t\t• 넷\n\t\t\t\t\t1. 여섯"
+        let local = SyncSnapshot(notes: [note("• 하나", at: 0)])
+        let remote = SyncSnapshot(notes: [note(deep, at: 10, from: ["• 하나"])])
+        #expect(text(merge(local, remote).notes.first) == deep)
+    }
+
     @Test func aDeletionAndAnEditMeetByTime() {
         let id = UUID()
         let gone = SyncSnapshot(deletions: [SyncDeletion(kind: .todo, key: id.uuidString, deletedAt: at(20))])

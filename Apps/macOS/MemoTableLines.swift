@@ -99,7 +99,7 @@ extension MemoLineStyler {
         var widths: [CGFloat] = []
         for (index, row) in rows.enumerated() {
             for (column, cell) in MemoTables.cellRanges(of: row, in: string).enumerated() {
-                let letters = NSMutableAttributedString(attributedString: text.attributedSubstring(from: cell))
+                let letters = text.copiedPart(cell)
                 if index == 0 { embolden(letters) }
                 let width = max(leastCellWidth, ceil(letters.size().width) + 2 * cellPadding)
                 if column < widths.count { widths[column] = max(widths[column], width) } else { widths.append(width) }
@@ -135,7 +135,7 @@ extension MemoLineStyler {
 
     /// A table's edges, measured again only when its letters or the memo's width changed.
     func edges(of table: (id: String, rows: [NSRange]), in text: NSAttributedString) -> [CGFloat] {
-        let letters = text.attributedSubstring(from: MemoTables.span(of: table.rows))
+        let letters = text.copiedPart(MemoTables.span(of: table.rows))
         let width = tableWidth
         if let measured = measuredTables[table.id], measured.width == width, measured.letters.isEqual(to: letters) { return measured.edges }
         let edges = Self.tableEdges(text, rows: table.rows, width: width)
@@ -160,7 +160,7 @@ extension MemoLineStyler {
         let row = MemoLists.lineContent(of: range, in: string)
         guard let index = table.rows.firstIndex(of: row) else { return nil }
         let edges = edges(of: table, in: text)
-        let shown = NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
+        let shown = text.copiedPart(range)
         let whole = NSRange(location: 0, length: shown.length)
         if index == 0 { Self.embolden(shown) }
         let style = ((shown.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()

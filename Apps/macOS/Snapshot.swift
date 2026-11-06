@@ -738,7 +738,7 @@ private struct ComponentGallery: View {
                         .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line)).focusRing(true)
                     Text("hover").textStyle(.body).padding(.horizontal, Metrics.spaceL).frame(height: 28).background(.hover)
                         .overlay(Rectangle().strokeBorder(.ink, lineWidth: Metrics.line))
-                    SegmentedTabs([(0, "하루"), (1, "한 주"), (2, "한 달")], selection: $tab)
+                    SegmentedTabs([(0, "오늘"), (1, "이번 주"), (2, "이번 달")], selection: $tab)
                 }
                 SectionRule("입력 칸")
                 HStack(spacing: Metrics.spaceL) {

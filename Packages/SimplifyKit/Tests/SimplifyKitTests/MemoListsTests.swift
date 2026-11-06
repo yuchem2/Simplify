@@ -23,9 +23,10 @@ struct MemoListsTests {
         #expect(MemoLists.marker("\tb. 둘째") == MemoLists.Marker(kind: .number, level: 1, label: "b.", length: 4, number: 2))
         #expect(MemoLists.marker("\t\tiv. 넷째")?.number == 4)
         #expect(MemoLists.marker("\t\t• 셋째 단계")?.level == 2)
-        // Not lists: no space, too deep, letters at the outer level, a rule, words.
+        // As deep as the tabs go.
+        #expect(MemoLists.marker("\t\t\t• 넷째 단계")?.level == 3)
+        // Not lists: no space, letters at the outer level, a rule, words.
         #expect(MemoLists.marker("-하나") == nil)
-        #expect(MemoLists.marker("\t\t\t• 넷째 단계") == nil)
         #expect(MemoLists.marker("a. 아니요") == nil)
         #expect(MemoLists.marker("\t\tiiii. 아니요") == nil)
         #expect(MemoLists.marker("----") == nil)
@@ -108,8 +109,8 @@ struct MemoListsTests {
         #expect(change?.selection.location == caret + 1)
         let back = applied(change, to: text)!
         #expect(applied(MemoLists.indent(in: back, selection: NSRange(location: utf16("1. 하나\n\ta"), length: 0), by: -1), to: back) == text)
-        // No deeper than the third level, and Tab on a plain line is a tab.
-        #expect(MemoLists.indent(in: "\t\t• 셋", selection: NSRange(location: 5, length: 0), by: 1) == nil)
+        // Past the third level too; Tab on a plain line is a tab.
+        #expect(applied(MemoLists.indent(in: "\t\t• 셋", selection: NSRange(location: 5, length: 0), by: 1), to: "\t\t• 셋") == "\t\t\t• 셋")
         #expect(MemoLists.indent(in: "그냥", selection: NSRange(location: 1, length: 0), by: 1) == nil)
         #expect(MemoLists.indent(in: "• 하나", selection: NSRange(location: 3, length: 0), by: -1) == nil)
     }
@@ -211,5 +212,36 @@ struct MemoListsTests {
         let change = MemoLists.returnKey(in: text, caret: utf16(text))
         #expect(applied(change, to: text)?.hasSuffix("9. 줄\n10. ") == true)
         #expect(change?.selection.location == utf16(text) + utf16("\n10. "))
+    }
+
+    @Test func listsGoAsDeepAsTheTabs() {
+        // Every three levels the labels and bullets start over: 1. a. i. 1. a. i. …
+        #expect((0..<7).map { MemoLists.label(2, level: $0) } == ["2.", "b.", "ii.", "2.", "b.", "ii.", "2."])
+        let bullets = (0..<7).map { level in MemoLists.shownLabel(MemoLists.Marker(kind: .bullet, level: level, label: "•", length: level + 2, number: nil)) }
+        #expect(bullets == ["●", "○", "■", "●", "○", "■", "●"])
+        // Read at any level: letters one past a figures level, roman figures two past.
+        #expect(MemoLists.marker("\t\t\t\tb. 다섯째")?.number == 2)
+        #expect(MemoLists.marker("\t\t\t\t\tiii. 여섯째")?.number == 3)
+        #expect(MemoLists.marker("\t\t\t\t\t\t\t\t\t• 열째")?.level == 9)
+        #expect(MemoLists.marker("\t\t\ta. 아니요") == nil)
+        // Tab takes an item a level in however deep, numbers following with that level's letters.
+        let text = "1. 하나\n\ta. 둘\n\t\ti. 셋\n\t\tii. 넷"
+        let caret = utf16("1. 하나\n\ta. 둘\n\t\ti. 셋\n\t\ti")
+        #expect(applied(MemoLists.indent(in: text, selection: NSRange(location: caret, length: 0), by: 1), to: text)
+                == "1. 하나\n\ta. 둘\n\t\ti. 셋\n\t\t\t1. 넷")
+        // Return on a deep item goes on at its level; on an empty one, a level out.
+        let deep = "\t\t\t\t• 다섯"
+        #expect(applied(MemoLists.returnKey(in: deep, caret: utf16(deep)), to: deep) == deep + "\n\t\t\t\t• ")
+        let empty = "\t\t\t\t• "
+        #expect(applied(MemoLists.returnKey(in: empty, caret: utf16(empty)), to: empty) == "\t\t\t• ")
+        // `* ` after any number of tabs becomes a bullet.
+        #expect(MemoLists.autoBullet(in: "\t\t\t\t* ", caret: 6) != nil)
+        // Numbers count at each deep level, starting again under a new parent.
+        let counted = "1. 가\n\ta. 나\n\t\ti. 다\n\t\t\t1. 라\n\t\t\t1. 마\n\t\t\t\t1. 바\n\t\t\t1. 사"
+        var fixed = counted as NSString
+        for edit in MemoLists.renumber(in: counted, range: NSRange(location: 0, length: utf16(counted))) {
+            fixed = fixed.replacingCharacters(in: edit.range, with: edit.text) as NSString
+        }
+        #expect(fixed as String == "1. 가\n\ta. 나\n\t\ti. 다\n\t\t\t1. 라\n\t\t\t2. 마\n\t\t\t\ta. 바\n\t\t\t3. 사")
     }
 }

@@ -46,6 +46,9 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     private var openRule: NSRange?
     /// Whether some timeline line in the memo has a range (`08:30-09:15`), which widens the time column.
     private var hasRange = false
+    /// Which lines are timeline lines' children (`MemoTimeline.childLines`): a line that becomes
+    /// one, or stops being one, is made again though its own letters did not change.
+    private var childLines: [Int] = []
     /// The formula being written: its letters (a formula line's from the `$$ `), shown as LaTeX.
     private(set) var openFormula: NSRange?
     /// A formula left with Esc or → at its end: drawn again though the caret is beside it.
@@ -93,6 +96,9 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         self.textView = textView
         storage.delegate = self
         layout.delegate = self
+        // The memo has no font panel. Keeping it up to date reads the letters around the caret
+        // through substrings of SwiftUI's storage that are never freed, on every caret move.
+        textView.usesFontPanel = false
         // A wider or narrower memo fits its tables again.
         textView.postsFrameChangedNotifications = true
         if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
@@ -126,6 +132,7 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         guard let textView, let storage = textView.textContentStorage, let text = storage.textStorage else { return }
         let string = text.string
         let widened = Self.hasRange(in: string)
+        let children = MemoTimeline.childLines(in: string as NSString)
         var rule: NSRange?
         var formula: NSRange?
         var cell: TableCaret?
@@ -179,7 +186,8 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         }
         let cellMoved = cell != tableCaret
         let pickMoved = picked != pickedAttachment
-        guard force || widened != hasRange || rule != openRule || formula != openFormula || cellMoved || grown != nil || pickMoved else { return }
+        let childrenMoved = children != childLines
+        guard force || widened != hasRange || rule != openRule || formula != openFormula || cellMoved || grown != nil || pickMoved || childrenMoved else { return }
         var changed: [NSRange] = force || widened != hasRange ? [NSRange(location: 0, length: text.length)] : [openRule, rule].compactMap { $0 }
         if !force, widened == hasRange {
             changed += [grown, tableCaret?.row, cell?.row].compactMap { range in
@@ -187,6 +195,20 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             }
         }
         tableCaret = cell
+        if !force, widened == hasRange, childrenMoved {
+            // The lines that became children or stopped being ones, found by counting lines.
+            let moved = Set(children).symmetricDifference(childLines)
+            let letters = string as NSString
+            let last = moved.max() ?? -1
+            var start = 0, index = 0
+            while start < letters.length, index <= last {
+                let line = letters.lineRange(for: NSRange(location: start, length: 0))
+                if moved.contains(index) { changed.append(line) }
+                start = NSMaxRange(line)
+                index += 1
+            }
+        }
+        childLines = children
         if !force, widened == hasRange, pickMoved {
             changed += [pickedAttachment, picked].compactMap { location in
                 location.flatMap { $0 < text.length ? (string as NSString).paragraphRange(for: NSRange(location: $0, length: 0)) : nil }
@@ -309,7 +331,7 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         if let open = openFormula, NSMaxRange(open) <= text.length,
            let formula = Self.formulas(in: text, paragraph: (text.string as NSString).paragraphRange(for: open)).first(where: { $0.letters == open }) {
             let ink = formula.latex.length > 0 ? Self.palette(text.attribute(Self.inkKey, at: formula.latex.location, effectiveRange: nil)) : nil
-            shown = (text.attributedSubstring(from: formula.latex).string, formula.isDisplay, ink, frames(of: formula.letters))
+            shown = ((text.string as NSString).substring(with: formula.latex), formula.isDisplay, ink, frames(of: formula.letters))
         } else if let empty = emptyFormula, empty <= text.length {
             shown = ("", false, nil, frames(of: NSRange(location: empty, length: 0)))
         }
@@ -332,13 +354,28 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     private func placeTips() {
         guard let textView, let text = textView.textStorage else { return }
         // Not again for a caret move alone.
-        let placedFor = (text.string.hashValue, openFormula, textView.bounds.width)
+        let string = text.string as NSString
+        // Most memos have no formula: nothing to look through on each key.
+        let whole = NSRange(location: 0, length: string.length)
+        var hasMath = string.range(of: MemoMath.displayMark).location != NSNotFound
+        if !hasMath {
+            text.enumerateAttribute(Self.mathKey, in: whole, options: [.longestEffectiveRangeNotRequired]) { value, _, stop in
+                if Self.isOn(value) { hasMath = true; stop.pointee = true }
+            }
+        }
+        if !hasMath {
+            if !tips.isEmpty { tips.forEach(textView.removeToolTip) }
+            tips = []
+            tipOwners = []
+            tipsPlacedFor = nil
+            return
+        }
+        let placedFor = ((string as String).hashValue, openFormula, textView.bounds.width)
         if let last = tipsPlacedFor, last.letters == placedFor.0, last.open == placedFor.1, last.width == placedFor.2 { return }
         tipsPlacedFor = placedFor
         tips.forEach(textView.removeToolTip)
         tips = []
         tipOwners = []
-        let string = text.string as NSString
         string.enumerateSubstrings(in: NSRange(location: 0, length: string.length), options: [.byParagraphs, .substringNotRequired]) { _, _, paragraph, _ in
             for formula in Self.formulas(in: text, paragraph: paragraph) where formula.letters != self.openFormula && formula.latex.length > 0 {
                 guard let reason = FormulaPicture.unreadableReason(string.substring(with: formula.latex)) else { continue }
@@ -406,11 +443,11 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         }
         // A code block keeps its own face.
         if text.attribute(.font, at: range.location, effectiveRange: nil).map({ ($0 as? NSFont)?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true }) == true {
-            return dressAttachments(nil, text, range).map(NSTextParagraph.init(attributedString:))
+            return NSTextParagraph(attributedString: dressAttachments(nil, text, range) ?? text.copiedPart(range))
         }
         // The caret as it is now: during an edit the rule's range has already moved.
         if MemoTimeline.isRule(line), !caretIsIn(range) {
-            let shown = NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
+            let shown = text.copiedPart(range)
             let letters = NSRange(location: 0, length: (line as NSString).length)
             // Tiny and clear, so a long run of dashes never wraps; the fragment draws the line.
             shown.addAttributes([.foregroundColor: NSColor.clear, .font: NSFont.systemFont(ofSize: 1), .backgroundColor: NSColor.clear], range: letters)
@@ -418,7 +455,8 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             return NSTextParagraph(attributedString: shown)
         }
         let shown = MemoTimeline.stampLength(line).map { stampParagraph(text, range, line, $0) } ?? blockParagraph(text, range, line)
-        return dressAttachments(dressFormulas(shown, text, range), text, range).map(NSTextParagraph.init(attributedString:))
+        // A plain paragraph too is made here: TextKit's own would take a substring of the memo's text.
+        return NSTextParagraph(attributedString: dressAttachments(dressFormulas(shown, text, range), text, range) ?? text.copiedPart(range))
     }
 
     // MARK: Attachments
@@ -435,7 +473,7 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             }
         }
         guard !found.isEmpty else { return shown }
-        let shown = shown ?? NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
+        let shown = shown ?? text.copiedPart(range)
         guard shown.length == range.length else { return shown }
         let shelf = AttachmentShelf.shared
         for item in found {
@@ -503,13 +541,13 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
 
     /// A timeline line: the time in figures and soft ink, the words from a column after it.
     private func stampParagraph(_ text: NSTextStorage, _ range: NSRange, _ line: String, _ length: Int) -> NSMutableAttributedString {
-        let shown = NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
+        let shown = text.copiedPart(range)
         let stamp = NSRange(location: 0, length: (String(line.prefix(length)) as NSString).length)
         let size = (text.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)?.pointSize ?? MemoStyle.size
         let figures = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .regular)
         shown.addAttributes([.font: figures, .foregroundColor: NSColor(Color.inkSoft)], range: stamp)
         let width = Self.width(of: String(line.prefix(length)), font: figures)
-        let column = Self.width(of: Self.hasRange(in: text.string) ? "00.00 00:00-00:00 " : "00.00 00:00 ", font: figures)
+        let column = stampColumn(size: size)
         // The space after the time stretches to the column, so every line's words start together.
         if stamp.length < (line as NSString).length {
             let space = Self.width(of: " ", font: figures)
@@ -521,12 +559,22 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         return shown
     }
 
-    /// A list item, a quote, or a title, heading or subheading line as drawn; nil for any other.
+    /// Where a timeline line's words start: the time's figures and a space, wider when some line has a range.
+    private func stampColumn(size: CGFloat) -> CGFloat {
+        let figures = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .regular)
+        return Self.width(of: hasRange ? "00.00 00:00-00:00 " : "00.00 00:00 ", font: figures)
+    }
+
+    /// A list item, a quote, a timeline line's child, or a title, heading or subheading line as
+    /// drawn; nil for any other.
     private func blockParagraph(_ text: NSTextStorage, _ range: NSRange, _ line: String) -> NSMutableAttributedString? {
-        let marker = MemoLists.marker(line)
+        let string = text.string as NSString
+        let letters = NSRange(location: range.location, length: (line as NSString).length)
+        let isChild = MemoTimeline.isChild(letters, in: string)
+        let marker = MemoLists.marker(line, offset: isChild ? 1 : 0)
         let paragraph = Self.paragraph(text.attribute(Self.paragraphKey, at: range.location, effectiveRange: nil))
-        guard marker != nil || paragraph != nil else { return nil }
-        let shown = NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
+        guard marker != nil || paragraph != nil || isChild else { return nil }
+        let shown = text.copiedPart(range)
         let whole = NSRange(location: 0, length: shown.length)
         var style = ((shown.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
         switch paragraph {
@@ -562,9 +610,19 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             style.headIndent = quoteIndent
             shown.addAttribute(.memoQuote, value: true, range: whole)
         }
+        // A timeline line's child: its first tab reaches the time's words, the rest a level each.
+        let childIndent = isChild ? stampColumn(size: MemoStyle.size) : 0
+        if isChild, marker == nil {
+            let tabs = max(1, line.prefix { $0 == "\t" }.count)
+            style.tabStops = (1...tabs).map { NSTextTab(textAlignment: .left, location: childIndent + CGFloat($0 - 1) * MemoLists.levelIndent) }
+            style.defaultTabInterval = MemoLists.levelIndent
+            style.headIndent = childIndent + CGFloat(tabs - 1) * MemoLists.levelIndent
+        }
         if let marker, marker.kind != .quote {
             // A tab a level; the marker, then the words from a column after it, wrapped lines too.
-            style.tabStops = (1...MemoLists.maxLevel).map { NSTextTab(textAlignment: .left, location: quoteIndent + CGFloat($0) * MemoLists.levelIndent) }
+            // As many as the item's level needs, however deep; in a child, from the time's words.
+            let base = quoteIndent + childIndent
+            style.tabStops = (1...max(1, marker.level)).map { NSTextTab(textAlignment: .left, location: base + CGFloat($0 - marker.offset) * MemoLists.levelIndent) }
             style.defaultTabInterval = MemoLists.levelIndent
             let label = NSRange(location: marker.labelOffset, length: (marker.label as NSString).length)
             let drawn = MemoLists.shownLabel(marker)
@@ -584,7 +642,7 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
             let width = Self.width(of: drawn, font: font) + Self.width(of: " ", font: font)
             let column = marker.kind == .number ? Self.numberColumn : MemoLists.levelIndent
             shown.addAttribute(.kern, value: max(0, column - width), range: space)
-            style.headIndent = quoteIndent + CGFloat(marker.level) * MemoLists.levelIndent + max(column, width)
+            style.headIndent = base + CGFloat(marker.labelLevel) * MemoLists.levelIndent + max(column, width)
         }
         shown.addAttribute(.paragraphStyle, value: style, range: whole)
         return shown
@@ -596,7 +654,7 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     private func dressFormulas(_ shown: NSMutableAttributedString?, _ text: NSTextStorage, _ range: NSRange) -> NSMutableAttributedString? {
         let formulas = Self.formulas(in: text, paragraph: range)
         guard !formulas.isEmpty else { return shown }
-        let shown = shown ?? NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
+        let shown = shown ?? text.copiedPart(range)
         // Every change below keeps the letters' count, so the caret's places stay the text's.
         guard shown.length == range.length else { return shown }
         let style = ((shown.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
@@ -724,8 +782,20 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         return paragraph.trimmingCharacters(in: .newlines)
     }
 
+    /// Some line starts with a time range (`11.02 08:30-09:15`). Line by line in the letters, only
+    /// a line with `-` where a range has it read further: this runs on every key.
     private static func hasRange(in string: String) -> Bool {
-        string.split(separator: "\n", omittingEmptySubsequences: true).contains { MemoTimeline.stampLength($0) == 17 }
+        let letters = string as NSString
+        var start = 0
+        while start < letters.length {
+            let line = letters.lineRange(for: NSRange(location: start, length: 0))
+            if line.length >= 17, letters.character(at: line.location + 11) == 0x2D, letters.character(at: line.location + 2) == 0x2E,
+               MemoTimeline.stampLength(letters.substring(with: NSRange(location: line.location, length: min(18, line.length)))) == 17 {
+                return true
+            }
+            start = NSMaxRange(line)
+        }
+        return false
     }
 
     private static func width(of letters: String, font: NSFont) -> CGFloat {
@@ -987,5 +1057,18 @@ struct MemoPrint: View {
         }
         .textStyle(.memo)
         .foregroundStyle(.ink)
+    }
+}
+
+extension NSAttributedString {
+    /// `range`'s letters and attributes as a string of its own. Not `attributedSubstring(from:)`:
+    /// on the memo's text (SwiftUI's storage) that makes a substring tied to itself, never freed,
+    /// and the memo makes one for each paragraph it draws again, on every key.
+    func copiedPart(_ range: NSRange) -> NSMutableAttributedString {
+        let part = NSMutableAttributedString(string: (string as NSString).substring(with: range))
+        enumerateAttributes(in: range) { attributes, run, _ in
+            part.setAttributes(attributes, range: NSRange(location: run.location - range.location, length: run.length))
+        }
+        return part
     }
 }

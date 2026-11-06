@@ -1,8 +1,9 @@
 import Foundation
 
 /// Lists and quotes in a memo: letters at the front of a line that the memo draws its own way. A
-/// list item is up to two tabs (its level) and a marker: `• ` (bullet), `- ` (dash), or a number
-/// (`1. `, `a. ` one level in, `i. ` two levels in); a quote is `> `, and a list item can sit in a
+/// list item is any number of tabs (its level) and a marker: `• ` (bullet), `- ` (dash), or a
+/// number (`1. `, `a. ` one level in, `i. ` two levels in, then figures, letters and roman figures
+/// again every three levels); a quote is `> `, and a list item can sit in a
 /// quote (`> • `, `> \t1. `). The letters are what is stored, synced and mirrored to Notes; the
 /// editor only draws them with a hanging indent.
 ///
@@ -18,7 +19,7 @@ public enum MemoLists {
     public struct Marker: Equatable, Sendable {
         /// `.quote` for a quote line with no list item in it.
         public var kind: Kind
-        /// 0 to `maxLevel`: how many tabs come before the marker.
+        /// How many tabs come before the marker, from 0; there is no deepest level.
         public var level: Int
         /// The marker's letters (`•`, `-`, `12.`, `b.`, `>`), without the tabs or the space after.
         public var label: String
@@ -28,15 +29,22 @@ public enum MemoLists {
         public var number: Int?
         /// A list item inside a quote: the line starts with `> `.
         public var quoted = false
+        /// Tabs that belong to a timeline line above, not to the list: 1 for a list in a timeline
+        /// line's child (`MemoTimeline.isChild`), whose levels count from there.
+        public var offset = 0
 
-        public init(kind: Kind, level: Int, label: String, length: Int, number: Int?, quoted: Bool = false) {
+        public init(kind: Kind, level: Int, label: String, length: Int, number: Int?, quoted: Bool = false, offset: Int = 0) {
             self.kind = kind
             self.level = level
             self.label = label
             self.length = length
             self.number = number
             self.quoted = quoted
+            self.offset = offset
         }
+
+        /// The level the list's labels and bullets go by: its tabs past the timeline line's.
+        public var labelLevel: Int { level - offset }
 
         /// The line is in a quote, with or without a list item.
         public var isQuoted: Bool { kind == .quote || quoted }
@@ -61,36 +69,43 @@ public enum MemoLists {
         public var selection: NSRange
     }
 
-    /// Three levels: no tab, one, two.
-    public static let maxLevel = 2
+    /// Levels look alike every three (bullets `●○■`, numbers `1. a. i.`), however deep a list goes.
+    public static let levelCycle = 3
     /// Each level's indent, in points.
     public static let levelIndent: CGFloat = 22
 
     // MARK: Reading lines
 
-    public static func marker<S: StringProtocol>(_ line: S) -> Marker? {
+    /// `offset`: tabs at the line's front that belong to a timeline line above (`Marker.offset`).
+    public static func marker<S: StringProtocol>(_ line: S, offset: Int = 0) -> Marker? {
         let line = String(line)
-        guard line.hasPrefix("> ") else { return listMarker(line) }
+        guard line.hasPrefix("> ") else { return listMarker(line, offset: offset) }
         let rest = String(line.dropFirst(2))
-        guard var item = listMarker(rest) else { return Marker(kind: .quote, level: 0, label: ">", length: 2, number: nil) }
+        guard var item = listMarker(rest, offset: 0) else { return Marker(kind: .quote, level: 0, label: ">", length: 2, number: nil) }
         item.quoted = true
         item.length += 2
         return item
     }
 
+    /// The marker of `line` (its letters without the line break) in `string`, a timeline line's
+    /// child counting its levels from the timeline line.
+    public static func marker(in string: NSString, line: NSRange) -> Marker? {
+        marker(string.substring(with: line), offset: MemoTimeline.isChild(line, in: string) ? 1 : 0)
+    }
+
     /// A list item's marker at the front of `line`, no quote.
-    private static func listMarker(_ line: String) -> Marker? {
+    private static func listMarker(_ line: String, offset: Int) -> Marker? {
         let letters = Array(line.utf16)
         var level = 0
         while level < letters.count, letters[level] == 0x09 { level += 1 }
-        guard level <= maxLevel else { return nil }
+        let offset = min(offset, level)
         let rest = String(utf16CodeUnits: Array(letters[level...]), count: letters.count - level)
-        if rest.hasPrefix("• ") { return Marker(kind: .bullet, level: level, label: "•", length: level + 2, number: nil) }
-        if rest.hasPrefix("- ") { return Marker(kind: .dash, level: level, label: "-", length: level + 2, number: nil) }
+        if rest.hasPrefix("• ") { return Marker(kind: .bullet, level: level, label: "•", length: level + 2, number: nil, offset: offset) }
+        if rest.hasPrefix("- ") { return Marker(kind: .dash, level: level, label: "-", length: level + 2, number: nil, offset: offset) }
         // `12. `, `b. `, `iv. `: letters up to a full stop and a space.
         guard let stop = rest.firstIndex(of: "."), rest[rest.index(after: stop)...].hasPrefix(" ") else { return nil }
         let label = String(rest[..<stop])
-        guard !label.isEmpty, label.count <= (level == 0 ? 3 : 4), let number = number(of: label, level: level) else { return nil }
+        guard !label.isEmpty, label.count <= ((level - offset) % levelCycle == 0 ? 3 : 4), let number = number(of: label, level: level - offset) else { return nil }
         // `11. 4. 회의` is a date, not item 11; `1. 3.5%` is an item.
         let words = rest[rest.index(stop, offsetBy: 2)...]
         let figures = words.prefix { $0.isASCII && $0.isNumber }
@@ -98,50 +113,50 @@ public enum MemoLists {
             let after = words.dropFirst(figures.count + 1)
             if after.isEmpty || after.hasPrefix(" ") { return nil }
         }
-        return Marker(kind: .number, level: level, label: label + ".", length: level + label.utf16.count + 2, number: number)
+        return Marker(kind: .number, level: level, label: label + ".", length: level + label.utf16.count + 2, number: number, offset: offset)
     }
 
-    /// A number label's place. Figures count at every level; letters only one level in and roman
-    /// figures only two, so `a. ` at the front of a plain line stays words.
+    /// A number label's place. Figures count at every level; letters only one level in (four,
+    /// seven …) and roman figures only two (five, eight …), so `a. ` at the front of a plain line stays words.
     static func number(of label: String, level: Int) -> Int? {
         if label.allSatisfy({ $0.isASCII && $0.isNumber }) { return Int(label) }
-        switch level {
+        switch level % levelCycle {
         case 1: return alphabetic(label)
         case 2: return roman(label)
         default: return nil
         }
     }
 
-    /// `1.`, `a.`, `i.` for the item's level.
+    /// `1.`, `a.`, `i.` for the item's level, again from `1.` every three levels.
     public static func label(_ number: Int, level: Int) -> String {
-        switch level {
+        switch level % levelCycle {
         case 1: alphabetic(number) + "."
         case 2: roman(number) + "."
         default: "\(number)."
         }
     }
 
-    /// What a marker looks like on screen: bullets `●` `○` `■` by level (drawn small, but larger
-    /// than a `•` would be), a dash `–`; numbers and quotes as stored. Always as many UTF-16 units
-    /// as the stored letter.
+    /// What a marker looks like on screen: bullets `●` `○` `■` by level, again every three levels
+    /// (drawn small, but larger than a `•` would be), a dash `–`; numbers and quotes as stored.
+    /// Always as many UTF-16 units as the stored letter.
     public static func shownLabel(_ marker: Marker) -> String {
         switch marker.kind {
-        case .bullet: ["●", "○", "■"][min(marker.level, 2)]
+        case .bullet: ["●", "○", "■"][marker.labelLevel % levelCycle]
         case .dash: "–"
         case .number, .quote: marker.label
         }
     }
 
     /// The letters a new item of `kind` starts with at `level`, after `> ` in a quote.
-    static func prefix(_ kind: Kind, level: Int, number: Int = 1, quoted: Bool = false) -> String {
-        (quoted && kind != .quote ? "> " : "") + listPrefix(kind, level: level, number: number)
+    static func prefix(_ kind: Kind, level: Int, number: Int = 1, quoted: Bool = false, offset: Int = 0) -> String {
+        (quoted && kind != .quote ? "> " : "") + listPrefix(kind, level: level, number: number, offset: min(offset, level))
     }
 
-    private static func listPrefix(_ kind: Kind, level: Int, number: Int) -> String {
+    private static func listPrefix(_ kind: Kind, level: Int, number: Int, offset: Int) -> String {
         switch kind {
         case .bullet: String(repeating: "\t", count: level) + "• "
         case .dash: String(repeating: "\t", count: level) + "- "
-        case .number: String(repeating: "\t", count: level) + label(number, level: level) + " "
+        case .number: String(repeating: "\t", count: level) + label(number, level: level - offset) + " "
         case .quote: "> "
         }
     }
@@ -158,7 +173,7 @@ public enum MemoLists {
         var typed = string.substring(with: NSRange(location: line.location, length: caret - line.location))
         // In a quote too.
         if typed.hasPrefix("> ") { typed.removeFirst(2) }
-        guard typed.hasSuffix("* "), typed.dropLast(2).allSatisfy({ $0 == "\t" }), typed.count - 2 <= maxLevel else { return nil }
+        guard typed.hasSuffix("* "), typed.dropLast(2).allSatisfy({ $0 == "\t" }) else { return nil }
         return Change(edits: [Edit(range: NSRange(location: caret - 2, length: 1), text: "•")], selection: NSRange(location: caret, length: 0))
     }
 
@@ -169,13 +184,17 @@ public enum MemoLists {
         let string = text as NSString
         guard caret <= string.length else { return nil }
         let line = lineContent(of: string.lineRange(for: NSRange(location: caret, length: 0)), in: string)
-        guard let marker = marker(string.substring(with: line)), caret >= line.location + marker.length else { return nil }
+        guard let marker = marker(in: string, line: line) else { return childReturn(in: string, line: line, caret: caret) }
+        guard caret >= line.location + marker.length else { return nil }
         let words = string.substring(with: NSRange(location: line.location + marker.length, length: line.length - marker.length))
         var builder = Builder(string, selection: NSRange(location: caret, length: 0))
         if words.allSatisfy(\.isWhitespace) {
-            if marker.level > 0, marker.kind != .quote {
+            if marker.offset > 0, marker.level <= marker.offset {
+                // The list ends; the timeline line's child goes on.
+                builder.replace(NSRange(location: line.location, length: marker.length), with: String(repeating: "\t", count: marker.offset))
+            } else if marker.level > 0, marker.kind != .quote {
                 builder.replace(NSRange(location: line.location, length: marker.length),
-                                with: prefix(marker.kind, level: marker.level - 1, quoted: marker.quoted))
+                                with: prefix(marker.kind, level: marker.level - 1, quoted: marker.quoted, offset: marker.offset))
             } else if marker.quoted {
                 // The list ends; the quote goes on.
                 builder.replace(NSRange(location: line.location, length: marker.length), with: "> ")
@@ -183,12 +202,31 @@ public enum MemoLists {
                 builder.replace(NSRange(location: line.location, length: line.length), with: "")
             }
         } else {
-            let next = prefix(marker.kind, level: marker.level, number: (marker.number ?? 0) + 1, quoted: marker.quoted)
+            let next = prefix(marker.kind, level: marker.level, number: (marker.number ?? 0) + 1, quoted: marker.quoted, offset: marker.offset)
             builder.replace(NSRange(location: caret, length: 0), with: "\n" + next)
             // The caret after the new marker, not before it.
             builder.selection = NSRange(location: caret + 1 + next.utf16.count, length: 0)
         }
         builder.renumber(around: line.location)
+        return builder.change
+    }
+
+    /// Return on a timeline line's child with no list in it: the next line is a child too, at the
+    /// same tabs; on an empty one, the children end and it becomes a plain empty line.
+    private static func childReturn(in string: NSString, line: NSRange, caret: Int) -> Change? {
+        guard MemoTimeline.isChild(line, in: string) else { return nil }
+        let letters = string.substring(with: line)
+        let tabs = String(letters.prefix { $0 == "\t" })
+        let tabCount = (tabs as NSString).length
+        guard caret >= line.location + tabCount else { return nil }
+        var builder = Builder(string, selection: NSRange(location: caret, length: 0))
+        if letters.allSatisfy({ $0 == "\t" || $0 == " " }) {
+            builder.replace(line, with: "")
+            builder.selection = NSRange(location: line.location, length: 0)
+        } else {
+            builder.replace(NSRange(location: caret, length: 0), with: "\n" + tabs)
+            builder.selection = NSRange(location: caret + 1 + tabCount, length: 0)
+        }
         return builder.change
     }
 
@@ -198,9 +236,11 @@ public enum MemoLists {
         let string = text as NSString
         guard caret <= string.length else { return nil }
         let line = lineContent(of: string.lineRange(for: NSRange(location: caret, length: 0)), in: string)
-        guard let marker = marker(string.substring(with: line)), caret == line.location + marker.length else { return nil }
+        guard let marker = marker(in: string, line: line), caret == line.location + marker.length else { return nil }
         var builder = Builder(string, selection: NSRange(location: caret, length: 0))
-        builder.replace(NSRange(location: line.location, length: marker.length), with: marker.quoted ? "> " : "")
+        // In a timeline line's child, the words stay in it.
+        builder.replace(NSRange(location: line.location, length: marker.length),
+                        with: marker.quoted ? "> " : String(repeating: "\t", count: marker.offset))
         builder.renumber(around: line.location)
         return builder.change
     }
@@ -215,17 +255,18 @@ public enum MemoLists {
         // Bottom to top, so the lines above keep their offsets.
         for line in lines(touching: selection, in: string).reversed() {
             let letters = string.substring(with: line)
-            if let marker = marker(letters) {
+            if let marker = marker(in: string, line: line) {
                 guard marker.kind != .quote else { continue }
                 let level = marker.level + step
-                guard (0...maxLevel).contains(level) else { continue }
+                // Not out of a timeline line's child: its first tab is the child's.
+                guard level >= marker.offset else { continue }
                 // Numbers take the new level's letters; renumbering below sets their place.
                 builder.replace(NSRange(location: line.location, length: marker.length),
-                                with: prefix(marker.kind, level: level, number: marker.number ?? 1, quoted: marker.quoted))
+                                with: prefix(marker.kind, level: level, number: marker.number ?? 1, quoted: marker.quoted, offset: marker.offset))
                 moved = true
             } else if !listsOnly {
                 let tabs = letters.prefix { $0 == "\t" }.count
-                if step > 0, tabs <= maxLevel {
+                if step > 0 {
                     builder.replace(NSRange(location: line.location, length: 0), with: "\t")
                     moved = true
                 } else if step < 0, tabs > 0 {
@@ -250,7 +291,7 @@ public enum MemoLists {
             let filled = targets.filter { !string.substring(with: $0).allSatisfy(\.isWhitespace) }
             if !filled.isEmpty { targets = filled }
         }
-        let markers = targets.map { marker(string.substring(with: $0)) }
+        let markers = targets.map { marker(in: string, line: $0) }
         var builder = Builder(string, selection: selection)
         if kind == .quote {
             let isOff = markers.allSatisfy { $0?.isQuoted == true }
@@ -263,13 +304,16 @@ public enum MemoLists {
                 let quote = marker?.isQuoted == true ? 2 : 0
                 let isItem = marker.map { $0.kind != .quote } ?? false
                 if isOff {
-                    builder.replace(NSRange(location: line.location + quote, length: marker!.length - quote), with: "")
+                    // A timeline line's child stays one.
+                    builder.replace(NSRange(location: line.location + quote, length: marker!.length - quote),
+                                    with: String(repeating: "\t", count: marker!.offset))
                 } else {
                     // A plain line's own leading tabs become its level.
                     let rest = string.substring(with: NSRange(location: line.location + quote, length: line.length - quote))
-                    let tabs = isItem ? marker!.level : min(rest.prefix { $0 == "\t" }.count, maxLevel)
+                    let tabs = isItem ? marker!.level : rest.prefix { $0 == "\t" }.count
                     let old = NSRange(location: line.location + quote, length: isItem ? marker!.length - quote : tabs)
-                    builder.replace(old, with: prefix(kind, level: tabs, number: 1))
+                    let offset = quote == 0 && MemoTimeline.isChild(line, in: string) ? 1 : 0
+                    builder.replace(old, with: prefix(kind, level: tabs, number: 1, offset: offset))
                 }
             }
         }
@@ -282,7 +326,7 @@ public enum MemoLists {
         let string = text as NSString
         guard location <= string.length else { return nil }
         let line = lineContent(of: string.lineRange(for: NSRange(location: location, length: 0)), in: string)
-        return marker(string.substring(with: line))
+        return marker(in: string, line: line)
     }
 
     // MARK: Numbering
@@ -357,40 +401,42 @@ public enum MemoLists {
             // Out to the whole run of list lines around them.
             while let first = lines.first, first.location > 0 {
                 let above = MemoLists.lineContent(of: string.lineRange(for: NSRange(location: first.location - 1, length: 0)), in: string)
-                guard MemoLists.marker(string.substring(with: above)).map({ $0.kind != .quote }) == true else { break }
+                guard MemoLists.marker(in: string, line: above).map({ $0.kind != .quote }) == true else { break }
                 lines.insert(above, at: 0)
             }
             var next = lines.last.map { NSMaxRange(string.lineRange(for: $0)) } ?? string.length
             while next < string.length {
                 let below = MemoLists.lineContent(of: string.lineRange(for: NSRange(location: next, length: 0)), in: string)
-                guard MemoLists.marker(string.substring(with: below)).map({ $0.kind != .quote }) == true else { break }
+                guard MemoLists.marker(in: string, line: below).map({ $0.kind != .quote }) == true else { break }
                 lines.append(below)
                 next = NSMaxRange(string.lineRange(for: below))
             }
             // Top to bottom, finding each line again after the edits above it.
             var location = lines.first?.location ?? 0
-            var counts: [Int?] = Array(repeating: nil, count: MemoLists.maxLevel + 1)
+            // Each level's count so far; grown as deeper levels come.
+            var counts: [Int?] = []
             // A quote above starts a list as a plain line does.
             var startsBlock = location == 0 || MemoLists.marker(string.substring(with: MemoLists.lineContent(
                 of: string.lineRange(for: NSRange(location: location - 1, length: 0)), in: string))).map { $0.kind == .quote } ?? true
             var quoted: Bool?
             for _ in lines {
                 let line = MemoLists.lineContent(of: string.lineRange(for: NSRange(location: location, length: 0)), in: string)
-                if let marker = MemoLists.marker(string.substring(with: line)), marker.kind != .quote {
+                if let marker = MemoLists.marker(in: string, line: line), marker.kind != .quote {
                     // Items in a quote and items out of it are two lists.
                     if let quoted, quoted != marker.quoted {
                         counts = counts.map { _ in nil }
                         startsBlock = true
                     }
                     quoted = marker.quoted
+                    if counts.count <= marker.level { counts += Array(repeating: nil, count: marker.level + 1 - counts.count) }
                     for deeper in (marker.level + 1)..<counts.count { counts[deeper] = nil }
                     if marker.kind == .number {
                         // A list's first item keeps the place it was typed with (`3. `), as in
                         // Markdown; a list under an item, or after a bullet, counts from one.
-                        let number = counts[marker.level].map { $0 + 1 } ?? (startsBlock && marker.level == 0 ? marker.number ?? 1 : 1)
+                        let number = counts[marker.level].map { $0 + 1 } ?? (startsBlock && marker.labelLevel == 0 ? marker.number ?? 1 : 1)
                         counts[marker.level] = number
                         replace(NSRange(location: line.location + marker.labelOffset, length: (marker.label as NSString).length),
-                                with: MemoLists.label(number, level: marker.level))
+                                with: MemoLists.label(number, level: marker.labelLevel))
                     } else {
                         // A bullet between numbers starts the count again.
                         counts[marker.level] = nil
