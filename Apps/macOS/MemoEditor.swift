@@ -47,6 +47,8 @@ final class MemoDraft {
     /// Where the selection's first line sits in the box, top-left origin; set by `MemoMenuHost`,
     /// which can ask the text view. Nil when it cannot tell.
     @ObservationIgnored var selectionLineRect: (() -> CGRect?)?
+    /// Where the selection's last line sits in the box, the same way; the format bar hangs under it.
+    @ObservationIgnored var selectionEndLineRect: (() -> CGRect?)?
     /// The caret's line in the box, top-left origin, measured from the text's layout so it is known
     /// even where the panel has scrolled it out of sight; set by `MemoMenuHost`. Nil without focus.
     @ObservationIgnored var caretLineRect: (() -> CGRect?)?
@@ -831,8 +833,6 @@ struct MemoEditor: View {
     @FocusState private var focused: Bool
     @Environment(\.isRenderingSnapshot) private var isRenderingSnapshot
     @Environment(\.undoManager) private var undoManager
-    /// The memo's top within the panel's scroll view, to put the bar where it fits.
-    @State private var top: CGFloat = 0
     /// The selected line in the memo, for putting the bar beside it.
     @State private var line: CGRect?
 
@@ -891,7 +891,6 @@ struct MemoEditor: View {
                 MemoFormatBar(draft: draft).offset(y: barY)
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { top = $0 }
         // Under the memo the bar would hang past the end of the scroll content, where clicks do not
         // reach it; the room is made inside the content instead.
         .padding(.bottom, showsBar ? max(0, barY + MemoFormatBar.height - height) : 0)
@@ -925,7 +924,7 @@ struct MemoEditor: View {
             draft.redrawLines?()
             // After the text view has laid the new selection out.
             Task { @MainActor in
-                line = draft.selectionLineRect?()
+                line = draft.selectionEndLineRect?()
                 if let caret = draft.caretLineRect?() { onCaretLine?(inBox(caret)) }
             }
         }
@@ -963,14 +962,11 @@ struct MemoEditor: View {
     /// Not for a picked card: its letter is selected, but there are no letters to format.
     private var showsBar: Bool { focused && draft.hasSelectedText && !draft.showsParagraphBar && draft.pickedAttachment == nil }
 
-    /// The bar's top within the memo. Beside the selected line: over it where the panel shows
-    /// enough room, otherwise under it. Without the line's place, over the memo or at its foot.
+    /// The bar's top within the memo: under the selection's last line, so the lines over it (and
+    /// the pinned format strip above the memo) stay in sight. Without the line's place, at the memo's foot.
     private var barY: CGFloat {
-        let barHeight = MemoFormatBar.height
-        guard let line, line.maxY > 0, line.minY < height else {
-            return top > barHeight + Metrics.spaceL ? -barHeight - Metrics.spaceS : height - barHeight - Metrics.spaceS
-        }
-        return top + line.minY > barHeight + Metrics.spaceL ? line.minY - barHeight - Metrics.spaceS : line.maxY + Metrics.spaceS
+        guard let line, line.maxY > 0, line.minY < height else { return height + Metrics.spaceS }
+        return line.maxY + Metrics.spaceS
     }
 }
 

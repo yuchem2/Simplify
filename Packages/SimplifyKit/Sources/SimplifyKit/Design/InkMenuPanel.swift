@@ -146,7 +146,11 @@ private final class InkMenuLevelHost: NSView {
 
     override var isFlipped: Bool { true }
 
-    var contentSize: CGSize { hosting.fittingSize }
+    /// Rounded up: a panel a fraction narrower than its lines would cut the widest one short.
+    var contentSize: CGSize {
+        let size = hosting.fittingSize
+        return CGSize(width: size.width.rounded(.up), height: size.height.rounded(.up))
+    }
 
     override func layout() {
         super.layout()

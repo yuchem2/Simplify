@@ -324,11 +324,14 @@ public struct InkMenuView: View {
                 Mark(swatch.color, size: 10, shape: swatch.shape)
                     .opacity(item.isEnabled ? 1 : 0.5)
             }
-            Text(item.title).lineLimit(1)
+            // Both at their full width: the menu sizes to its widest line, and a shortcut must
+            // never be cut to "⌥…" by a rounding of that width.
+            Text(item.title).lineLimit(1).fixedSize()
             Spacer(minLength: 0)
             if let detail = item.detail {
                 Text(detail)
                     .monospacedDigit()
+                    .fixedSize()
                     .foregroundStyle(soft)
                     .padding(.leading, Metrics.spaceXxl)
             }

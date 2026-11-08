@@ -333,6 +333,7 @@ struct MemoMenuHost: NSViewRepresentable {
             stop()
             guard window != nil else { return }
             draft?.selectionLineRect = { [weak self] in self?.selectionLineRect() }
+            draft?.selectionEndLineRect = { [weak self] in self?.selectionLineRect(atEnd: true) }
             draft?.selectionLineInWindow = { [weak self] in self?.selectionLineInWindow() }
             draft?.caretLineRect = { [weak self] in self?.caretLineRect() }
             draft?.inkTextView = { [weak self] in self?.inkTextView() }
@@ -587,13 +588,19 @@ struct MemoMenuHost: NSViewRepresentable {
             return MemoTableKeys.perform(action, in: textView)
         }
 
-        /// The selection's first line in this view, asked of the focused text view the way an input
-        /// method asks it. Nil when the memo does not have focus.
+        /// The selection's first line (or last, `atEnd`) in this view, asked of the focused text view
+        /// the way an input method asks it. Nil when the memo does not have focus.
         @MainActor
-        private func selectionLineRect() -> CGRect? {
+        private func selectionLineRect(atEnd: Bool = false) -> CGRect? {
             guard let window, let draft, draft.hasFocus, let client = window.firstResponder as? NSTextInputClient,
-                  let start = draft.selectedRanges.first?.lowerBound else { return nil }
-            let offset = String(draft.text[draft.text.startIndex..<start].characters).utf16.count
+                  let first = draft.selectedRanges.first, let last = draft.selectedRanges.last else { return nil }
+            var point = atEnd ? last.upperBound : first.lowerBound
+            // A selection ending with its line break ends on that line, not at the next line's start.
+            if atEnd, point > first.lowerBound {
+                let before = draft.text.characters.index(before: point)
+                if draft.text.characters[before] == "\n" { point = before }
+            }
+            let offset = String(draft.text[draft.text.startIndex..<point].characters).utf16.count
             let screen = client.firstRect(forCharacterRange: NSRange(location: offset, length: 0), actualRange: nil)
             guard screen != .zero else { return nil }
             let rect = convert(window.convertFromScreen(screen), from: nil)
