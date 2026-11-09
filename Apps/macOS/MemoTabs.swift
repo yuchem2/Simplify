@@ -5,17 +5,20 @@ import SimplifyKit
 // A period's several memos in the panel: the tabs under the "메모" rule (하나씩), or the memos one
 // under another (모아 보기), with names changed in place and 메모 지우기 asked in the panel.
 
-/// The tabs of the period's memos in the order they were made, then `+ 새 메모`. The open memo's
-/// name is ink with a line under it; double-click or 이름 바꾸기 changes a name in place.
+/// The tabs of the period's memos in their order, then `+ 새 메모`. The open memo's name is ink
+/// with a line under it; double-click or 이름 바꾸기 changes a name in place, and a tab dragged a
+/// few points goes to another place (never after `+ 새 메모`).
 struct MemoTabsRow: View {
     @Bindable var draft: MemoDraft
     let tabs: [MemoBook.Tab]
+    @State private var reorder = MemoReorder(axis: .horizontal, gap: Metrics.spaceL)
 
     var body: some View {
         FlowRow(spacing: Metrics.spaceL, lineSpacing: Metrics.spaceXs) {
-            ForEach(tabs, id: \.id) { tab in
+            ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
                 MemoTabLabel(draft: draft, tab: tab, isOn: tab.id == draft.noteID, font: TextStyle.item.font,
-                             nsFont: .systemFont(ofSize: TextStyle.item.size))
+                             nsFont: .systemFont(ofSize: TextStyle.item.size),
+                             place: MemoTabLabel.Place(index: index, ids: tabs.compactMap(\.id), reorder: reorder))
             }
             Button("+ 새 메모") { draft.newMemo() }
                 .buttonStyle(.plain)
@@ -25,8 +28,160 @@ struct MemoTabsRow: View {
                 .help("이 기간에 새 메모를 만들어요")
                 .disabled(draft.isUnreadable && draft.noteID == nil)
         }
+        .coordinateSpace(.named(MemoReorder.tabsSpace))
+        .overlay(alignment: .topLeading) {
+            MemoReorderMarks(reorder: reorder, name: tabs.first { $0.id == reorder.dragging }?.name, font: TextStyle.item.font, isHeader: false)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("메모 목록")
+    }
+}
+
+/// A memo's tab (하나씩) or header (모아 보기) being dragged to another place among its period's
+/// memos: where each one is, where the pointer is, and the gap it would go into.
+@MainActor
+@Observable
+final class MemoReorder {
+    enum Axis { case horizontal, vertical }
+
+    nonisolated static let tabsSpace = "memoTabs"
+    /// 모아 보기's memos, the panel's space for them.
+    nonisolated static let memosSpace = "panelMemos"
+
+    let axis: Axis
+    /// The room between two tabs or two memos, where the line stands.
+    let gap: CGFloat
+    /// The memo being dragged.
+    private(set) var dragging: UUID?
+    /// The pointer, in the tabs' or memos' own space.
+    private(set) var location: CGPoint = .zero
+    /// From the pointer to the dragged name's top-left corner, as it was picked up.
+    private(set) var grab: CGSize = .zero
+    /// The gap it would be put into: its index among the memos (counted before the move) and the
+    /// line drawn there. Nil over its own place, where letting go moves nothing.
+    private(set) var slot: (index: Int, line: CGRect)?
+    /// Each memo's tab or whole memo (header and letters), in the same space; not observed, since
+    /// every layout pass writes them.
+    @ObservationIgnored var frames: [UUID: CGRect] = [:]
+
+    init(axis: Axis, gap: CGFloat) {
+        self.axis = axis
+        self.gap = gap
+    }
+
+    func drag(_ id: UUID, start: CGPoint, at point: CGPoint, ids: [UUID]) {
+        if dragging != id {
+            dragging = id
+            let frame = frames[id] ?? CGRect(origin: start, size: .zero)
+            grab = CGSize(width: frame.minX - start.x, height: frame.minY - start.y)
+        }
+        location = point
+        let found = Self.slot(for: point, dragging: id, ids: ids, frames: frames, axis: axis, gap: gap)
+        if found?.index != slot?.index || found?.line != slot?.line { slot = found }
+    }
+
+    /// Lets go: the index to move to, if any.
+    func drop() -> Int? {
+        defer { cancel() }
+        return slot?.index
+    }
+
+    func cancel() {
+        dragging = nil
+        slot = nil
+    }
+
+    /// The gap nearest `point`: in 하나씩, among the tabs of the line the pointer is on (tabs wrap
+    /// onto several lines), before the first tab whose middle is past it; in 모아 보기, before the
+    /// first memo whose middle is under it. Nil when that is the dragged memo's own place.
+    static func slot(for point: CGPoint, dragging: UUID, ids: [UUID], frames: [UUID: CGRect], axis: Axis,
+                     gap: CGFloat) -> (index: Int, line: CGRect)? {
+        let items = ids.enumerated().compactMap { index, id in frames[id].map { (index: index, frame: $0) } }
+        guard let from = ids.firstIndex(of: dragging), !items.isEmpty else { return nil }
+        let index: Int
+        let line: CGRect
+        switch axis {
+        case .horizontal:
+            // Tabs of one line share a bottom edge (FlowRow lines them up by it).
+            var lines: [[(index: Int, frame: CGRect)]] = []
+            for item in items {
+                if let last = lines.last?.last, abs(last.frame.maxY - item.frame.maxY) < 2 {
+                    lines[lines.count - 1].append(item)
+                } else {
+                    lines.append([item])
+                }
+            }
+            func distance(_ row: [(index: Int, frame: CGRect)]) -> CGFloat {
+                let top = row.map(\.frame.minY).min()!, bottom = row.map(\.frame.maxY).max()!
+                return point.y < top ? top - point.y : point.y > bottom ? point.y - bottom : 0
+            }
+            let row = lines.min { distance($0) < distance($1) }!
+            let top = row.map(\.frame.minY).min()!, bottom = row.map(\.frame.maxY).max()!
+            if let next = row.first(where: { point.x < $0.frame.midX }) {
+                index = next.index
+                line = CGRect(x: next.frame.minX - gap / 2 - 1, y: top, width: 2, height: bottom - top)
+            } else {
+                let last = row.last!
+                index = last.index + 1
+                line = CGRect(x: last.frame.maxX + gap / 2 - 1, y: top, width: 2, height: bottom - top)
+            }
+        case .vertical:
+            let left = items.map(\.frame.minX).min()!, right = items.map(\.frame.maxX).max()!
+            if let next = items.first(where: { point.y < $0.frame.midY }) {
+                index = next.index
+                line = CGRect(x: left, y: next.frame.minY - gap / 2 - 1, width: right - left, height: 2)
+            } else {
+                let last = items.last!
+                index = last.index + 1
+                line = CGRect(x: left, y: last.frame.maxY + gap / 2 - 1, width: right - left, height: 2)
+            }
+        }
+        return index == from || index == from + 1 ? nil : (index, line)
+    }
+}
+
+/// The marks of a drag: an ink line where the memo would go (upright between tabs, across with
+/// round ends between memos) and the name lifted under the pointer like a scrap of paper; with
+/// reduced motion, the line alone.
+struct MemoReorderMarks: View {
+    let reorder: MemoReorder
+    let name: String?
+    let font: Font
+    let isHeader: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if let line = reorder.slot?.line {
+                Rectangle().fill(.ink)
+                    .frame(width: line.width, height: line.height)
+                    .overlay(alignment: .leading) {
+                        if isHeader {
+                            Circle().fill(.paper).overlay(Circle().strokeBorder(.ink, lineWidth: Metrics.lineSpine))
+                                .frame(width: 8, height: 8)
+                                .offset(x: -4)
+                        }
+                    }
+                    .offset(x: line.minX, y: line.minY)
+            }
+            if reorder.dragging != nil, let name, !reduceMotion {
+                Text(name)
+                    .font(font)
+                    .fontWeight(isHeader ? nil : .semibold)
+                    .foregroundStyle(.ink)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, Metrics.spaceS)
+                    .padding(.top, 1)
+                    .padding(.bottom, 3)
+                    .floatingFrame()
+                    .rotationEffect(.degrees(isHeader ? -1.5 : -2))
+                    .offset(x: reorder.location.x + reorder.grab.width - Metrics.spaceS,
+                            y: reorder.location.y + reorder.grab.height - 1)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -40,7 +195,16 @@ struct MemoTabLabel: View {
     let nsFont: NSFont
     /// 모아 보기's header: the name is its title, and the line under it runs across the memo.
     var isHeader = false
+    /// Where it stands among the period's memos, for dragging it and for 앞으로/뒤로 옮기기.
+    var place: Place?
     @State private var menuOpen = false
+
+    struct Place {
+        var index: Int
+        /// The period's memos in order.
+        var ids: [UUID]
+        let reorder: MemoReorder
+    }
 
     var body: some View {
         let renaming = tab.id != nil && draft.renaming == tab.id
@@ -81,16 +245,62 @@ struct MemoTabLabel: View {
                 Rectangle().fill(isOn || renaming ? Color.ink : Color.shade).frame(height: Metrics.lineSpine)
             }
         }
+        .opacity(isLifted ? 0.35 : 1)
         .contentShape(Rectangle())
         .onTapGesture { if !renaming { draft.select(tab.id) } }
         // Not exclusive: the first click opens the memo at once, the second starts the rename.
         .simultaneousGesture(TapGesture(count: 2).onEnded { if !renaming { draft.startRenaming(tab.id) } })
+        // A few points of movement first, so a click still opens and a double-click still renames.
+        .gesture(dragGesture, isEnabled: canMove)
+        // Switched off mid-drag (a pop, a rename): the drag ends without a drop.
+        .onChange(of: canMove) { if !canMove, isLifted { place?.reorder.cancel() } }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(MemoReorder.tabsSpace)) } action: { frame in
+            // A header's place is its whole memo's, which 모아 보기 reports.
+            if !isHeader, let id = tab.id { place?.reorder.frames[id] = frame }
+        }
         .inkContextMenu(isEnabled: draft.book.todos.pop == nil && !renaming, isOpen: $menuOpen) { menu }
+        .barFrame((isHeader ? "메모 머리글 " : "메모 탭 ") + tab.name)
         .accessibilityElement(children: renaming ? .contain : .ignore)
         .accessibilityLabel(tab.name)
         .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { draft.select(tab.id) }
         .accessibilityAction(named: "이름 바꾸기") { draft.startRenaming(tab.id) }
+        .accessibilityActions {
+            if canMove, let place {
+                if place.index > 0 { Button("앞으로 옮기기") { move(by: -1) } }
+                if place.index < place.ids.count - 1 { Button("뒤로 옮기기") { move(by: 1) } }
+            }
+        }
+    }
+
+    private var isLifted: Bool { tab.id != nil && place?.reorder.dragging == tab.id }
+
+    /// Not while a name is being changed, with one memo, or for a memo that cannot be read.
+    private var canMove: Bool {
+        guard let place, place.ids.count > 1, draft.renaming == nil, draft.book.todos.pop == nil else { return false }
+        return draft.book.canMove(tab.id)
+    }
+
+    private var dragGesture: some Gesture {
+        let space = isHeader ? MemoReorder.memosSpace : MemoReorder.tabsSpace
+        return DragGesture(minimumDistance: 4, coordinateSpace: .named(space))
+            .onChanged { value in
+                guard let id = tab.id, let place else { return }
+                place.reorder.drag(id, start: value.startLocation, at: value.location, ids: place.ids)
+            }
+            .onEnded { _ in
+                guard let id = tab.id, let place, let index = place.reorder.drop() else {
+                    place?.reorder.cancel()
+                    return
+                }
+                draft.book.move(id, to: index)
+            }
+    }
+
+    /// 앞으로 옮기기 (-1) and 뒤로 옮기기 (1): one place over.
+    private func move(by step: Int) {
+        guard let id = tab.id else { return }
+        draft.book.move(id, by: step)
     }
 
     /// The tab's own face: semibold, as the open tab is drawn.
@@ -100,6 +310,10 @@ struct MemoTabLabel: View {
 
     private var menu: [InkMenuEntry] {
         var entries: [InkMenuEntry] = [.item("이름 바꾸기") { draft.startRenaming(tab.id) }]
+        if let place, place.ids.count > 1 {
+            entries += [.item("앞으로 옮기기", isEnabled: canMove && place.index > 0) { move(by: -1) },
+                        .item("뒤로 옮기기", isEnabled: canMove && place.index < place.ids.count - 1) { move(by: 1) }]
+        }
         if let id = tab.id {
             entries += [.divider, .item("메모 지우기", isDanger: true) { draft.askToDelete(id) }]
         }

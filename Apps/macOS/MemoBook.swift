@@ -126,7 +126,7 @@ final class MemoBook {
         var isUntitled: Bool
     }
 
-    /// The period's memos in the order they were made, named (`Memos.names`); a period with none
+    /// The period's memos in their order (`Memos.ordered`), named (`Memos.names`); a period with none
     /// shows one empty memo, saved on its first letter.
     func tabs(for period: Period) -> [Tab] {
         _ = revision
@@ -273,6 +273,26 @@ final class MemoBook {
         return name
     }
 
+    /// Drags memo `id` to `index` among its period's tabs (counted before the move, `Memos.move`).
+    func move(_ id: UUID, to index: Int) {
+        guard (try? Memos.move(id, to: index, in: context)) == true else { return }
+        changed()
+        onLocalChange?()
+    }
+
+    /// 앞으로 옮기기 (-1) and 뒤로 옮기기 (1): one place over among its period's tabs.
+    func move(_ id: UUID, by step: Int) {
+        guard let period = period(of: id), let index = tabs(for: period).firstIndex(where: { $0.id == id }) else { return }
+        move(id, to: step < 0 ? index - 1 : index + 2)
+    }
+
+    /// The memo can be dragged to another place: one that cannot be read (a newer version's, or
+    /// damaged) is left where it is.
+    func canMove(_ id: UUID?) -> Bool {
+        guard let id else { return false }
+        return id == draft.noteID ? !draft.isUnreadable : shownText(note: id) != nil
+    }
+
     /// 메모 지우기, and its 메모 app note with it.
     func delete(_ id: UUID) {
         let period = period(of: id)
@@ -294,7 +314,7 @@ final class MemoBook {
         onLocalChange?()
     }
 
-    /// Bumped when a period's memos come or go or are renamed, for the tabs.
+    /// Bumped when a period's memos come or go or are renamed or moved, for the tabs.
     private(set) var revision = 0
 
     /// Every attachment the stored memos use, by id; nil when a memo cannot be read (it may use
@@ -325,7 +345,7 @@ final class MemoBook {
     /// period key): the period's oldest memo without a name of its own.
     func legacyNote(periodKey: String) -> UUID? {
         let notes = (try? context.fetch(FetchDescriptor<DiaryNote>(predicate: #Predicate { $0.periodKey == periodKey }))) ?? []
-        return notes.filter { $0.title.isEmpty }.sorted { $0.createdAt != $1.createdAt ? $0.createdAt < $1.createdAt : $0.id.uuidString < $1.id.uuidString }.first?.id
+        return notes.filter { $0.title.isEmpty }.sorted(by: Memos.isOlder).first?.id
     }
 
     /// The period a note belongs to, for "10월 23일 메모" under a ToDo made from it.

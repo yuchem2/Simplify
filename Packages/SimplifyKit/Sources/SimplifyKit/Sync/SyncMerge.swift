@@ -69,8 +69,11 @@ public enum SyncMerge {
                 }
                 // The name goes by time on its own: renaming does not change the text's history. Taken
                 // from the newer side, the time comes too, so the next merge does not take it back.
-                let named = remoteIsNewer(theirs.updatedAt, mine.updatedAt) ? theirs : mine
+                let (named, other) = remoteIsNewer(theirs.updatedAt, mine.updatedAt) ? (theirs, mine) : (mine, theirs)
                 note.title = named.title
+                // The place goes the same way; a side with none (a build that did not know about
+                // places wrote it) does not take the other's away.
+                note.order = named.order ?? other.order
                 note.updatedAt = max(note.updatedAt, named.updatedAt)
                 note.createdAt = min(mine.createdAt, theirs.createdAt)
                 notes[key] = note

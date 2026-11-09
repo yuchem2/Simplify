@@ -2,7 +2,8 @@ import Foundation
 import SwiftData
 
 /// Reading and writing the memos of a day, week or month. A period has any number of memos, each
-/// its own `DiaryNote` found by id, in the order they were made.
+/// its own `DiaryNote` found by id, in the order they were made until one is dragged elsewhere
+/// (`ordered`, `move`).
 ///
 /// Names: a memo made with `+ 새 메모` is `새 메모`, or `새 메모(1)`, `새 메모(2)` … when the period
 /// has that name already; a typed name the period has already gets `(1)` and up the same way, and
@@ -14,9 +15,9 @@ public enum Memos {
 
     // MARK: Reading
 
-    /// The period's memos, oldest first (by `createdAt`, then id, so every device shows one order).
+    /// The period's memos in their order (`ordered`).
     public static func notes(for period: Period, in context: ModelContext) throws -> [DiaryNote] {
-        try context.fetch(DiaryNote.descriptor(for: period)).filter { $0.scope == period.scope }.sorted(by: isBefore)
+        ordered(try context.fetch(DiaryNote.descriptor(for: period)).filter { $0.scope == period.scope })
     }
 
     public static func note(id: UUID, in context: ModelContext) throws -> DiaryNote? {
@@ -33,7 +34,23 @@ public enum Memos {
         MemoText.decode(try note(for: period, in: context)?.body)
     }
 
-    static func isBefore(_ a: DiaryNote, _ b: DiaryNote) -> Bool {
+    /// One period's memos in the order their tabs show. Oldest first (`isOlder`) until one has a
+    /// place of its own (`order`, from a drag); then by place, and any without one (made on a
+    /// device that did not know about places) after them, oldest first.
+    public static func ordered(_ notes: [DiaryNote]) -> [DiaryNote] {
+        guard notes.contains(where: { $0.order != nil }) else { return notes.sorted(by: isOlder) }
+        return notes.sorted { a, b in
+            switch (a.order, b.order) {
+            case (let x?, let y?): x != y ? x < y : isOlder(a, b)
+            case (.some, nil): true
+            case (nil, .some): false
+            case (nil, nil): isOlder(a, b)
+            }
+        }
+    }
+
+    /// Made earlier: by `createdAt`, then id, so every device tells two memos apart the same way.
+    public static func isOlder(_ a: DiaryNote, _ b: DiaryNote) -> Bool {
         a.createdAt != b.createdAt ? a.createdAt < b.createdAt : a.id.uuidString < b.id.uuidString
     }
 
@@ -160,6 +177,34 @@ public enum Memos {
             try context.save()
         }
         return name
+    }
+
+    /// Drags the memo `id` to `index` among its period's memos (counted before the move). Memos
+    /// without a place get one first, after the places already given (0, 1, 2 … the first
+    /// time), in the order they show; a place once given is never renumbered, so another device
+    /// that still has it agrees. Then only the moved memo changes, taking a value between its
+    /// new neighbours as a ToDo row does.
+    /// The moved memo's `updatedAt` goes forward so the new place wins on another device, as a new
+    /// name does. Returns whether anything moved.
+    @discardableResult
+    public static func move(_ id: UUID, to index: Int, in context: ModelContext, now: Date = .now) throws -> Bool {
+        guard let note = try note(id: id, in: context), let period = period(of: note) else { return false }
+        var all = try notes(for: period, in: context)
+        guard let from = all.firstIndex(where: { $0.id == id }) else { return false }
+        let at = min(max(0, index > from ? index - 1 : index), all.count - 1)
+        guard at != from else { return false }
+        // Memos without a place show after the ones with one (`ordered`), so numbering on from the
+        // last place keeps the order on screen.
+        var next = (all.compactMap(\.order).max() ?? -1) + 1
+        for memo in all where memo.order == nil {
+            memo.order = next
+            next += 1
+        }
+        all.remove(at: from)
+        note.order = Todos.order(between: at > 0 ? all[at - 1].order : nil, and: at < all.count ? all[at].order : nil)
+        note.updatedAt = SyncStamp.after(note.updatedAt, now: now)
+        try context.save()
+        return true
     }
 
     /// Deletes the memo, leaving a tombstone so another device's copy goes too.

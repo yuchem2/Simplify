@@ -116,7 +116,7 @@ struct PeriodMemosTests {
 }
 
 /// A copy of a real diary store (`SIMPLIFY_STORE_COPY`, a folder holding `Diary.store*`), opened
-/// as V3 and then brought up to V4: every memo is still there with the same words. Skipped
+/// as V4 and then brought up to V5: every memo is still there with the same words. Skipped
 /// without the variable; never pointed at the live store.
 @MainActor
 struct RealStoreUpgradeTests {
@@ -125,15 +125,15 @@ struct RealStoreUpgradeTests {
         let url = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SIMPLIFY_STORE_COPY"]!).appending(path: "Diary.store")
         let before: [UUID: Data?]
         do {
-            let schema = Schema(versionedSchema: SchemaV3.self)
+            let schema = Schema(versionedSchema: SchemaV4.self)
             let old = try ModelContainer(for: schema, configurations: ModelConfiguration("Diary", schema: schema, url: url, cloudKitDatabase: .none))
-            before = Dictionary(uniqueKeysWithValues: try ModelContext(old).fetch(FetchDescriptor<SchemaV3.DiaryNote>()).map { ($0.id, $0.body) })
+            before = Dictionary(uniqueKeysWithValues: try ModelContext(old).fetch(FetchDescriptor<SchemaV4.DiaryNote>()).map { ($0.id, $0.body) })
         }
         let context = ModelContext(try SimplifyStore.makeContainer(url: url))
         let after = try context.fetch(FetchDescriptor<DiaryNote>())
         print("real store: \(before.count) memos before, \(after.count) after")
         #expect(after.count == before.count)
-        #expect(after.allSatisfy { before[$0.id] == $0.body && $0.title.isEmpty })
+        #expect(after.allSatisfy { before[$0.id] == $0.body && $0.order == nil })
         #expect(after.allSatisfy { MemoText.decodeIfReadable($0.body) != nil })
     }
 }

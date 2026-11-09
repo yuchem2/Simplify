@@ -16,9 +16,12 @@ public struct SyncNote: Codable, Hashable, Sendable {
     /// `DiaryNote.createdAt`; in format 1, which had none, the earliest time, so a memo from then
     /// stays first in its period.
     public var createdAt: Date
+    /// `DiaryNote.order`; nil before a memo was dragged, and in files from builds that did not
+    /// know about places (they leave the key out, and skip it when reading).
+    public var order: Double?
 
     public init(id: UUID, scope: String, periodKey: String, body: Data, updatedAt: Date, history: [String] = [],
-                title: String = "", createdAt: Date = SyncNote.unknownCreation) {
+                title: String = "", createdAt: Date = SyncNote.unknownCreation, order: Double? = nil) {
         self.id = id
         self.scope = scope
         self.periodKey = periodKey
@@ -27,15 +30,16 @@ public struct SyncNote: Codable, Hashable, Sendable {
         self.history = history
         self.title = title
         self.createdAt = createdAt
+        self.order = order
     }
 
     public static let unknownCreation = Date(timeIntervalSinceReferenceDate: 0)
 
     private enum CodingKeys: String, CodingKey {
-        case id, scope, periodKey, body, updatedAt, history, title, createdAt
+        case id, scope, periodKey, body, updatedAt, history, title, createdAt, order
     }
 
-    /// Format 1's memos have no title or creation time.
+    /// Format 1's memos have no title or creation time; older format 2 files have no places.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -46,6 +50,7 @@ public struct SyncNote: Codable, Hashable, Sendable {
         history = try c.decodeIfPresent([String].self, forKey: .history) ?? []
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Self.unknownCreation
+        order = try c.decodeIfPresent(Double.self, forKey: .order)
     }
 
     /// How the memo is matched across devices: its id.

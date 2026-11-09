@@ -26,7 +26,7 @@ public enum SyncRecords {
         var notes: [UUID: SyncNote] = [:]
         for note in try context.fetch(FetchDescriptor<DiaryNote>(sortBy: [SortDescriptor(\.updatedAt, order: .reverse)])) where notes[note.id] == nil {
             notes[note.id] = SyncNote(id: note.id, scope: note.scopeRaw, periodKey: note.periodKey, body: note.body ?? Data(),
-                                      updatedAt: note.updatedAt, title: note.title, createdAt: note.createdAt)
+                                      updatedAt: note.updatedAt, title: note.title, createdAt: note.createdAt, order: note.order)
         }
         var todos: [UUID: SyncTodo] = [:]
         for item in try context.fetch(FetchDescriptor<TodoItem>()) where todos[item.id] == nil {
@@ -64,9 +64,9 @@ public enum SyncRecords {
             copies.forEach(context.delete)
             let body = record.body.isEmpty ? nil : record.body
             if let note {
-                // A new creation time moves the memo among its period's tabs.
+                // A new creation time or place moves the memo among its period's tabs.
                 if note.body != body || note.title != record.title || note.scopeRaw != record.scope || note.periodKey != record.periodKey
-                    || note.createdAt != record.createdAt {
+                    || note.createdAt != record.createdAt || note.order != record.order {
                     applied.notes.insert(record.id)
                     applied.periods.insert("\(note.scopeRaw)|\(note.periodKey)")
                     applied.periods.insert(record.periodSlot)
@@ -77,11 +77,13 @@ public enum SyncRecords {
                 if note.periodKey != record.periodKey { note.periodKey = record.periodKey }
                 if note.updatedAt != record.updatedAt { note.updatedAt = record.updatedAt }
                 if note.createdAt != record.createdAt { note.createdAt = record.createdAt }
+                if note.order != record.order { note.order = record.order }
             } else {
                 let note = DiaryNote(id: record.id, scopeRaw: record.scope, periodKey: record.periodKey)
                 note.body = body
                 note.title = record.title
                 note.createdAt = record.createdAt
+                note.order = record.order
                 note.updatedAt = record.updatedAt
                 context.insert(note)
                 applied.notes.insert(record.id)

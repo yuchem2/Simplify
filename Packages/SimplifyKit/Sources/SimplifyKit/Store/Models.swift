@@ -20,6 +20,10 @@ public final class DiaryNote {
     /// When it was made, for the order of the period's tabs. Memos from before V4 all get the
     /// moment the store was brought up to it.
     public var createdAt: Date = Date.now
+    /// Its place among the period's tabs once one of them has been dragged (`Memos.move`);
+    /// fractional so a memo can go between two others. Nil until then, and for memos another
+    /// device made before it knew about places: those keep the `createdAt` order (`Memos.ordered`).
+    public var order: Double?
 
     public init(period: Period, title: String = "", createdAt: Date = .now) {
         scopeRaw = period.scope.rawValue
@@ -307,19 +311,96 @@ public enum SchemaV3: VersionedSchema {
     }
 }
 
-/// Version 4 lets a period have several memos: `DiaryNote` gets `title` and `createdAt`. The
-/// live classes.
+/// Version 4 lets a period have several memos: `DiaryNote` gets `title` and `createdAt`. Frozen
+/// as it shipped, like `SchemaV1`.
 public enum SchemaV4: VersionedSchema {
     public static let versionIdentifier = Schema.Version(4, 0, 0)
+    public static var models: [any PersistentModel.Type] { [DiaryNote.self, TodoItem.self, TodoLink.self, SyncTombstone.self] }
+
+    @Model
+    public final class DiaryNote {
+        public var id: UUID = UUID()
+        public var scopeRaw: String = PeriodScope.day.rawValue
+        public var periodKey: String = ""
+        @Attribute(.externalStorage) public var body: Data?
+        public var updatedAt: Date = Date.now
+        public var title: String = ""
+        public var createdAt: Date = Date.now
+
+        public init(period: Period, title: String = "", createdAt: Date = .now) {
+            scopeRaw = period.scope.rawValue
+            periodKey = period.key
+            self.title = title
+            self.createdAt = createdAt
+        }
+    }
+
+    @Model
+    public final class TodoItem {
+        public var id: UUID = UUID()
+        public var title: String = ""
+        public var isDone: Bool = false
+        public var scopeRaw: String = PeriodScope.day.rawValue
+        public var periodKey: String = ""
+        public var order: Double = 0
+        public var colorLabel: String?
+        public var sourceNoteID: UUID?
+        public var createdAt: Date = Date.now
+        public var updatedAt: Date = Date.now
+
+        public init(title: String, period: Period, order: Double) {
+            self.title = title
+            scopeRaw = period.scope.rawValue
+            periodKey = period.key
+            self.order = order
+        }
+    }
+
+    @Model
+    public final class TodoLink {
+        public var id: UUID = UUID()
+        public var todoID: UUID = UUID()
+        public var scopeRaw: String = PeriodScope.day.rawValue
+        public var periodKey: String = ""
+        public var order: Double = 0
+        public var createdAt: Date = Date.now
+        public var updatedAt: Date = Date.now
+
+        public init(todoID: UUID, period: Period, order: Double) {
+            self.todoID = todoID
+            scopeRaw = period.scope.rawValue
+            periodKey = period.key
+            self.order = order
+        }
+    }
+
+    @Model
+    public final class SyncTombstone {
+        public var kindRaw: String = SyncKind.todo.rawValue
+        public var key: String = ""
+        public var deletedAt: Date = Date.now
+
+        public init(kind: SyncKind, key: String, deletedAt: Date) {
+            kindRaw = kind.rawValue
+            self.key = key
+            self.deletedAt = deletedAt
+        }
+    }
+}
+
+/// Version 5 lets a period's memos be put in any order: `DiaryNote` gets `order`. The live classes.
+public enum SchemaV5: VersionedSchema {
+    public static let versionIdentifier = Schema.Version(5, 0, 0)
     public static var models: [any PersistentModel.Type] { [DiaryNote.self, TodoItem.self, TodoLink.self, SyncTombstone.self] }
 }
 
 public enum SimplifyMigrationPlan: SchemaMigrationPlan {
-    public static var schemas: [any VersionedSchema.Type] { [SchemaV1.self, SchemaV2.self, SchemaV3.self, SchemaV4.self] }
+    public static var schemas: [any VersionedSchema.Type] { [SchemaV1.self, SchemaV2.self, SchemaV3.self, SchemaV4.self, SchemaV5.self] }
     /// New entities and new attributes with defaults: SwiftData adds them and leaves every row as it was.
     public static var stages: [MigrationStage] {
         [.lightweight(fromVersion: SchemaV1.self, toVersion: SchemaV2.self),
          .lightweight(fromVersion: SchemaV2.self, toVersion: SchemaV3.self),
-         .lightweight(fromVersion: SchemaV3.self, toVersion: SchemaV4.self)]
+         .lightweight(fromVersion: SchemaV3.self, toVersion: SchemaV4.self),
+         .lightweight(fromVersion: SchemaV4.self, toVersion: SchemaV5.self)]
     }
 }

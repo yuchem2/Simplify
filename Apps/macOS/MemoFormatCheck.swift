@@ -54,6 +54,9 @@ enum MemoFormatCheck {
 
     private static func log(_ line: String) {
         lines.append(line)
+        // Also on standard output, for a run started from a terminal that cannot read the container.
+        print(line)
+        fflush(stdout)
         // As it goes, so a crash midway still leaves what passed.
         try? lines.joined(separator: "\n").write(to: FileManager.default.temporaryDirectory.appending(path: "memo-check.txt"), atomically: true, encoding: .utf8)
     }
@@ -137,6 +140,11 @@ enum MemoFormatCheck {
         }
         if only == "aabar" {
             await checkAaBar(memos: memos, model: model, editor: editor, window: window, reset: reset, type: type, key: key)
+            window.close()
+            return
+        }
+        if only == "order" {
+            await checkOrder(memos: memos, model: model, editor: editor, window: window)
             window.close()
             return
         }
@@ -1922,6 +1930,81 @@ enum MemoFormatCheck {
         model.select(model.today)
         await wait(0.4)
         _ = escape
+    }
+
+    // MARK: Memo order
+
+    /// The middle of a view noted under `name` (`barFrame`), in the window's coordinates.
+    private static func middle(of name: String, in window: NSWindow, draft: MemoDraft) -> CGPoint? {
+        // SwiftUI's global frame, moved to the content's place as the memo's own clicks are.
+        guard let frame = MemoBarFrames.byName[name].map(draft.inContent), let content = window.contentView else { return nil }
+        let top = CGPoint(x: frame.midX, y: frame.midY)
+        return content.convert(content.isFlipped ? top : CGPoint(x: top.x, y: content.bounds.height - top.y), to: nil)
+    }
+
+    /// `SIMPLIFY_MEMO_CHECK=order`: a period's memos moved (as a drop of a tab or header does)
+    /// and moved one place with 앞으로/뒤로 옮기기, drawn in that order in 하나씩 and 모아 보기.
+    /// The drag itself is tried by hand or with agent-desktop: posted mouse events do not land
+    /// on the tabs in the check's window.
+    private static func checkOrder(memos: MemoBook, model: AppModel, editor: NSTextView, window: NSWindow) async {
+        let draft = memos.draft
+        func wait(_ seconds: Double = 0.4) async { try? await Task.sleep(for: .seconds(seconds)) }
+        guard let period = draft.period else {
+            log("FAIL  no open period")
+            return
+        }
+        func names() -> [String] { memos.tabs(for: period).map(\.name) }
+        var made: [UUID] = []
+        for name in ["가", "나", "다"] {
+            guard let id = memos.create(in: period) else { continue }
+            memos.rename(id, to: name)
+            made.append(id)
+        }
+        draft.select(made.first)
+        await wait(0.8)
+        check(names() == ["가", "나", "다"], "three memos in the order made", "\(names())")
+        // 다 to the front through the book, as a drop does.
+        memos.move(made[2], to: 0)
+        await wait()
+        check(names() == ["다", "가", "나"], "a memo moved to the front comes first", "\(names())")
+        capture(window, "order-tabs")
+
+        /// The names in the order the tabs (or headers) are drawn, left to right and top to bottom.
+        /// Only the three memos: the app's own window draws its period's memo under the same names.
+        func drawn(_ prefix: String) -> [String] {
+            MemoBarFrames.byName.filter { $0.key.hasPrefix(prefix) && ["가", "나", "다"].contains(String($0.key.dropFirst(prefix.count))) }
+                .sorted { ($0.value.minY, $0.value.minX) < ($1.value.minY, $1.value.minX) }
+                .map { String($0.key.dropFirst(prefix.count)) }
+        }
+        check(drawn("메모 탭 ") == ["다", "가", "나"], "the tabs are drawn in that order", "\(drawn("메모 탭 "))")
+        // 앞으로/뒤로 옮기기, as the right-click menu and VoiceOver's actions do them.
+        memos.move(made[0], by: 1)
+        await wait()
+        check(names() == ["다", "나", "가"], "뒤로 옮기기 moves a memo one place on", "\(names())")
+        memos.move(made[1], by: -1)
+        await wait()
+        check(names() == ["나", "다", "가"], "앞으로 옮기기 moves a memo one place back", "\(names())")
+        memos.move(made[1], by: -1)
+        memos.move(made[0], by: 1)
+        await wait()
+        check(names() == ["나", "다", "가"], "nothing moves past either end", "\(names())")
+        check(drawn("메모 탭 ") == ["나", "다", "가"], "the tabs are drawn in the new order", "\(drawn("메모 탭 "))")
+
+        // 모아 보기: the memos one under another in the same order.
+        draft.resignEditor?()
+        model.memoLayout = .all
+        await wait(1.2)
+        check(drawn("메모 머리글 ") == ["나", "다", "가"], "모아 보기 draws the memos in that order", "\(drawn("메모 머리글 "))")
+        memos.move(made[0], by: -1)
+        await wait(0.8)
+        check(drawn("메모 머리글 ") == ["나", "가", "다"], "a move in 모아 보기 redraws the memos", "\(drawn("메모 머리글 "))")
+        capture(window, "order-all")
+        draft.resignEditor?()
+        model.memoLayout = .one
+        await wait(0.8)
+        check(names() == ["나", "가", "다"] && drawn("메모 탭 ") == ["나", "가", "다"], "하나씩 shows the same order", "\(drawn("메모 탭 "))")
+        for id in made { memos.delete(id) }
+        await wait()
     }
 
     /// The app's memory as Activity Monitor counts it (physical footprint), in MB.

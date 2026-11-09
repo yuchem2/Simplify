@@ -18,6 +18,8 @@ struct DayPanel: View {
     @State private var memosScroll = ScrollPosition()
     @State private var memosScrolledTo: CGFloat = 0
     @State private var editorTop: CGFloat = 0
+    /// A memo header being dragged in 모아 보기.
+    @State private var headerReorder = MemoReorder(axis: .vertical, gap: Metrics.spaceXl)
 
     /// Beside the small month, whose list already shows the day's events.
     private var isWide: Bool { model.isPanelWide && !model.isPanelHidden }
@@ -156,10 +158,12 @@ struct DayPanel: View {
     /// 모아 보기: every memo of the period one under another, each as tall as its text.
     private func allMemos(_ section: Section, period: Period, tabs: [MemoBook.Tab]) -> some View {
         let draft = memos.draft
+        let ids = tabs.compactMap(\.id)
         return VStack(alignment: .leading, spacing: Metrics.spaceXl) {
-            ForEach(tabs, id: \.id) { tab in
+            ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
                 VStack(alignment: .leading, spacing: Metrics.spaceXs) {
-                    MemoTabLabel(draft: draft, tab: tab, isOn: tab.id == draft.noteID, font: .display(17), nsFont: Self.headerFont, isHeader: true)
+                    MemoTabLabel(draft: draft, tab: tab, isOn: tab.id == draft.noteID, font: .display(17), nsFont: Self.headerFont, isHeader: true,
+                                 place: MemoTabLabel.Place(index: index, ids: ids, reorder: headerReorder))
                     if tab.id == draft.noteID {
                         // A line to spare under the last, so a new line does not scroll inside the memo first.
                         editor(section, period: period, height: max(draft.contentHeight, MemoStyle.lineHeight) + MemoStyle.lineHeight)
@@ -178,7 +182,15 @@ struct DayPanel: View {
                         }
                     }
                 }
+                // A header is dragged up or down by its whole memo's place; the letters stay open.
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.memos)) } action: { frame in
+                    if let id = tab.id { headerReorder.frames[id] = frame }
+                }
             }
+        }
+        .overlay(alignment: .topLeading) {
+            MemoReorderMarks(reorder: headerReorder, name: tabs.first { $0.id == headerReorder.dragging }?.name,
+                             font: .display(17), isHeader: true)
         }
         // Under the last memo, room for the caret line's spare line when scrolled to the end.
         .padding(.bottom, Metrics.spaceXs)
@@ -251,7 +263,7 @@ struct DayPanel: View {
     }
 
     private nonisolated static let content = "panelContent"
-    private nonisolated static let memos = "panelMemos"
+    private nonisolated static let memos = MemoReorder.memosSpace
 
     /// A wide panel leaves the events to the small month's list.
     private func sections(for scope: PeriodScope) -> [Section] {
