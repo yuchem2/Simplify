@@ -212,19 +212,20 @@ enum MemoLinkEdit {
         return true
     }
 
-    /// Copied letters with a link in them, and no table (`MemoTableClipboard` writes those): as
-    /// words, HTML and RTF with the links, and the memo's own letters, so they paste back here
-    /// as links. False for other letters, which the text view copies as usual.
+    /// Copied letters with a link or a plain mark (`MemoLists.plainMark`) in them, and no table
+    /// (`MemoTableClipboard` writes those): as words, HTML and RTF with the links and without the
+    /// marks, and the memo's own letters, so they paste back here as they were. False for other
+    /// letters, which the text view copies as usual.
     @discardableResult
     static func writeCopy(_ piece: AttributedString) -> Bool {
-        guard piece.runs.contains(where: { $0[MemoAttributes.Link.self] != nil }) else { return false }
+        guard piece.runs.contains(where: { $0[MemoAttributes.Link.self] != nil }) || piece.characters.contains(Character(MemoLists.plainMark)) else { return false }
         let board = NSPasteboard.general
         board.clearContents()
         board.setString(MemoAttachments.plainText(piece), forType: .string)
         if let html = NotesHTML.fragment(piece) { board.setString("<meta charset=\"utf-8\">" + html, forType: .html) }
         let rich = NSMutableAttributedString()
         for run in piece.runs {
-            var letters = String(piece[run.range].characters)
+            var letters = MemoLists.withoutPlainMarks(String(piece[run.range].characters))
             if let ref = run[MemoAttributes.Attachment.self].flatMap(MemoAttachments.Ref.init(value:)) {
                 letters = letters.map { $0 == MemoAttachments.placeholder ? MemoAttachments.label(ref) : String($0) }.joined()
             }

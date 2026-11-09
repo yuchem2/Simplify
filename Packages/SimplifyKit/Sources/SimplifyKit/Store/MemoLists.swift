@@ -67,7 +67,19 @@ public enum MemoLists {
     public struct Change: Equatable, Sendable {
         public var edits: [Edit]
         public var selection: NSRange
+
+        public init(edits: [Edit], selection: NSRange) {
+            self.edits = edits
+            self.selection = selection
+        }
     }
+
+    /// An invisible letter (U+2060, word joiner) at the front of a line (after its leading tabs),
+    /// or just after a quote's `> `: what was typed there stays plain words. A list or quote made as a space is typed
+    /// (`autoFormat`) is first put in with it, and taken out as an undo step of its own, so ⌘Z
+    /// right after leaves the letters and takes the formatting away. A build or app that does not
+    /// know it sees a line that does not start with a marker either. Left out of copies.
+    public static let plainMark = "\u{2060}"
 
     /// Levels look alike every three (bullets `●○■`, numbers `1. a. i.`), however deep a list goes.
     public static let levelCycle = 3
@@ -77,11 +89,13 @@ public enum MemoLists {
     // MARK: Reading lines
 
     /// `offset`: tabs at the line's front that belong to a timeline line above (`Marker.offset`).
+    /// A line starting with `plainMark` has none; after a quote's `> ` it leaves the quote alone.
     public static func marker<S: StringProtocol>(_ line: S, offset: Int = 0) -> Marker? {
         let line = String(line)
+        guard !line.hasPrefix(plainMark) else { return nil }
         guard line.hasPrefix("> ") else { return listMarker(line, offset: offset) }
         let rest = String(line.dropFirst(2))
-        guard var item = listMarker(rest, offset: 0) else { return Marker(kind: .quote, level: 0, label: ">", length: 2, number: nil) }
+        guard !rest.hasPrefix(plainMark), var item = listMarker(rest, offset: 0) else { return Marker(kind: .quote, level: 0, label: ">", length: 2, number: nil) }
         item.quoted = true
         item.length += 2
         return item
@@ -100,6 +114,8 @@ public enum MemoLists {
         while level < letters.count, letters[level] == 0x09 { level += 1 }
         let offset = min(offset, level)
         let rest = String(utf16CodeUnits: Array(letters[level...]), count: letters.count - level)
+        // Left plain with ⌘Z (`plainMark` after the tabs).
+        if rest.hasPrefix(plainMark) { return nil }
         if rest.hasPrefix("• ") { return Marker(kind: .bullet, level: level, label: "•", length: level + 2, number: nil, offset: offset) }
         if rest.hasPrefix("- ") { return Marker(kind: .dash, level: level, label: "-", length: level + 2, number: nil, offset: offset) }
         // `12. `, `b. `, `iv. `: letters up to a full stop and a space.
@@ -162,6 +178,45 @@ public enum MemoLists {
     }
 
     // MARK: Typing
+
+    /// A space about to be typed at `caret` that makes its line a list item or a quote (`1. `,
+    /// `- `, `> `, a list item in a quote): where `plainMark` goes in with it, the line's front or
+    /// just after the quote's `> `. Nil where the space changes nothing, or the line was a list
+    /// item already.
+    public static func autoFormat(in text: String, caret: Int) -> Int? {
+        let string = text as NSString
+        guard caret <= string.length else { return nil }
+        let line = lineContent(of: string.lineRange(for: NSRange(location: caret, length: 0)), in: string)
+        guard caret > line.location else { return nil }
+        let before = marker(in: string, line: line)
+        // The line alone with the space in, not the whole memo, on every space typed.
+        let letters = string.substring(with: line) as NSString
+        let spaced = letters.replacingCharacters(in: NSRange(location: caret - line.location, length: 0), with: " ")
+        let offset = MemoTimeline.isChild(line, in: string) ? 1 : 0
+        // The space just typed is the marker's last letter.
+        guard let after = marker(spaced, offset: offset), after.length == caret - line.location + 1 else { return nil }
+        // After a line's leading tabs, which keep a timeline line's child its own.
+        let tabs = string.substring(with: line).utf16.prefix { $0 == 0x09 }.count
+        if before == nil { return line.location + tabs }
+        if before?.kind == .quote, after.quoted, after.kind != .quote { return line.location + 2 }
+        return nil
+    }
+
+    /// Where a line's `plainMark` is, if it has one: at its front after any leading tabs, or
+    /// (`inQuote`) just after a quote's `> `.
+    public static func plainMarkRange(of line: NSRange, in string: NSString, inQuote: Bool = true) -> NSRange? {
+        let letters = string.substring(with: line)
+        let mark = (plainMark as NSString).length
+        let tabs = letters.utf16.prefix { $0 == 0x09 }.count
+        if String(letters.dropFirst(tabs)).hasPrefix(plainMark) { return NSRange(location: line.location + tabs, length: mark) }
+        if inQuote, letters.hasPrefix("> " + plainMark) { return NSRange(location: line.location + 2, length: mark) }
+        return nil
+    }
+
+    /// The letters without `plainMark`, for copies.
+    public static func withoutPlainMarks(_ letters: String) -> String {
+        letters.replacingOccurrences(of: plainMark, with: "")
+    }
 
     /// A space just typed after `*` at the front of a line (tabs before it are fine): the star
     /// becomes a stored bullet. `caret` is after the space. Made after the space went in, so ⌘Z
@@ -284,22 +339,35 @@ public enum MemoLists {
     /// (keeping its level), or, when they all are already, plain lines again. A quote goes on or
     /// off around a line's list item, and a list item on or off inside a quote. Blank lines in a
     /// longer selection are left alone.
+    /// A line a ⌘Z left plain (`plainMark`) is made `kind` too: the mark goes first (for a quote,
+    /// only one at the line's front, so a list left plain in a quote stays plain).
     public static func setKind(_ kind: Kind, in text: String, selection: NSRange) -> Change {
-        let string = text as NSString
-        var targets = lines(touching: selection, in: string)
-        if targets.count > 1 {
-            let filled = targets.filter { !string.substring(with: $0).allSatisfy(\.isWhitespace) }
-            if !filled.isEmpty { targets = filled }
+        let original = text as NSString
+        func targets(in string: NSString, _ selection: NSRange) -> [NSRange] {
+            var targets = lines(touching: selection, in: string)
+            if targets.count > 1 {
+                // A line holding only a plain mark is blank too, before and after the mark goes.
+                let filled = targets.filter { !withoutPlainMarks(string.substring(with: $0)).allSatisfy(\.isWhitespace) }
+                if !filled.isEmpty { targets = filled }
+            }
+            return targets
         }
+        // Whether it goes on or off is judged by the lines as they show, marks and all.
+        let shown = targets(in: original, selection).map { marker(in: original, line: $0) }
+        var builder = Builder(original, selection: selection)
+        for line in targets(in: original, selection).reversed() {
+            if let mark = plainMarkRange(of: line, in: original, inQuote: kind != .quote) { builder.replace(mark, with: "") }
+        }
+        let string = NSString(string: builder.string)
+        let targets = targets(in: string, builder.selection)
         let markers = targets.map { marker(in: string, line: $0) }
-        var builder = Builder(string, selection: selection)
         if kind == .quote {
-            let isOff = markers.allSatisfy { $0?.isQuoted == true }
+            let isOff = shown.allSatisfy { $0?.isQuoted == true }
             for (line, marker) in zip(targets, markers).reversed() where (marker?.isQuoted == true) == isOff {
                 builder.replace(NSRange(location: line.location, length: isOff ? 2 : 0), with: isOff ? "" : "> ")
             }
         } else {
-            let isOff = markers.allSatisfy { $0?.kind == kind }
+            let isOff = shown.allSatisfy { $0?.kind == kind }
             for (line, marker) in zip(targets, markers).reversed() {
                 let quote = marker?.isQuoted == true ? 2 : 0
                 let isItem = marker.map { $0.kind != .quote } ?? false

@@ -2015,7 +2015,7 @@ enum MemoFormatCheck {
     // MARK: Links
 
     /// `SIMPLIFY_MEMO_CHECK=links`: ⌘K, an address pasted on picked letters, links typed, ⌘-click,
-    /// links in table cells and through the clipboard.
+    /// links in table cells and through the clipboard, and ⌘Z on formatting made as a space is typed.
     private static func checkLinks(draft: MemoDraft, editor: NSTextView, window: NSWindow,
                                    reset: (AttributedString, Int?) async -> Void, type: (String) async -> Void,
                                    key: (UInt16, String, NSEvent.ModifierFlags) async -> Void) async {
@@ -2263,6 +2263,65 @@ enum MemoFormatCheck {
         await key(9, "v", [.command])
         check(links() == ["notion→https://notion.so/weekly-1109"] && draft.text.runs.contains { $0[MemoAttributes.Table.self] != nil },
               "a pasted table keeps a cell's link", "\(links()) \(letters.debugDescription)")
+
+        // Formatting made as a space is typed: ⌘Z once leaves the letters plain, again takes the space.
+        let mark = MemoLists.plainMark
+        for typed in ["1.", "-", ">", "> 1."] {
+            await reset(AttributedString(typed == "> 1." ? "> " : ""), nil)
+            await type(typed == "> 1." ? "1." : typed)
+            await key(space.0, space.1, [])
+            await wait()
+            let made = letters
+            let isList = MemoLists.marker(made) != nil && !made.contains(mark)
+            check(isList && made == typed + " ", "‘\(typed) ’ makes its list or quote", made.debugDescription)
+            await undo()
+            let plain = letters
+            let expectedPlain = typed == "> 1." ? "> \(mark)1. " : "\(mark)\(typed) "
+            let stillQuote = typed == "> 1." ? MemoLists.marker(plain)?.kind == .quote : MemoLists.marker(plain) == nil
+            check(plain == expectedPlain && stillQuote, "⌘Z after ‘\(typed) ’ keeps the letters and takes the formatting", plain.debugDescription)
+            await undo()
+            // The space goes (with the letters typed before it, as SwiftUI's undo always took them).
+            let before = typed == "> 1." ? "> 1." : typed
+            check(!letters.contains(mark) && before.hasPrefix(letters), "⌘Z again after ‘\(typed) ’ takes the space", letters.debugDescription)
+        }
+        // A line left plain: Return is a plain line break, the menu makes it a list, copies leave the mark out.
+        await reset(AttributedString(""), nil)
+        await type("1.")
+        await key(space.0, space.1, [])
+        await wait()
+        await undo()
+        await type("회의 준비")
+        await key(returnKey.0, returnKey.1, [])
+        check(letters == "\(mark)1. 회의 준비\n", "Return on a line left plain is a plain line break", letters.debugDescription)
+        editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+        await wait()
+        await key(8, "c", [.command])
+        check(board.string(forType: .string) == "1. 회의 준비\n" && !(board.string(forType: .html) ?? "").contains(mark), "a copy leaves the mark out",
+              (board.string(forType: .string) ?? "").debugDescription)
+        // ← → step over it once; Delete after it joins lines as at any line's front.
+        await reset(AttributedString("가\n\(mark)1. 나"), 3)
+        await key(123, "\u{F702}", [])
+        check(editor.selectedRange().location == 1, "← from just after the mark goes on to the line above", "\(editor.selectedRange())")
+        editor.setSelectedRange(NSRange(location: 2, length: 0))
+        await key(124, "\u{F703}", [])
+        check(editor.selectedRange().location == 4, "→ at the line's front steps over the mark", "\(editor.selectedRange())")
+        editor.setSelectedRange(NSRange(location: 3, length: 0))
+        await key(51, "\u{7f}", [])
+        check(letters == "가1. 나", "Delete just after the mark joins the line to the one above", letters.debugDescription)
+        await reset(AttributedString("\(mark)1. 회의"), 1)
+        draft.setList(.number)
+        await wait()
+        check(letters == "1. 회의" && MemoLists.marker(letters)?.kind == .number, "번호 목록 on a line left plain makes it a list", letters.debugDescription)
+        // `* `: ⌘Z gives the star back, again the space.
+        await reset(AttributedString(""), nil)
+        await type("*")
+        await key(space.0, space.1, [])
+        await wait()
+        check(letters == "• ", "* and a space still make a bullet", letters.debugDescription)
+        await undo()
+        check(letters == "* ", "⌘Z gives the star back", letters.debugDescription)
+        await undo()
+        check(!letters.hasSuffix(" ") && "*".hasPrefix(letters), "⌘Z again takes the space", letters.debugDescription)
     }
 
     /// The app's memory as Activity Monitor counts it (physical footprint), in MB.

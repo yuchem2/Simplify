@@ -157,7 +157,8 @@ public enum MemoTodoLines {
 
     /// The ToDo a candidate line names, or nil when the line is not one. A ticked `[x]` is not.
     public static func candidateTitle(_ line: String) -> String? {
-        var rest = Substring(line).drop { $0.isWhitespace }
+        // A line left plain with ⌘Z (`MemoLists.plainMark`) reads as its letters.
+        var rest = Substring(MemoLists.withoutPlainMarks(line)).drop { $0.isWhitespace }
         if let bullet = rest.first, bullets.contains(bullet) { rest = rest.dropFirst().drop { $0.isWhitespace } }
         if rest.hasPrefix("[ ]") || rest.hasPrefix("[]") {
             rest = rest.drop { $0 != "]" }.dropFirst()
@@ -173,7 +174,7 @@ public enum MemoTodoLines {
     /// A line made into a ToDo with ⌘⇧T: its candidate title, or the words without a list bullet.
     public static func title(of line: String) -> String {
         if let title = candidateTitle(line) { return title }
-        var rest = Substring(line).drop { $0.isWhitespace }
+        var rest = Substring(MemoLists.withoutPlainMarks(line)).drop { $0.isWhitespace }
         if let bullet = rest.first, bullets.contains(bullet) { rest = rest.dropFirst() }
         return rest.trimmingCharacters(in: .whitespaces)
     }

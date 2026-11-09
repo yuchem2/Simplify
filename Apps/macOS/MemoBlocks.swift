@@ -60,6 +60,9 @@ enum MemoListKeys {
     private static let tabKey: UInt16 = 48
     private static let deleteKey: UInt16 = 51
     private static let spaceKey: UInt16 = 49
+    private static let leftKey: UInt16 = 123
+    private static let rightKey: UInt16 = 124
+    private static let forwardDeleteKey: UInt16 = 117
 
     private static let codeKey = NSAttributedString.Key(MemoAttributes.Code.name)
     private static let paragraphKey = NSAttributedString.Key(MemoAttributes.Paragraph.name)
@@ -70,18 +73,45 @@ enum MemoListKeys {
     static func handle(_ event: NSEvent, in textView: NSTextView, draft: MemoDraft) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
         let code = event.keyCode
+        // ← → and Delete step over a line's invisible plain mark as if it were not there.
+        if modifiers.isEmpty, !textView.hasMarkedText(), stepOverPlainMark(code, in: textView) { return true }
         guard [returnKey, enterKey, tabKey, deleteKey, spaceKey].contains(code), modifiers.isEmpty || (code == tabKey && modifiers == .shift) else {
             return false
         }
         // A table row's tabs and letters are cells; the table keys handle what they need.
         if let storage = textView.textStorage, MemoLineStyler.table(in: storage, at: textView.selectedRange().location) != nil { return false }
         if code == spaceKey {
-            // The space goes in first, as typed; a `* ` it made becomes `• ` as a step of its own.
-            if !textView.hasMarkedText(), startsWithStar(textView), !isCode(at: textView.selectedRange().location, in: textView) {
+            let caret = textView.selectedRange()
+            guard !textView.hasMarkedText(), caret.length == 0, !isCode(at: caret.location, in: textView) else { return false }
+            // The space goes in first, a step of its own; a `* ` it made becomes `• ` as the next
+            // step, so ⌘Z takes the bullet back to the star and then the space.
+            if startsWithStar(textView) {
+                textView.breakUndoCoalescing()
+                replace(caret, with: " ", in: textView)
+                textView.setSelectedRange(NSRange(location: caret.location + 1, length: 0))
                 Task { @MainActor in
                     guard let change = MemoLists.autoBullet(in: textView.string, caret: textView.selectedRange().location) else { return }
                     apply(change, to: textView)
                 }
+                return true
+            }
+            // A space that makes a list item or quote (`1. `, `- `, `> `): it goes in with the plain
+            // mark, then the mark comes out as a step of its own. ⌘Z right after puts the mark
+            // back: the letters stay, the line is plain. ⌘Z again takes the space.
+            if let at = MemoLists.autoFormat(in: textView.string, caret: caret.location) {
+                let mark = (MemoLists.plainMark as NSString).length
+                let typed = (textView.string as NSString).substring(with: NSRange(location: at, length: caret.location - at))
+                textView.breakUndoCoalescing()
+                replace(NSRange(location: at, length: caret.location - at), with: MemoLists.plainMark + typed + " ", in: textView)
+                let after = caret.location + mark + 1
+                textView.setSelectedRange(NSRange(location: after, length: 0))
+                Task { @MainActor in
+                    let string = textView.string as NSString
+                    guard at + mark <= string.length, string.substring(with: NSRange(location: at, length: mark)) == MemoLists.plainMark else { return }
+                    apply(MemoLists.Change(edits: [MemoLists.Edit(range: NSRange(location: at, length: mark), text: "")],
+                                           selection: NSRange(location: max(at, textView.selectedRange().location - mark), length: 0)), to: textView)
+                }
+                return true
             }
             return false
         }
@@ -116,6 +146,65 @@ enum MemoListKeys {
             textView.insertNewline(nil)
         }
         return true
+    }
+
+    /// ← past a line's plain mark (`MemoLists.plainMark`), → over it, ⌦ just before it (the next
+    /// letter goes with it), and Delete just after it
+    /// (a quote's `> ` comes off; elsewhere the letter before it goes with it) or after the
+    /// line's first letter (the mark goes with the letter): the caret never stops twice at one
+    /// place, and Delete never brings the formatting back by taking the mark alone. True when
+    /// the key was used here.
+    private static func stepOverPlainMark(_ code: UInt16, in textView: NSTextView) -> Bool {
+        guard [leftKey, rightKey, deleteKey, forwardDeleteKey].contains(code) else { return false }
+        let caret = textView.selectedRange()
+        guard caret.length == 0 else { return false }
+        let string = textView.string as NSString
+        guard caret.location <= string.length else { return false }
+        let line = MemoLists.lineContent(of: string.lineRange(for: NSRange(location: caret.location, length: 0)), in: string)
+        guard let mark = MemoLists.plainMarkRange(of: line, in: string) else { return false }
+        switch code {
+        case leftKey:
+            // From just after the mark the caret goes on as from before it.
+            if NSMaxRange(mark) == caret.location { textView.setSelectedRange(NSRange(location: mark.location, length: 0)) }
+            return false
+        case rightKey:
+            if mark.location == caret.location { textView.setSelectedRange(NSRange(location: NSMaxRange(mark), length: 0)) }
+            return false
+        case forwardDeleteKey:
+            // Before the mark: the letter after it goes with it, never the mark alone.
+            guard mark.location == caret.location, NSMaxRange(mark) < string.length else { return false }
+            let next = string.rangeOfComposedCharacterSequence(at: NSMaxRange(mark))
+            replace(NSRange(location: mark.location, length: NSMaxRange(next) - mark.location), with: "", in: textView)
+            textView.setSelectedRange(NSRange(location: mark.location, length: 0))
+            return true
+        default:
+            if NSMaxRange(mark) == caret.location {
+                // In a quote: Delete takes the quote off, as at any quote's words, and the line stays plain.
+                if mark.location == line.location + 2, string.substring(with: NSRange(location: line.location, length: 2)) == "> " {
+                    replace(NSRange(location: line.location, length: 2), with: "", in: textView)
+                    textView.setSelectedRange(NSRange(location: line.location + (MemoLists.plainMark as NSString).length, length: 0))
+                    return true
+                }
+                // After leading tabs: one tab comes off, as Delete there would take it; the line stays plain.
+                if mark.location > line.location {
+                    replace(NSRange(location: mark.location - 1, length: 1), with: "", in: textView)
+                    textView.setSelectedRange(NSRange(location: NSMaxRange(mark) - 1, length: 0))
+                    return true
+                }
+                // At the memo's very front there is nothing before it to take.
+                guard mark.location > 0 else { return true }
+                let before = string.rangeOfComposedCharacterSequence(at: mark.location - 1)
+                replace(NSRange(location: before.location, length: NSMaxRange(mark) - before.location), with: "", in: textView)
+                textView.setSelectedRange(NSRange(location: before.location, length: 0))
+                return true
+            }
+            guard NSMaxRange(mark) < string.length else { return false }
+            let first = string.rangeOfComposedCharacterSequence(at: NSMaxRange(mark))
+            guard NSMaxRange(first) == caret.location else { return false }
+            replace(NSRange(location: mark.location, length: NSMaxRange(first) - mark.location), with: "", in: textView)
+            textView.setSelectedRange(NSRange(location: mark.location, length: 0))
+            return true
+        }
     }
 
     /// Makes the edits one after another, then puts the selection where the change says.

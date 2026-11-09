@@ -229,11 +229,14 @@ public enum NotesHTML {
 
     /// Letters safe inside HTML text or a quoted attribute. Spaces that HTML would fold together
     /// (a run of them, or one starting a line) become no-break spaces, so indents survive.
+    /// The invisible mark that keeps a line plain (`MemoLists.plainMark`) is left out: the line
+    /// was read as plain already.
     static func escape(_ letters: String, afterSpace: Bool = false) -> String {
         var html = ""
         var afterSpace = afterSpace
         for character in letters {
             switch character {
+            case "\u{2060}": continue
             case "&": html += "&amp;"
             case "<": html += "&lt;"
             case ">": html += "&gt;"

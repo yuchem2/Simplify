@@ -98,12 +98,13 @@ public enum MemoAttachments {
     /// The memo as plain text: attachments as `📎 name`, formulas in `$…$` (`MemoMath.plainText`).
     public static func plainText(_ text: AttributedString) -> String {
         let found = attachments(in: text)
-        guard !found.isEmpty else { return MemoMath.plainText(text) }
+        // Without the invisible marks that keep lines plain (`MemoLists.plainMark`).
+        guard !found.isEmpty else { return MemoLists.withoutPlainMarks(MemoMath.plainText(text)) }
         var text = text
         for item in found.reversed() {
             text.replaceSubrange(item.range, with: AttributedString(label(item.ref)))
         }
-        return MemoMath.plainText(text)
+        return MemoLists.withoutPlainMarks(MemoMath.plainText(text))
     }
 
     /// The ids the stored memos use, or nil when one cannot be read: it may use any, so nothing
