@@ -153,6 +153,11 @@ enum MemoFormatCheck {
             window.close()
             return
         }
+        if only == "stripfit" {
+            await checkStripFit(model: model, window: window)
+            window.close()
+            return
+        }
         if only == "perf" {
             await checkPerf(memos: memos, model: model, editor: editor, window: window, reset: reset)
             window.close()
@@ -1326,6 +1331,28 @@ enum MemoFormatCheck {
         check(letters.isEmpty, "a table past 200 rows asks before going in", "\(letters.count) letters")
         check(NSApp.windows.contains { $0 !== window && $0.isVisible && $0 is NSPanel }, "and the question shows, as an ink menu")
         await key(53, "\u{1b}", [])
+    }
+
+    /// `SIMPLIFY_MEMO_CHECK=stripfit`: the pinned toolbar inside the panel at its narrowest and at
+    /// its usual width, in 하나씩 and 모아 보기, so it never makes the panel wider than its place.
+    private static func checkStripFit(model: AppModel, window: NSWindow) async {
+        let pin = MemoBarPin.shared
+        let wasPinned = pin.isPinned
+        defer { pin.isPinned = wasPinned }
+        pin.isPinned = true
+        model.panelMode = .normal
+        for layout in [AppModel.MemoLayout.one, .all] {
+            model.memoLayout = layout
+            for width in [PanelLayout.normalMin, 340, 420] {
+                model.panelWidth = width
+                try? await Task.sleep(for: .seconds(1))
+                let strip = MemoBarFrames.byName["서식 막대"] ?? .null
+                let room = width - 2 * Metrics.spaceXxl
+                log("INFO  \(layout) panel \(Int(width)): strip \(strip.integral)")
+                check(!strip.isNull && strip.width <= room + 0.5, "\(layout) \(Int(width)): the toolbar fits the panel", "\(strip.width) > \(room)")
+                capture(window, "stripfit-\(layout)-\(Int(width))")
+            }
+        }
     }
 
     /// `SIMPLIFY_MEMO_CHECK=aabar`: the Aa bar under its button (하나씩 with tabs, 모아 보기), open

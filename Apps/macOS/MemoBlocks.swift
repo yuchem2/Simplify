@@ -301,14 +301,33 @@ final class MemoBarPin {
 enum MemoBarFrames {
     static var byName: [String: CGRect] = [:]
 }
+
+/// Notes a view's place; going away it takes off only its own note, since another view of the
+/// same name (the pinned toolbar's other line-up) may have noted its place since.
+private struct BarFrameNote: ViewModifier {
+    let name: String
+    @State private var noted: CGRect?
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                // A line-up being swapped out reports no place.
+                guard !frame.isNull, !frame.isInfinite else { return }
+                noted = frame
+                MemoBarFrames.byName[name] = frame
+            }
+            .onDisappear {
+                if MemoBarFrames.byName[name] == noted { MemoBarFrames.byName[name] = nil }
+            }
+    }
+}
 #endif
 
 extension View {
     /// Debug builds note the view's place under `name` for the format check.
     func barFrame(_ name: String) -> some View {
         #if DEBUG
-        onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { MemoBarFrames.byName[name] = $0 }
-            .onDisappear { MemoBarFrames.byName[name] = nil }
+        modifier(BarFrameNote(name: name))
         #else
         self
         #endif
@@ -610,15 +629,23 @@ struct MemoFormatStrip: View {
     private var buttons: MemoBarButtons { MemoBarButtons(draft: draft, side: 20) }
 
     var body: some View {
-        HStack(spacing: Metrics.spaceXs) {
-            paragraphMenu
-            divider
-            buttons.aligns
-            divider
-            buttons.lists
-            buttons.inserts
-            Spacer(minLength: Metrics.spaceS)
-            buttons.pin
+        // One line where the panel has room; in a narrow panel the inserts and the pin go to a
+        // second line, so the bar never makes the panel wider than its place.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Metrics.spaceXs) {
+                formats
+                buttons.inserts
+                Spacer(minLength: Metrics.spaceS)
+                buttons.pin
+            }
+            VStack(alignment: .leading, spacing: Metrics.spaceS) {
+                HStack(spacing: Metrics.spaceXs) { formats }
+                HStack(spacing: Metrics.spaceXs) {
+                    buttons.inserts
+                    Spacer(minLength: Metrics.spaceS)
+                    buttons.pin
+                }
+            }
         }
         .disabled(draft.isUnreadable)
         .padding(.bottom, Metrics.spaceS)
@@ -626,6 +653,15 @@ struct MemoFormatStrip: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("서식 막대")
         .barFrame("서식 막대")
+    }
+
+    /// The paragraph style, alignment and lists.
+    @ViewBuilder private var formats: some View {
+        paragraphMenu
+        divider
+        buttons.aligns
+        divider
+        buttons.lists
     }
 
     private var divider: some View {
