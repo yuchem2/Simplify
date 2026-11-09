@@ -349,13 +349,14 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         peek = view
     }
 
-    /// "수식을 읽을 수 없어요" and why, on hover over each unreadable formula. The text view takes
-    /// tips only from its own letters, not from the paragraphs drawn for it, so they are its tip areas.
+    /// "수식을 읽을 수 없어요" and why, on hover over each unreadable formula, and a link's address
+    /// with "⌘-클릭으로 열기" over its letters. The text view takes tips only from its own letters,
+    /// not from the paragraphs drawn for it, so they are its tip areas.
     private func placeTips() {
         guard let textView, let text = textView.textStorage else { return }
         // Not again for a caret move alone.
         let string = text.string as NSString
-        // Most memos have no formula: nothing to look through on each key.
+        // Formulas and links are looked for on each update; with neither, no tips are placed.
         let whole = NSRange(location: 0, length: string.length)
         var hasMath = string.range(of: MemoMath.displayMark).location != NSNotFound
         if !hasMath {
@@ -363,27 +364,47 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
                 if Self.isOn(value) { hasMath = true; stop.pointee = true }
             }
         }
-        if !hasMath {
+        let links = MemoLinkEdit.memoLinks(in: text, range: whole)
+        if !hasMath, links.isEmpty {
             if !tips.isEmpty { tips.forEach(textView.removeToolTip) }
             tips = []
             tipOwners = []
             tipsPlacedFor = nil
             return
         }
-        let placedFor = ((string as String).hashValue, openFormula, textView.bounds.width)
+        // A link put on or taken off changes no letter: its places and addresses count too.
+        let linkMarks = links.map { "\($0.range.location),\($0.range.length),\($0.address)" }.joined(separator: "|")
+        let placedFor = ((string as String).hashValue ^ linkMarks.hashValue, openFormula, textView.bounds.width)
         if let last = tipsPlacedFor, last.letters == placedFor.0, last.open == placedFor.1, last.width == placedFor.2 { return }
         tipsPlacedFor = placedFor
         tips.forEach(textView.removeToolTip)
         tips = []
         tipOwners = []
-        string.enumerateSubstrings(in: NSRange(location: 0, length: string.length), options: [.byParagraphs, .substringNotRequired]) { _, _, paragraph, _ in
-            for formula in Self.formulas(in: text, paragraph: paragraph) where formula.letters != self.openFormula && formula.latex.length > 0 {
-                guard let reason = FormulaPicture.unreadableReason(string.substring(with: formula.latex)) else { continue }
-                let owner = FormulaTip(text: "수식을 읽을 수 없어요: \(reason)")
-                self.tipOwners.append(owner)
-                for frame in self.frames(of: formula.latex) { self.tips.append(textView.addToolTip(frame, owner: owner, userData: nil)) }
+        if hasMath {
+            string.enumerateSubstrings(in: NSRange(location: 0, length: string.length), options: [.byParagraphs, .substringNotRequired]) { _, _, paragraph, _ in
+                for formula in Self.formulas(in: text, paragraph: paragraph) where formula.letters != self.openFormula && formula.latex.length > 0 {
+                    guard let reason = FormulaPicture.unreadableReason(string.substring(with: formula.latex)) else { continue }
+                    let owner = FormulaTip(text: "수식을 읽을 수 없어요: \(reason)")
+                    self.tipOwners.append(owner)
+                    for frame in self.frames(of: formula.latex) { self.tips.append(textView.addToolTip(frame, owner: owner, userData: nil)) }
+                }
             }
         }
+        for link in links {
+            let owner = FormulaTip(text: "\(link.address) · ⌘-클릭으로 열기")
+            tipOwners.append(owner)
+            // Letters cut off in a narrow table cell take no room: only the ones that show.
+            for frame in frames(of: link.range) where frame.width > 1 { tips.append(textView.addToolTip(frame, owner: owner, userData: nil)) }
+        }
+    }
+
+    /// The link under a point in the text view: its address. Only letters that show count.
+    func link(at point: CGPoint) -> String? {
+        guard let textView, let text = textView.textStorage else { return nil }
+        for link in MemoLinkEdit.memoLinks(in: text, range: NSRange(location: 0, length: text.length)) {
+            if frames(of: link.range).contains(where: { $0.width > 1 && $0.contains(point) }) { return link.address }
+        }
+        return nil
     }
 
     /// A formula in the text view's letters.
@@ -444,7 +465,7 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         // A code block keeps its own face. By its mark: a line starting with inline code is in the
         // same fixed-width face, and is still a line like any other.
         if Self.isOn(text.attribute(Self.codeKey, at: range.location, effectiveRange: nil)) {
-            return NSTextParagraph(attributedString: dressAttachments(nil, text, range) ?? text.copiedPart(range))
+            return NSTextParagraph(attributedString: Self.dressLinks(dressAttachments(nil, text, range) ?? text.copiedPart(range)))
         }
         // The caret as it is now: during an edit the rule's range has already moved.
         if MemoTimeline.isRule(line), !caretIsIn(range) {
@@ -457,7 +478,21 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         }
         let shown = MemoTimeline.stampLength(line).map { stampParagraph(text, range, line, $0) } ?? blockParagraph(text, range, line)
         // A plain paragraph too is made here: TextKit's own would take a substring of the memo's text.
-        return NSTextParagraph(attributedString: dressAttachments(dressFormulas(shown, text, range), text, range) ?? text.copiedPart(range))
+        return NSTextParagraph(attributedString: Self.dressLinks(dressAttachments(dressFormulas(shown, text, range), text, range) ?? text.copiedPart(range)))
+    }
+
+    // MARK: Links
+
+    /// A link's letters with a thin line in the link colour under them. A link's line is drawn
+    /// here, not kept in the memo, so a pasted underline and a link stay apart.
+    @discardableResult
+    static func dressLinks(_ shown: NSMutableAttributedString) -> NSMutableAttributedString {
+        let whole = NSRange(location: 0, length: shown.length)
+        shown.enumerateAttribute(MemoLinkEdit.key, in: whole) { value, part, _ in
+            guard let value = value as? String, MemoLinks.stored(value) != nil else { return }
+            shown.addAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: NSColor(Tokens.link)], range: part)
+        }
+        return shown
     }
 
     // MARK: Attachments

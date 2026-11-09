@@ -148,6 +148,11 @@ enum MemoFormatCheck {
             window.close()
             return
         }
+        if only == "links" {
+            await checkLinks(draft: draft, editor: editor, window: window, reset: reset, type: type, key: key)
+            window.close()
+            return
+        }
         if only == "perf" {
             await checkPerf(memos: memos, model: model, editor: editor, window: window, reset: reset)
             window.close()
@@ -2005,6 +2010,259 @@ enum MemoFormatCheck {
         check(names() == ["나", "가", "다"] && drawn("메모 탭 ") == ["나", "가", "다"], "하나씩 shows the same order", "\(drawn("메모 탭 "))")
         for id in made { memos.delete(id) }
         await wait()
+    }
+
+    // MARK: Links
+
+    /// `SIMPLIFY_MEMO_CHECK=links`: ⌘K, an address pasted on picked letters, links typed, ⌘-click,
+    /// links in table cells and through the clipboard.
+    private static func checkLinks(draft: MemoDraft, editor: NSTextView, window: NSWindow,
+                                   reset: (AttributedString, Int?) async -> Void, type: (String) async -> Void,
+                                   key: (UInt16, String, NSEvent.ModifierFlags) async -> Void) async {
+        let board = NSPasteboard.general
+        let keptBoard: [[(NSPasteboard.PasteboardType, Data)]] = (board.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        }
+        let keptOpener = MemoLinkEdit.opener
+        var opened: [URL] = []
+        MemoLinkEdit.opener = { opened.append($0) }
+        defer {
+            MemoLinkEdit.opener = keptOpener
+            board.clearContents()
+            board.writeObjects(keptBoard.map { types in
+                let item = NSPasteboardItem()
+                for (type, data) in types { item.setData(data, forType: type) }
+                return item
+            })
+        }
+        func wait(_ seconds: Double = 0.4) async { try? await Task.sleep(for: .seconds(seconds)) }
+        var letters: String { String(draft.text.characters) }
+        /// The linked letters and their addresses, in order.
+        func links() -> [String] {
+            draft.text.runs.compactMap { run in
+                run[MemoAttributes.Link.self].map { "\(String(draft.text[run.range].characters))→\($0)" }
+            }
+        }
+        func range(of words: String) -> NSRange { (editor.string as NSString).range(of: words) }
+        func undo() async {
+            editor.undoManager?.undo()
+            await wait()
+        }
+        let space: (UInt16, String) = (49, " ")
+        let returnKey: (UInt16, String) = (36, "\r")
+
+        // ⌘K on picked letters: the field under them, an address typed, Return.
+        await reset(AttributedString("발표 자료는 디자인 시스템 문서에 있어요."), nil)
+        editor.setSelectedRange(range(of: "디자인 시스템 문서"))
+        await wait()
+        check(draft.canLink, "letters on one line can take a link")
+        draft.askForLink()
+        await wait(0.6)
+        if case .link(_, let length, let address)? = draft.book.todos.pop {
+            check(length == 10 && address == nil, "⌘K opens an empty address field for the picked letters", "\(length) \(String(describing: address))")
+        } else {
+            check(false, "⌘K opens the address field", "\(String(describing: draft.book.todos.pop))")
+        }
+        capture(window, "link-field")
+        if let field = window.firstResponder as? NSTextView, field.isFieldEditor {
+            field.insertText("https://figma.com/file/simplify-ds", replacementRange: field.selectedRange())
+            await key(returnKey.0, returnKey.1, [])
+            await wait()
+        } else {
+            check(false, "the address field has the keyboard", "\(String(describing: window.firstResponder))")
+            draft.putLink("https://figma.com/file/simplify-ds", location: range(of: "디자인 시스템 문서").location, length: 10)
+            await wait()
+        }
+        check(draft.book.todos.pop == nil && links() == ["디자인 시스템 문서→https://figma.com/file/simplify-ds"], "Return puts the link on the letters", "\(links())")
+        check(letters == "발표 자료는 디자인 시스템 문서에 있어요.", "the letters stay as they were", letters)
+        capture(window, "link-drawn")
+        // Typed at the link's end, letters are not part of it.
+        editor.setSelectedRange(NSRange(location: NSMaxRange(range(of: "디자인 시스템 문서")), length: 0))
+        await wait()
+        await type("들")
+        check(links() == ["디자인 시스템 문서→https://figma.com/file/simplify-ds"], "letters typed at a link's end are not linked", "\(links())")
+        // ⌘Z takes the link back off in one step (with the letter typed after it first).
+        await undo()
+        await undo()
+        check(links().isEmpty && letters == "발표 자료는 디자인 시스템 문서에 있어요.", "⌘Z takes the link off", "\(links()) \(letters)")
+        editor.undoManager?.redo()
+        await wait()
+        check(links().count == 1, "⌘⇧Z puts it back", "\(links())")
+
+        // ⌘K in a link: its address to change, or 링크 지우기.
+        editor.setSelectedRange(NSRange(location: range(of: "시스템").location, length: 0))
+        await wait()
+        draft.askForLink()
+        await wait(0.6)
+        if case .link(let location, let length, let address)? = draft.book.todos.pop {
+            check(address == "https://figma.com/file/simplify-ds" && NSRange(location: location, length: length) == range(of: "디자인 시스템 문서"),
+                  "⌘K in a link opens its whole link with the address", "\(location),\(length) \(String(describing: address))")
+            draft.putLink("https://figma.com/file/simplify-ds-v2", location: location, length: length)
+            await wait()
+            check(links() == ["디자인 시스템 문서→https://figma.com/file/simplify-ds-v2"], "고치기 changes the address", "\(links())")
+            draft.removeLink(location: location, length: length)
+            await wait()
+            check(links().isEmpty, "링크 지우기 leaves the letters plain", "\(links())")
+        } else {
+            check(false, "⌘K in a link opens the field", "\(String(describing: draft.book.todos.pop))")
+        }
+        // Other addresses are refused; nothing picked puts the address itself in.
+        check(!draft.putLink("javascript:alert(1)", location: 0, length: 2), "a javascript: address is refused")
+        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+        await wait()
+        draft.askForLink()
+        await wait(0.4)
+        if case .link(let location, let length, _)? = draft.book.todos.pop {
+            draft.putLink("www.apple.com", location: location, length: length)
+        }
+        await wait()
+        check(letters.hasSuffix("https://www.apple.com") && links() == ["https://www.apple.com→https://www.apple.com"],
+              "⌘K at a caret puts the address in as a link", "\(links())")
+        // Lines across: no link.
+        await reset(AttributedString("가나\n다라"), nil)
+        editor.setSelectedRange(NSRange(location: 1, length: 3))
+        await wait()
+        check(!draft.canLink, "letters over two lines cannot take one link")
+
+        // An address pasted on picked letters links them.
+        await reset(AttributedString("다음 분기 계획 정리 보기"), nil)
+        board.clearContents()
+        board.setString("  https://notion.so/q4-plan\n", forType: .string)
+        editor.setSelectedRange(range(of: "계획 정리"))
+        await wait()
+        await key(9, "v", [.command])
+        check(letters == "다음 분기 계획 정리 보기" && links() == ["계획 정리→https://notion.so/q4-plan"], "an address pasted on picked letters links them", "\(letters) \(links())")
+        await undo()
+        check(letters == "다음 분기 계획 정리 보기" && links().isEmpty, "one ⌘Z takes that link off", "\(letters) \(links())")
+        // Not an address, or two lines picked: left to the usual paste. (The check's window may
+        // not pass ⌘V on to the text view's own paste, so that is asked of it directly.)
+        board.clearContents()
+        board.setString("그냥 글", forType: .string)
+        editor.setSelectedRange(range(of: "계획 정리"))
+        await wait()
+        check(!MemoLinkEdit.pasteAddress(into: editor, draft: draft) && !MemoLinkEdit.pasteLinked(into: editor, draft: draft),
+              "words on the clipboard are left to the usual paste")
+        editor.paste(nil)
+        await wait()
+        check(letters == "다음 분기 그냥 글 보기" && links().isEmpty, "and paste as words", letters)
+        await reset(AttributedString("가나\n다라"), nil)
+        board.clearContents()
+        board.setString("https://a.com", forType: .string)
+        editor.setSelectedRange(NSRange(location: 1, length: 3))
+        await wait()
+        check(!MemoLinkEdit.pasteAddress(into: editor, draft: draft), "over two lines an address is left to the usual paste")
+        editor.paste(nil)
+        await wait()
+        check(letters == "가https://a.com라" && links().isEmpty, "and pastes as letters", letters)
+        // ⌥⇧⌘V: the address's letters, as always.
+        await reset(AttributedString("다음 분기 계획 정리 보기"), nil)
+        editor.setSelectedRange(range(of: "계획 정리"))
+        await wait()
+        editor.pasteAsPlainText(nil)
+        await wait()
+        check(letters == "다음 분기 https://a.com 보기" && links().isEmpty, "⌥⇧⌘V puts the address in as letters", letters)
+
+        // A typed address becomes a link at the space; ⌘Z once takes the link off, again the space.
+        await reset(AttributedString("참고: "), nil)
+        await type("https://developer.apple.com/documentation")
+        await key(space.0, space.1, [])
+        await wait()
+        check(links() == ["https://developer.apple.com/documentation→https://developer.apple.com/documentation"], "an address and a space make a link", "\(links())")
+        await undo()
+        check(links().isEmpty && letters == "참고: https://developer.apple.com/documentation ", "⌘Z leaves the address as plain letters", "\(links()) \(letters.debugDescription)")
+        await undo()
+        // The space goes; SwiftUI's undo takes it with the letters typed before it, as it always has.
+        check("참고: https://developer.apple.com/documentation".hasPrefix(letters) && links().isEmpty, "⌘Z again takes the space", letters.debugDescription)
+        // And at Return; not in inline code.
+        await reset(AttributedString(""), nil)
+        await type("www.naver.com.")
+        await key(returnKey.0, returnKey.1, [])
+        await wait()
+        check(links() == ["www.naver.com→https://www.naver.com"], "an address and Return make a link, the full stop left out", "\(links())")
+        var code = AttributeContainer()
+        code[MemoAttributes.InlineCode.self] = true
+        await reset(AttributedString("https://a.com", attributes: code), nil)
+        await key(space.0, space.1, [])
+        await wait()
+        check(links().isEmpty, "no link is made in inline code", "\(links())")
+
+        // ⌘-click opens it; a plain click only puts the caret.
+        // On the third line: the check's window measures the box's top a title bar lower.
+        var linked = AttributedString("\n\n열기: ")
+        var linkContainer = AttributeContainer()
+        linkContainer[MemoAttributes.Link.self] = "https://example.com/open"
+        linked += AttributedString("예제 링크", attributes: linkContainer)
+        await reset(linked, nil)
+        await wait(0.4)
+        let screen = editor.firstRect(forCharacterRange: range(of: "예제"), actualRange: nil)
+        let point = window.convertFromScreen(screen)
+        let at = CGPoint(x: point.midX, y: point.midY)
+        func clickLink(_ flags: NSEvent.ModifierFlags) {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let event = NSEvent.mouseEvent(with: type, location: at, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                    NSApp.postEvent(event, atStart: false)
+                }
+            }
+        }
+        clickLink([])
+        await wait(0.6)
+        check(opened.isEmpty, "a plain click on a link opens nothing", "\(opened)")
+        clickLink(.command)
+        await wait(0.6)
+        check(opened.map(\.absoluteString) == ["https://example.com/open"], "⌘-click opens the link", "\(opened)")
+
+        // Copied with its link: HTML and RTF links, and back here as a link.
+        editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+        await wait()
+        await key(8, "c", [.command])
+        let html = board.string(forType: .html) ?? ""
+        let rtf = board.data(forType: .rtf).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        check(html.contains("<a href=\"https://example.com/open\">예제 링크</a>"), "a copy's HTML has the link", html)
+        check(rtf.contains("HYPERLINK") && rtf.contains("example.com/open"), "a copy's RTF has the link")
+        check(board.string(forType: .string) == "\n\n열기: 예제 링크", "a copy's words are the letters")
+        await reset(AttributedString("붙임: "), nil)
+        await key(9, "v", [.command])
+        check(links() == ["예제 링크→https://example.com/open"] && letters == "붙임: \n\n열기: 예제 링크", "pasted back here it is a link again", "\(links()) \(letters)")
+        // From a web page: the link kept, others dropped.
+        await reset(AttributedString(""), nil)
+        board.clearContents()
+        board.setString("웹 링크와 나쁜 링크", forType: .string)
+        board.setString("<meta charset=\"utf-8\"><a href=\"https://www.apple.com/kr/\">웹 링크</a>와 <a href=\"javascript:alert(1)\">나쁜 링크</a>", forType: .html)
+        await key(9, "v", [.command])
+        check(links() == ["웹 링크→https://www.apple.com/kr/"] && letters.hasPrefix("웹 링크와 나쁜 링크"), "a web page's link pastes as a link, javascript: as words", "\(links()) \(letters.debugDescription)")
+
+        // In a table cell: ⌘K on a cell's letters, not across cells; copied and pasted with the table.
+        await reset(tableSample(), nil)
+        editor.setSelectedRange(range(of: "시안 2종"))
+        await wait()
+        check(draft.canLink, "letters in one cell can take a link")
+        draft.askForLink()
+        await wait(0.4)
+        if case .link(let location, let length, _)? = draft.book.todos.pop { draft.putLink("https://figma.com/x", location: location, length: length) }
+        await wait()
+        let cellRun = draft.text.runs.first { $0[MemoAttributes.Link.self] != nil }
+        check(links() == ["시안 2종→https://figma.com/x"] && cellRun?[MemoAttributes.Table.self] == "t1", "a cell's letters take a link and stay in the table", "\(links())")
+        editor.setSelectedRange(range(of: "1,200,000\t시안"))
+        await wait()
+        check(!draft.canLink, "letters across cells cannot take a link")
+        capture(window, "link-table")
+        let table = range(of: "항목\t금액\t메모\n디자인\t1,200,000\t시안 2종\n개발\t3,400,000\t4주")
+        editor.setSelectedRange(table)
+        await wait()
+        await key(8, "c", [.command])
+        check((board.string(forType: .html) ?? "").contains("<a href=\"https://figma.com/x\">시안 2종</a>"), "a copied table's HTML keeps the cell's link")
+        await reset(AttributedString("\n"), 0)
+        await key(9, "v", [.command])
+        check(links() == ["시안 2종→https://figma.com/x"], "the table pastes back with its link", "\(links())")
+        // A table from elsewhere with a link in a cell.
+        await reset(AttributedString(""), nil)
+        board.clearContents()
+        board.setString("항목\t자료\n회의록\tnotion", forType: .string)
+        board.setString("<meta charset=\"utf-8\"><table><tr><td>항목</td><td>자료</td></tr><tr><td>회의록</td><td><a href=\"https://notion.so/weekly-1109\">notion</a> 보기</td></tr></table>", forType: .html)
+        await key(9, "v", [.command])
+        check(links() == ["notion→https://notion.so/weekly-1109"] && draft.text.runs.contains { $0[MemoAttributes.Table.self] != nil },
+              "a pasted table keeps a cell's link", "\(links()) \(letters.debugDescription)")
     }
 
     /// The app's memory as Activity Monitor counts it (physical footprint), in MB.

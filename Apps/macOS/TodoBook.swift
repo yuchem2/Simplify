@@ -134,6 +134,9 @@ enum PanelPop: Equatable {
     case makeTodos(lines: [Int])
     /// 다른 날짜…: a day to pass a row to, or to file the picked memo lines under.
     case pickDay(DayPurpose)
+    /// ⌘K: a link's address for the memo's letters at `location` (UTF-16; none picked when
+    /// `length` is 0), `address` the link's own when they are in one.
+    case link(location: Int, length: Int, address: String?)
 
     enum DayPurpose: Equatable {
         case pass(TodoEntry, from: Period)

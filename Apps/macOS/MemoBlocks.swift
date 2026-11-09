@@ -251,6 +251,7 @@ private struct MemoBarItem {
     static let quote = MemoBarItem(name: "인용문", shortcut: "⌘'", symbol: "text.quote")
     static let table = MemoBarItem(name: "표 넣기", shortcut: nil, symbol: "tablecells")
     static let attach = MemoBarItem(name: "파일 첨부", shortcut: "⌘⇧A", symbol: "paperclip")
+    static let link = MemoBarItem(name: "링크", shortcut: "⌘K", symbol: "link")
 }
 
 /// The buttons the bar and the pinned toolbar share, for the caret's line.
@@ -281,6 +282,8 @@ private struct MemoBarButtons {
     @ViewBuilder var inserts: some View {
         square(.table, isOn: false, isEnabled: !draft.isInTable) { draft.tableAction(.insert) }
         square(.attach, isOn: false) { draft.askToAttach() }
+        // On picked letters within one line and cell, or at the caret; it opens the address field.
+        square(.link, isOn: false, isEnabled: draft.canLink) { draft.askForLink() }
     }
 
     /// The pin: floats the bar under Aa, or keeps it under the "메모" rule.
@@ -484,6 +487,7 @@ struct MemoShortcutCard: View {
         ("글머리 · 대시 · 번호", "⌘⇧7 8 9"),
         ("인용문", "⌘'"),
         ("첨부", "⌘⇧A"),
+        ("링크", "⌘K"),
         ("굵게 · 기울임 · 밑줄", "⌘B I U"),
     ]
 

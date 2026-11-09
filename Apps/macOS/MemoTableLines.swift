@@ -160,7 +160,8 @@ extension MemoLineStyler {
         let row = MemoLists.lineContent(of: range, in: string)
         guard let index = table.rows.firstIndex(of: row) else { return nil }
         let edges = edges(of: table, in: text)
-        let shown = text.copiedPart(range)
+        // Before the cells are cut, so letters past a cell's edge lose the link's line with the rest.
+        let shown = Self.dressLinks(text.copiedPart(range))
         let whole = NSRange(location: 0, length: shown.length)
         if index == 0 { Self.embolden(shown) }
         let style = ((shown.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()

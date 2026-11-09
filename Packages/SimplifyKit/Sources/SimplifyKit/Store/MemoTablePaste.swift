@@ -11,13 +11,28 @@ public enum MemoTablePaste {
         public var italic = false
         public var underline = false
         public var strike = false
+        /// Letters of the cell that were a link elsewhere, in order, with the address (one
+        /// `MemoLinks` takes). Found again in `text` by their letters once it is tidied.
+        public var links: [Link] = []
 
-        public init(_ text: String, bold: Bool = false, italic: Bool = false, underline: Bool = false, strike: Bool = false) {
+        public init(_ text: String, bold: Bool = false, italic: Bool = false, underline: Bool = false, strike: Bool = false,
+                    links: [Link] = []) {
             self.text = text
             self.bold = bold
             self.italic = italic
             self.underline = underline
             self.strike = strike
+            self.links = links
+        }
+
+        public struct Link: Equatable, Sendable {
+            public var letters: String
+            public var address: String
+
+            public init(letters: String, address: String) {
+                self.letters = letters
+                self.address = address
+            }
         }
 
         var isEmpty: Bool { text.allSatisfy(\.isWhitespace) }
@@ -185,7 +200,8 @@ public enum MemoTablePaste {
     // MARK: Memo letters
 
     /// The pieces as memo letters: lines plain, each table's rows one a line with tab-split
-    /// cells, its letters (not the line breaks) under a new id, cells keeping their formatting.
+    /// cells, its letters (not the line breaks) under a new id, cells keeping their formatting
+    /// and links.
     public static func memoText(_ pieces: [Piece], newID: () -> String = MemoTablePaste.newID) -> AttributedString {
         var text = AttributedString()
         for (index, piece) in pieces.enumerated() {
@@ -213,7 +229,19 @@ public enum MemoTablePaste {
                 if cell.italic { container[MemoAttributes.Italic.self] = true }
                 if cell.underline { container[MemoAttributes.Underline.self] = true }
                 if cell.strike { container[MemoAttributes.Strike.self] = true }
-                text += AttributedString(cell.text, attributes: container)
+                var letters = AttributedString(cell.text, attributes: container)
+                // Each link on its letters, the first place they are found after the one before.
+                var from = letters.startIndex
+                for link in cell.links {
+                    // Tidied as the cell's letters were.
+                    let words = link.letters.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
+                        .filter { !$0.isEmpty }.joined(separator: " ").replacingOccurrences(of: "\t", with: " ")
+                    guard let address = MemoLinks.stored(link.address), !words.isEmpty,
+                          let found = letters[from...].range(of: words) else { continue }
+                    letters[found][MemoAttributes.Link.self] = address
+                    from = found.upperBound
+                }
+                text += letters
             }
         }
         return text

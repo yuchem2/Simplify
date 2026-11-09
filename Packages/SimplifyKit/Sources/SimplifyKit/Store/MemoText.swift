@@ -1,7 +1,8 @@
 import Foundation
 
 /// The formatting a memo keeps. The editor draws fonts and colours from these; only these reach
-/// the store, so a paste from elsewhere loses its fonts, links and other styling.
+/// the store, so a paste from elsewhere loses its fonts and other styling (its links are turned
+/// into `Link` when their address is one `MemoLinks` takes).
 public enum MemoAttributes {
     public enum Bold: CodableAttributedStringKey {
         public typealias Value = Bool
@@ -99,6 +100,13 @@ public enum MemoAttributes {
         public typealias Value = Bool
         public static let name = "simplify.memo.todobox"
     }
+
+    /// A link: the letters open this address on ⌘-click. Only http, https and mailto addresses
+    /// (`MemoLinks.address`); never on line breaks or a table's cell-splitting tabs.
+    public enum Link: CodableAttributedStringKey {
+        public typealias Value = String
+        public static let name = "simplify.memo.link"
+    }
 }
 
 /// Which ToDo a chip stands for, and whether it was done when the chip was last drawn. The ToDo
@@ -145,6 +153,8 @@ public extension AttributeScopes {
         public let highlight: MemoAttributes.Highlight
         public let todo: MemoAttributes.Todo
         public let todoBox: MemoAttributes.TodoBox
+        /// Not `link`, which Foundation's own scope holds.
+        public let memoLink: MemoAttributes.Link
     }
 
     var memo: MemoScope.Type { MemoScope.self }
@@ -176,6 +186,9 @@ public extension AttributeDynamicLookup {
 /// A centred or right-set line carries `"al"` (`center` or `right`) and inline code `"kc":true`.
 /// Neither raises the version: a build that does not know them skips the key, as unknown keys
 /// always were, and shows the letters left-set and plain.
+/// A link's letters carry `"ln"` (its address), which does not raise the version either: an
+/// older build shows them as plain letters (and drops the link if it saves the memo). An address
+/// `MemoLinks` would not take (`javascript:`, `file:` …) is dropped on reading and writing.
 public enum MemoText {
     static let version = 2
 
@@ -243,9 +256,10 @@ public enum MemoText {
         var td: String?
         var tx: Bool?
         var tb: Bool?
+        var ln: String?
 
         private enum CodingKeys: String, CodingKey {
-            case t, b, i, u, x, p, tl, fa, k, kc, al, m, s, c, h, td, tx, tb
+            case t, b, i, u, x, p, tl, fa, k, kc, al, m, s, c, h, td, tx, tb, ln
         }
 
         init(from decoder: any Decoder) throws {
@@ -270,6 +284,7 @@ public enum MemoText {
             td = try c.decodeIfPresent(String.self, forKey: .td)
             tx = try c.decodeIfPresent(Bool.self, forKey: .tx)
             tb = try c.decodeIfPresent(Bool.self, forKey: .tb)
+            ln = ((try? c.decodeIfPresent(String.self, forKey: .ln)) ?? nil).flatMap(MemoLinks.stored)
         }
 
         init(text: String, from run: AttributedString.Runs.Run) {
@@ -294,10 +309,11 @@ public enum MemoText {
             td = todo?.id.uuidString
             tx = todo?.isDone == true ? true : nil
             tb = todo != nil && run[MemoAttributes.TodoBox.self] == true ? true : nil
+            ln = run[MemoAttributes.Link.self].flatMap(MemoLinks.stored)
         }
 
         func sameFormatting(as other: Run) -> Bool {
-            b == other.b && i == other.i && u == other.u && x == other.x && p == other.p && tl == other.tl && fa == other.fa && k == other.k && kc == other.kc && al == other.al && m == other.m && s == other.s && c == other.c && h == other.h && td == other.td && tx == other.tx && tb == other.tb
+            b == other.b && i == other.i && u == other.u && x == other.x && p == other.p && tl == other.tl && fa == other.fa && k == other.k && kc == other.kc && al == other.al && m == other.m && s == other.s && c == other.c && h == other.h && td == other.td && tx == other.tx && tb == other.tb && ln == other.ln
         }
 
         var attributed: AttributedString {
@@ -319,11 +335,18 @@ public enum MemoText {
             if k != true, kc != true { container[MemoAttributes.Highlight.self] = h.flatMap(Palette.init(rawValue:)) }
             container[MemoAttributes.Todo.self] = td.flatMap(UUID.init(uuidString:)).map { MemoTodo(id: $0, isDone: tx == true) }
             if tb == true, container[MemoAttributes.Todo.self] != nil { container[MemoAttributes.TodoBox.self] = true }
+            container[MemoAttributes.Link.self] = ln
             var text = AttributedString(t, attributes: container)
             // A table's mark stays off line breaks, which belong to no row.
             if container[MemoAttributes.Table.self] != nil {
                 for index in text.characters.indices where text.characters[index].isNewline {
                     text[index..<text.characters.index(after: index)][MemoAttributes.Table.self] = nil
+                }
+            }
+            if let ln {
+                // Off line breaks and a table's cell-splitting tabs, which belong to no link.
+                for index in text.characters.indices where !MemoLinks.canCarry(text.characters[index]) {
+                    text[index..<text.characters.index(after: index)][MemoAttributes.Link.self] = nil
                 }
             }
             if let attachment {

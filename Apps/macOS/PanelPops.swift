@@ -35,7 +35,7 @@ struct PanelPopLayer: View {
         let fallback: CGFloat = 118
         switch pop {
         case .importer, .pickDay(.pass): return fallback
-        case .search, .makeTodos, .pickDay(.makeTodos): break
+        case .search, .makeTodos, .pickDay(.makeTodos), .link: break
         }
         guard let line = memos.todos.popAnchor else { return fallback }
         let frame = geo.frame(in: .global)
@@ -63,6 +63,8 @@ struct PanelPopLayer: View {
             }
         case .pickDay(let purpose):
             DayPop(purpose: purpose, model: model, calendars: calendars, memos: memos, close: close)
+        case .link(let location, let length, let address):
+            LinkPop(draft: memos.draft, location: location, length: length, address: address, close: close)
         }
     }
 
@@ -71,6 +73,10 @@ struct PanelPopLayer: View {
         if case .search(let offset, let typed) = memos.todos.pop {
             memos.todos.pop = nil
             memos.draft.cancelSearch(at: offset, typed: typed)
+        } else if case .link = memos.todos.pop {
+            // Back to the letters it was about.
+            memos.todos.pop = nil
+            memos.draft.focusRequest += 1
         } else {
             memos.todos.pop = nil
         }

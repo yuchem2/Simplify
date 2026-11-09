@@ -112,6 +112,17 @@ final class MemoDraft {
     /// Pastes a table on the clipboard into the text view (`MemoTableClipboard.paste`); false when
     /// it holds none. Set by `MemoMenuHost`.
     @ObservationIgnored var pasteTable: (() -> Bool)?
+    /// Pastes an address over picked letters as their link (`MemoLinkEdit.pasteAddress`), and
+    /// linked words with their links (`pasteLinked`); false when the clipboard is not that.
+    /// Set by `MemoMenuHost`.
+    @ObservationIgnored var pasteLink: (() -> Bool)?
+    @ObservationIgnored var pasteLinked: (() -> Bool)?
+    /// Puts a link's address on letters of the text view (UTF-16), or takes it off (nil); with no
+    /// letters, the address goes in as a linked word. Set by `MemoMenuHost`.
+    @ObservationIgnored var editLink: ((NSRange, String?) -> Void)?
+    /// What ⌘K works on: the picked letters, or the link the caret is in (all of it), or the
+    /// caret; with the address of the link they are in. Set by `MemoMenuHost`.
+    @ObservationIgnored var linkTarget: (() -> (range: NSRange, address: String?)?)?
     /// The picked card's letter in the text view (UTF-16), set by `MemoMenuHost`.
     @ObservationIgnored var pickedCard: (() -> Int?)?
     /// The letters last cut or copied from this memo with attachments in them, and the clipboard's
@@ -723,7 +734,8 @@ enum MemoStyle {
             text[run.range].foregroundColor = ink(run[MemoAttributes.Ink.self], todo: todo, struck: struck)
             text[run.range].backgroundColor = ground(code: code || inline, highlight: run[MemoAttributes.Highlight.self], todo: todo)
             text[run.range].strikethroughStyle = strike(todo, box: box, struck: struck)
-            text[run.range].underlineStyle = underline(run[MemoAttributes.Underline.self] == true)
+            // A link's line too, as the editor's styler draws it.
+            text[run.range].underlineStyle = underline(run[MemoAttributes.Underline.self] == true || run[MemoAttributes.Link.self] != nil)
             text[run.range].baselineOffset = baselineOffset(script)
         }
         return text
@@ -920,6 +932,7 @@ struct MemoEditor: View {
         }
         .onChange(of: draft.selection) {
             draft.dropInlineCodeAtLineStart()
+            draft.dropLinkTypingAtEnd()
             draft.selectionChanged()
             draft.redrawLines?()
             // After the text view has laid the new selection out.
@@ -1125,6 +1138,8 @@ struct MemoCommands: Commands {
                 Button("형광펜 (\((draft?.lastHighlight ?? .yellow).name))") { draft?.repeatHighlight() }
                     .keyboardShortcut("h", modifiers: [.command, .shift])
                 Button("서식 지우기") { draft?.clearFormatting() }
+                Button("링크…") { draft?.askForLink() }
+                    .keyboardShortcut("k", modifiers: .command)
                 Divider()
                 Button("제목") { draft?.setParagraph(.title) }
                     .keyboardShortcut("1", modifiers: [.command, .option])

@@ -402,7 +402,8 @@ struct MemoAddButton: View {
 }
 
 /// A memo of 모아 보기 that is not being written: drawn read-only as the editor draws it (the same
-/// formatting and `MemoLineStyler`), as tall as its text. A click moves the writing to it.
+/// formatting and `MemoLineStyler`), as tall as its text. A click moves the writing to it; a
+/// ⌘-click on a link opens the link.
 struct MemoReadOnly: View {
     let text: AttributedString
     let label: String
@@ -523,6 +524,12 @@ private struct MemoReadHost: NSViewRepresentable {
                           self.canPick?() == true else { return false }
                     let outer = textView.enclosingScrollView ?? textView
                     guard outer.convert(outer.visibleRect, to: nil).contains(event.locationInWindow) else { return false }
+                    // ⌘-click on a link opens it; any other click moves the writing here.
+                    if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+                       let address = self.styler.link(at: textView.convert(event.locationInWindow, from: nil)) {
+                        MemoLinkEdit.open(address)
+                        return true
+                    }
                     self.pick?()
                     return true
                 }

@@ -39,7 +39,7 @@ public enum NotesHTML {
     /// Formulas are their LaTeX in `$…$`, and a formula line's in `$$…$$`. A table's rows are one
     /// `<table>`, a row's tab-split cells each a `<td>`. An attached file is `📎` and its name.
     /// Inline code is `<tt>` like a code block's letters, and a centred or right-set line's `<div>`
-    /// carries `text-align`. A list's indent in the memo is the memo's own drawing and is not sent:
+    /// carries `text-align`. A link is an `<a href>`. A list's indent in the memo is the memo's own drawing and is not sent:
     /// the 메모 app indents its lists itself.
     public static func body(name: String, text: AttributedString) -> String? {
         guard !MemoText.isBlank(text) else { return nil }
@@ -217,6 +217,7 @@ public enum NotesHTML {
         if run[MemoAttributes.Underline.self] == true { html = "<u>\(html)</u>" }
         if run[MemoAttributes.Italic.self] == true { html = "<i>\(html)</i>" }
         if run[MemoAttributes.Bold.self] == true { html = "<b>\(html)</b>" }
+        if let link = run[MemoAttributes.Link.self].flatMap(MemoLinks.stored) { html = "<a href=\"\(escape(link))\">\(html)</a>" }
         var style: [String] = []
         if let ink = run[MemoAttributes.Ink.self] { style.append("color: \(lightInk(ink))") }
         if run[MemoAttributes.Code.self] != true, run[MemoAttributes.InlineCode.self] != true, let highlight = run[MemoAttributes.Highlight.self] {

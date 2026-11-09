@@ -127,6 +127,8 @@ extension MemoDraft {
         // With a table in it: as words, HTML and the memo's own letters (`MemoTableClipboard`).
         if let piece, MemoTableClipboard.hasTable(piece) {
             MemoTableClipboard.write(piece)
+        } else if let piece, MemoLinkEdit.writeCopy(piece) {
+            // Links go as HTML and RTF links too.
         } else {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(picked, forType: .string)
@@ -163,8 +165,10 @@ extension MemoDraft {
     }
 
     func paste() {
+        if pasteLink?() == true { return }
         if pasteRemembered() { return }
         if pasteTable?() == true { return }
+        if pasteLinked?() == true { return }
         guard let pasted = NSPasteboard.general.string(forType: .string) else { return }
         replaceSelection(with: pasted)
     }
@@ -346,6 +350,14 @@ struct MemoMenuHost: NSViewRepresentable {
                 guard let self, let draft = self.draft, let textView = self.styler.textView else { return false }
                 return MemoTableClipboard.paste(into: textView, draft: draft)
             }
+            draft?.pasteLink = { [weak self] in
+                guard let self, let draft = self.draft, let textView = self.styler.textView else { return false }
+                return MemoLinkEdit.pasteAddress(into: textView, draft: draft)
+            }
+            draft?.pasteLinked = { [weak self] in
+                guard let self, let draft = self.draft, let textView = self.styler.textView else { return false }
+                return MemoLinkEdit.pasteLinked(into: textView, draft: draft)
+            }
             draft?.contentOffset = { [weak self] in
                 guard let self, let draft = self.draft, !draft.boxFrame.isNull, let content = self.window?.contentView else { return nil }
                 let mine = self.convert(self.bounds, to: content)
@@ -360,6 +372,29 @@ struct MemoMenuHost: NSViewRepresentable {
             draft?.startFormula = { [weak self] location in self?.styler.startEmptyFormula(at: location) }
             draft?.notify = { [weak self] words in self?.styler.showNotice(words) }
             draft?.pickedCard = { [weak self] in self?.styler.pickedAttachment }
+            draft?.editLink = { [weak self] range, address in
+                guard let self, let textView = self.styler.textView else { return }
+                if let address, range.length == 0 {
+                    MemoLinkEdit.insert(address, at: range, in: textView)
+                } else {
+                    MemoLinkEdit.set(address, on: range, in: textView)
+                    // The caret after the letters, so typing goes on past the link.
+                    textView.setSelectedRange(NSRange(location: NSMaxRange(range), length: 0))
+                }
+            }
+            draft?.linkTarget = { [weak self] in
+                guard let self, let textView = self.styler.textView, let storage = textView.textStorage else { return nil }
+                let picked = textView.selectedRange()
+                guard NSMaxRange(picked) <= storage.length else { return nil }
+                if picked.length == 0 {
+                    // In a link: all of it; elsewhere the caret, where the address goes in.
+                    if let link = MemoLinkEdit.link(in: storage, caret: picked.location) { return (link.range, link.address) }
+                    return (picked, nil)
+                }
+                let found = MemoLinkEdit.memoLinks(in: storage, range: picked)
+                let whole = found.count == 1 && found[0].range == picked
+                return (picked, whole ? found[0].address : nil)
+            }
             // Once the text view is in the window beside this view.
             Task { @MainActor [weak self] in self?.redrawLines() }
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown, .keyDown]) { [weak self] event in
@@ -385,6 +420,15 @@ struct MemoMenuHost: NSViewRepresentable {
                         if draft.hasFocus, draft.book.todos.pop == nil, let textView = self.styler.textView, window.firstResponder === textView,
                            self.handleFormulaKey(event, in: textView) {
                             return true
+                        }
+                        // An address typed before a space or Return becomes a link, a step after the key's.
+                        if draft.hasFocus, draft.book.todos.pop == nil, !draft.isUnreadable, let textView = self.styler.textView,
+                           window.firstResponder === textView, Self.endsWord(event), let typed = MemoLinkEdit.typedAddress(in: textView) {
+                            let word = (textView.string as NSString).substring(with: typed.range)
+                            // The key's own step, apart from the address typed before it, so ⌘Z
+                            // takes the link off first and then the space alone.
+                            textView.breakUndoCoalescing()
+                            Task { @MainActor in MemoLinkEdit.finishTyped(typed, word: word, in: textView) }
                         }
                         // Tab, Return and Delete in and under tables, then in lists, and a typed `* `.
                         if draft.hasFocus, draft.book.todos.pop == nil, let textView = self.styler.textView, window.firstResponder === textView,
@@ -413,6 +457,12 @@ struct MemoMenuHost: NSViewRepresentable {
                                 draft.showsParagraphBar = false
                                 draft.barClosedByClick = ProcessInfo.processInfo.systemUptime
                             }
+                        }
+                        // ⌘-click on a link opens it; a plain click only puts the caret there.
+                        if self.isInBox(event), event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+                           let textView = self.styler.textView, let address = self.styler.link(at: textView.convert(event.locationInWindow, from: nil)) {
+                            MemoLinkEdit.open(address)
+                            return true
                         }
                         // A click picks a card; a double-click shows it.
                         if self.isInBox(event), let textView = self.styler.textView,
@@ -446,6 +496,12 @@ struct MemoMenuHost: NSViewRepresentable {
                 }
                 return handled ? nil : event
             }
+        }
+
+        /// Space or Return, with nothing held: what finishes a typed address.
+        private static func endsWord(_ event: NSEvent) -> Bool {
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
+            return modifiers.isEmpty && [keySpace, 36, 76].contains(event.keyCode)
         }
 
         /// A key that types into the memo: no ⌘ or ⌃, and not a key that only moves or closes.
@@ -484,11 +540,16 @@ struct MemoMenuHost: NSViewRepresentable {
                 return true
             case (Self.keyV, [.command]) where ["v", "ㅍ"].contains(event.charactersIgnoringModifiers?.lowercased() ?? ""):
                 guard !draft.isUnreadable else { return false }
+                // An address on picked letters links them.
+                if let textView = styler.textView, MemoLinkEdit.pasteAddress(into: textView, draft: draft) { return true }
                 // Letters cut or copied here with cards in them come back whole.
                 if draft.pasteRemembered() { return true }
                 // A table from here or elsewhere goes in as a table.
                 if let textView = styler.textView, MemoTableClipboard.paste(into: textView, draft: draft) { return true }
                 let board = NSPasteboard.general
+                // Linked words from a web page, a document or this memo keep their links.
+                if let textView = styler.textView, board.string(forType: .string) != nil || board.data(forType: MemoTableClipboard.memoType) != nil,
+                   MemoLinkEdit.pasteLinked(into: textView, draft: draft) { return true }
                 let files = (board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
                 // A card copied with its menu goes in again as the same attachment, while its file is here.
                 let refs = files.compactMap(AttachmentShelf.shared.ref(at:)).filter(AttachmentShelf.shared.store.exists)
@@ -549,6 +610,8 @@ struct MemoMenuHost: NSViewRepresentable {
                 // their words; anything else as the text view wrote it, noted as the memo's own.
                 if hasTable {
                     MemoTableClipboard.write(picked)
+                } else if MemoLinkEdit.writeCopy(picked) {
+                    // Links go as HTML and RTF links too.
                 } else {
                     if plain != String(picked.characters) { NSPasteboard.general.setString(plain, forType: .string) }
                     MemoTableClipboard.noteOwnCopy()

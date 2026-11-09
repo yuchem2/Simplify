@@ -34,7 +34,7 @@ enum MemoTableClipboard {
 
     /// The clipboard as a memo's own copy last left it: its words paste back as words, never
     /// read again as a grid (a memo's tab-aligned lines are not a table).
-    private static var ownCopy: Int?
+    private(set) static var ownCopy: Int?
 
     /// A copy or cut in the memo just filled the clipboard.
     static func noteOwnCopy() {
@@ -71,12 +71,12 @@ enum MemoTableClipboard {
     }
 
     /// The data holds these letters, any case.
-    private static func contains(_ data: Data, _ letters: String) -> Bool {
+    static func contains(_ data: Data, _ letters: String) -> Bool {
         String(decoding: data, as: UTF8.self).range(of: letters, options: .caseInsensitive) != nil
     }
 
     /// HTML without pictures, style sheets and scripts, which its reading would fetch and run.
-    private static func withoutLoads(_ html: Data) -> Data {
+    static func withoutLoads(_ html: Data) -> Data {
         var text = String(decoding: html, as: UTF8.self)
         for pattern in ["<(script|iframe|style|object|video|audio)[^>]*/>", "<(script|iframe|style|object|video|audio)[\\s\\S]*?</\\1\\s*>",
                         "<(img|link|embed|source|base|input)\\b[^>]*>", "url\\([^)]*\\)"] {
@@ -85,7 +85,7 @@ enum MemoTableClipboard {
         return Data(text.utf8)
     }
 
-    private static func rich(_ data: Data, type: NSAttributedString.DocumentType) -> NSAttributedString? {
+    static func rich(_ data: Data, type: NSAttributedString.DocumentType) -> NSAttributedString? {
         var options: [NSAttributedString.DocumentReadingOptionKey: Any] = [.documentType: type]
         if type == .html { options[.characterEncoding] = String.Encoding.utf8.rawValue }
         return try? NSAttributedString(data: data, options: options, documentAttributes: nil)
@@ -148,6 +148,7 @@ enum MemoTableClipboard {
                     cell.underline = cell.underline && formatted.underline
                     cell.strike = cell.strike && formatted.strike
                 }
+                cell.links += formatted.links
                 cells[place] = cell
             } else {
                 var cell = formatted
@@ -171,11 +172,13 @@ enum MemoTableClipboard {
     }
 
     /// The formatting a cell keeps from elsewhere: bold, italic, underline and strikethrough that
-    /// all its letters share; never its font, colour or link (nor a link's underline).
+    /// all its letters share, and its links whose address `MemoLinks` takes; never its font or
+    /// colour (nor a link's underline).
     private static func cell(_ rich: NSAttributedString, _ range: NSRange) -> MemoTablePaste.Cell {
         guard range.length > 0 else { return MemoTablePaste.Cell("") }
         var cell = MemoTablePaste.Cell("", bold: true, italic: true, underline: true, strike: true)
         let letters = rich.string as NSString
+        cell.links = MemoLinkEdit.links(in: rich, range: range).map { MemoTablePaste.Cell.Link(letters: letters.substring(with: $0.range), address: $0.address) }
         rich.enumerateAttributes(in: range) { attributes, part, _ in
             guard !letters.substring(with: part).allSatisfy(\.isWhitespace) else { return }
             let traits = (attributes[.font] as? NSFont).map { NSFontManager.shared.traits(of: $0) } ?? []
@@ -342,7 +345,7 @@ enum MemoTableClipboard {
 
     /// The memo's letters as the text view keeps them: the memo's own keys, and the memo's face,
     /// bold and italic where they are; the editor draws the rest from the keys.
-    private static func rendered(_ letters: AttributedString) -> NSMutableAttributedString {
+    static func rendered(_ letters: AttributedString) -> NSMutableAttributedString {
         let converted = (try? NSAttributedString(letters, including: \.memo)) ?? NSAttributedString(string: String(letters.characters))
         let made = NSMutableAttributedString(attributedString: converted)
         let whole = NSRange(location: 0, length: made.length)
@@ -359,12 +362,12 @@ enum MemoTableClipboard {
     }
 
     /// Plain memo letters: the memo's face and ink, no keys.
-    private static func plainAttributes(_ textView: NSTextView) -> [NSAttributedString.Key: Any] {
+    static func plainAttributes(_ textView: NSTextView) -> [NSAttributedString.Key: Any] {
         [.font: NSFont.systemFont(ofSize: MemoStyle.size), .foregroundColor: NSColor(Color.ink)]
     }
 
     /// One edit, as the text view's own: undoable, and passed on to SwiftUI's copy of the memo.
-    private static func replace(_ range: NSRange, with letters: NSAttributedString, in textView: NSTextView) {
+    static func replace(_ range: NSRange, with letters: NSAttributedString, in textView: NSTextView) {
         guard let storage = textView.textStorage, NSMaxRange(range) <= storage.length,
               textView.shouldChangeText(in: range, replacementString: letters.string) else { return }
         textView.breakUndoCoalescing()
