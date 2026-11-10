@@ -652,13 +652,18 @@ enum MemoStyle {
     /// snapshot's text sit that much further in, so they line up with typed text.
     static let textViewInset = CGSize(width: 5, height: 4)
 
-    /// A chip's box letter: larger than the text, so it is easy to hit.
-    static let boxSize: CGFloat = 20
-
     static func font(bold: Bool, italic: Bool, code: Bool, math: Bool, script: MemoScript?, box: Bool = false,
                      paragraph: MemoParagraph? = nil, inlineCode: Bool = false) -> Font {
-        // In the memo's own face, only larger.
-        if box { return .system(size: boxSize) }
+        // In the line's own face and size, so a chip's line keeps its neighbours' baseline and
+        // height; a click on the box is caught by its drawn place, not by where the caret lands.
+        if box {
+            let size: CGFloat = switch paragraph {
+            case .title?: TextStyle.title.size
+            case .heading?: TextStyle.heading.size
+            default: Self.size
+            }
+            return .system(size: size)
+        }
         // Inline code: fixed-width at the code block's size, or at its title's or heading's.
         if inlineCode && !code {
             let size: CGFloat = switch paragraph {

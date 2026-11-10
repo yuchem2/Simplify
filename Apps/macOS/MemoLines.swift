@@ -535,6 +535,33 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
         return (text.attribute(attachmentKey, at: location, effectiveRange: nil) as? String).flatMap(MemoAttachments.Ref.init(value:))
     }
 
+    /// The ToDo chip box under a point in the text view (a few points either side count): its
+    /// letter's place. Chips in a table cell are left to the caret, as their letters are drawn apart.
+    func todoBox(at point: CGPoint) -> Int? {
+        guard let textView, let text = textView.textStorage, let layout = textView.textLayoutManager,
+              let storage = textView.textContentStorage else { return nil }
+        // Only the paragraph under the point: every click in the memo asks.
+        let origin = textView.textContainerOrigin
+        guard let fragment = layout.textLayoutFragment(for: CGPoint(x: point.x - origin.x, y: point.y - origin.y)) else { return nil }
+        let start = storage.offset(from: storage.documentRange.location, to: fragment.rangeInElement.location)
+        let end = storage.offset(from: storage.documentRange.location, to: fragment.rangeInElement.endLocation)
+        guard start >= 0, end <= text.length, start < end else { return nil }
+        var hit: Int?
+        text.enumerateAttribute(Self.todoBoxKey, in: NSRange(location: start, length: end - start)) { value, part, stop in
+            guard Self.isOn(value), text.attribute(Self.tableKey, at: part.location, effectiveRange: nil) == nil else { return }
+            for location in part.location..<NSMaxRange(part)
+            where frames(of: NSRange(location: location, length: 1)).contains(where: { $0.insetBy(dx: -Self.boxSlack, dy: 0).contains(point) }) {
+                hit = location
+                stop.pointee = true
+                return
+            }
+        }
+        return hit
+    }
+
+    /// How far past a chip box's sides a click still ticks it.
+    private static let boxSlack: CGFloat = 3
+
     /// The drawn attachment under a point in the text view: its letter's place and file.
     func attachment(at point: CGPoint) -> (location: Int, ref: MemoAttachments.Ref)? {
         guard let textView, let text = textView.textStorage else { return nil }
@@ -865,6 +892,7 @@ final class MemoLineStyler: NSObject, NSTextContentStorageDelegate, NSTextLayout
     private static let codeKey = NSAttributedString.Key(MemoAttributes.Code.name)
     private static let alignKey = NSAttributedString.Key(MemoAttributes.Align.name)
     static let attachmentKey = NSAttributedString.Key(MemoAttributes.Attachment.name)
+    private static let todoBoxKey = NSAttributedString.Key(MemoAttributes.TodoBox.name)
 
     /// A formula's LaTeX while written or unreadable: the code block's face.
     nonisolated static let latexSize: CGFloat = 13

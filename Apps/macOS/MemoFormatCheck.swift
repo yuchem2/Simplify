@@ -158,6 +158,11 @@ enum MemoFormatCheck {
             window.close()
             return
         }
+        if only == "chiplines" {
+            await checkChipLines(memos: memos, model: model, editor: editor, window: window, reset: reset)
+            window.close()
+            return
+        }
         if only == "perf" {
             await checkPerf(memos: memos, model: model, editor: editor, window: window, reset: reset)
             window.close()
@@ -2036,6 +2041,124 @@ enum MemoFormatCheck {
         await wait(0.8)
         check(names() == ["나", "가", "다"] && drawn("메모 탭 ") == ["나", "가", "다"], "하나씩 shows the same order", "\(drawn("메모 탭 "))")
         for id in made { memos.delete(id) }
+        await wait()
+    }
+
+    // MARK: Chip lines
+
+    /// `SIMPLIFY_MEMO_CHECK=chiplines`: a line with a ToDo chip in it (in a list, on its own, mid
+    /// sentence, in a table cell) is as tall as its neighbours and has its baseline where theirs is,
+    /// and a click anywhere on the box ticks it. Pictures of 하나씩 and 모아 보기 for the eye.
+    private static func checkChipLines(memos: MemoBook, model: AppModel, editor: NSTextView, window: NSWindow,
+                                       reset: (AttributedString, Int?) async -> Void) async {
+        let draft = memos.draft
+        func wait(_ seconds: Double = 0.4) async { try? await Task.sleep(for: .seconds(seconds)) }
+        let titles = ["AI 허브 규칙 만들기", "전시 구성안 고치기", "견적서 보내기", "표 안의 할 일"]
+        let made = titles.compactMap { memos.todos.add($0, to: model.panelPeriod) }
+        guard made.count == titles.count else {
+            log("FAIL  could not make the ToDos")
+            return
+        }
+        memos.todos.setDone(made[1].id, true)
+        await wait()
+        func chip(_ number: Int) -> AttributedString {
+            MemoChips.chip(id: made[number].id, title: made[number].title, isDone: number == 1)
+        }
+        func row(_ text: AttributedString) -> AttributedString {
+            var text = text
+            text[MemoAttributes.Table.self] = "t1"
+            return text
+        }
+        var text = AttributedString("• 위 글머리 줄\n• ") + chip(0) + AttributedString("\n\t• 아래 하위 줄\n")
+        text += chip(1) + AttributedString("\n보통 줄\n문장 가운데 ") + chip(2) + AttributedString(" 뒤에 이어지는 글\n보통 줄 둘\n")
+        text += row(chip(3) + AttributedString("\t메모")) + AttributedString("\n") + row(AttributedString("둘째\t칸")) + AttributedString("\n끝")
+        await reset(text, 0)
+        await wait(0.6)
+        check(MemoChips.chips(in: draft.text).count == 4, "the four chips stay chips", "\(MemoChips.chips(in: draft.text).count)")
+
+        /// Each paragraph's first words, height and baseline (from the paragraph's top).
+        func lines() -> [(words: String, height: CGFloat, baseline: CGFloat)] {
+            var found: [(String, CGFloat, CGFloat)] = []
+            guard let manager = editor.textLayoutManager else { return [] }
+            manager.enumerateTextLayoutFragments(from: manager.documentRange.location, options: [.ensuresLayout]) { fragment in
+                let words = (fragment.textElement as? NSTextParagraph)?.attributedString.string ?? ""
+                if let line = fragment.textLineFragments.first {
+                    found.append((words.trimmingCharacters(in: .newlines), fragment.layoutFragmentFrame.height,
+                                  line.typographicBounds.minY + line.glyphOrigin.y))
+                }
+                return true
+            }
+            return found
+        }
+        let measured = lines()
+        for line in measured { log("      \(line.height)  \(line.baseline)  \(line.words.prefix(20))") }
+        func line(_ prefix: String) -> (words: String, height: CGFloat, baseline: CGFloat)? {
+            measured.first { $0.words.hasPrefix(prefix) }
+        }
+        let pairs: [(chip: String, plain: String, what: String)] = [
+            ("● □", "● 위", "a chip in a list"),
+            ("☑", "보통 줄", "a done chip on its own line"),
+            ("문장 가운데", "보통 줄 둘", "a chip mid sentence"),
+            ("□ 표", "둘째", "a chip in a table cell"),
+        ]
+        for pair in pairs {
+            guard let chipLine = line(pair.chip), let plainLine = line(pair.plain) else {
+                check(false, "\(pair.what) is laid out", "\(measured.map(\.words))")
+                continue
+            }
+            check(abs(chipLine.height - plainLine.height) < 0.5, "\(pair.what) is as tall as a plain line",
+                  "\(chipLine.height) vs \(plainLine.height)")
+            check(abs(chipLine.baseline - plainLine.baseline) < 0.5, "\(pair.what) sits on a plain line's baseline",
+                  "\(chipLine.baseline) vs \(plainLine.baseline)")
+        }
+        capture(window, "chiplines-one")
+
+        // A click on the box's left edge, middle and right edge finds it, and ticks it each time.
+        // Asked of the styler the way the memo's click monitor asks it: posted clicks do not reach
+        // a check window that cannot become key. The click itself is tried with agent-desktop.
+        let string = editor.string as NSString
+        let boxAt = string.range(of: "• □").location + 2
+        if let styler = editor.textLayoutManager?.delegate as? MemoLineStyler, let manager = editor.textLayoutManager,
+           let content = manager.textContentManager, let start = content.location(content.documentRange.location, offsetBy: boxAt),
+           let end = content.location(start, offsetBy: 1), let range = NSTextRange(location: start, end: end) {
+            var box = CGRect.null
+            manager.enumerateTextSegments(in: range, type: .standard, options: []) { _, frame, _, _ in
+                box = box.union(frame)
+                return true
+            }
+            box = box.offsetBy(dx: editor.textContainerOrigin.x, dy: editor.textContainerOrigin.y)
+            log("      box \(box)")
+            for (name, x) in [("left edge", box.minX + 1), ("middle", box.midX), ("right edge", box.maxX - 1), ("2 pt left of it", box.minX - 2)] {
+                let before = memos.todos.item(made[0].id)?.isDone
+                let found = styler.todoBox(at: CGPoint(x: x, y: box.midY))
+                if let found { draft.clickBox(at: found, count: 1) }
+                draft.tickedByClick = nil
+                await wait()
+                let after = memos.todos.item(made[0].id)?.isDone
+                check(found == boxAt && before != nil && after == !(before ?? false), "a click on the box's \(name) ticks it",
+                      "\(String(describing: found)) \(String(describing: before)) → \(String(describing: after))")
+            }
+            check(styler.todoBox(at: CGPoint(x: box.maxX + 12, y: box.midY)) == nil, "a click on the chip's words is not on its box")
+            // A double-click on the box ticks it once.
+            let before = memos.todos.item(made[0].id)?.isDone
+            draft.clickBox(at: boxAt, count: 1)
+            draft.clickBox(at: boxAt, count: 2)
+            await wait()
+            check(memos.todos.item(made[0].id)?.isDone == !(before ?? false), "a double-click on the box ticks it once")
+            draft.tickedByClick = nil
+            check(MemoChips.chips(in: draft.text).count == 4, "the chips stay chips after the clicks", "\(MemoChips.chips(in: draft.text).count)")
+        } else {
+            check(false, "the first chip's box is found")
+        }
+
+        // 모아 보기 draws a memo not being written as plain text.
+        draft.resignEditor?()
+        model.memoLayout = .all
+        await wait(1.2)
+        capture(window, "chiplines-all")
+        model.memoLayout = .one
+        await wait(0.6)
+        memos.todos.entries(for: model.panelPeriod).filter { entry in made.contains { $0.id == entry.todoID } }.forEach(memos.todos.remove)
         await wait()
     }
 

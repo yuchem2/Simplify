@@ -71,9 +71,9 @@ extension MemoDraft {
         focusRequest += 1
     }
 
-    /// A click on a chip's box, or a double-click anywhere on a chip, ticks its ToDo. The text
-    /// view puts the caret just after a clicked box, and a double-click picks a word in the chip
-    /// (sometimes with the space after it).
+    /// A double-click anywhere on a chip, or a click on a box in a table cell (the text view puts
+    /// the caret just after it), ticks its ToDo; other box clicks are caught first by `clickBox`.
+    /// A double-click picks a word in the chip (sometimes with the space after it).
     func selectionChanged() {
         let now = ProcessInfo.processInfo.systemUptime
         guard now - lastBoxClick < 0.6 else { return }
@@ -104,6 +104,22 @@ extension MemoDraft {
         if let redrawn = MemoChips.chips(in: text).first(where: { $0.todo.id == chip.todo.id }) {
             selection = AttributedTextSelection(insertionPoint: redrawn.range.upperBound, typingAttributes: AttributeContainer())
         }
+    }
+
+    /// A click on a chip's box, found by where the box is drawn (`MemoLineStyler.todoBox`), ticks
+    /// its ToDo; the caret stays where it was. The second click of a double-click on it does not
+    /// tick it back. False when no chip starts there (the text not caught up yet), so the click
+    /// goes on to the text view.
+    @discardableResult
+    func clickBox(at location: Int, count: Int) -> Bool {
+        guard let chip = MemoChips.chips(in: text).first(where: {
+            String(text[text.startIndex..<$0.range.lowerBound].characters).utf16.count == location
+        }) else { return false }
+        let now = ProcessInfo.processInfo.systemUptime
+        if count >= 2, let last = tickedByClick, last.id == chip.todo.id, now - last.at < 0.8 { return true }
+        toggle(chip.todo.id)
+        tickedByClick = (chip.todo.id, now)
+        return true
     }
 
     /// Opens a pop about the memo, beside the line the selection is on.
@@ -469,6 +485,13 @@ struct MemoMenuHost: NSViewRepresentable {
                            let hit = self.styler.attachment(at: textView.convert(event.locationInWindow, from: nil)) {
                             self.pick(hit.location, in: textView)
                             if event.clickCount >= 2 { draft.preview(hit.ref) }
+                            return true
+                        }
+                        // A click on a chip's box ticks it, wherever on the box it lands.
+                        if self.isInBox(event), event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
+                           let textView = self.styler.textView,
+                           let box = self.styler.todoBox(at: textView.convert(event.locationInWindow, from: nil)),
+                           draft.clickBox(at: box, count: event.clickCount) {
                             return true
                         }
                         if self.isInBox(event) {
