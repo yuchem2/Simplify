@@ -109,3 +109,7 @@ Google·iCloud 캘린더의 일정을 보고 고치면서, 그날·그 주·그 
 ## 개발
 
 빌드, 설치, 코드 구조, 테스트는 [DEVELOPMENT.md](DEVELOPMENT.md)를 봐요.
+
+## 라이선스
+
+[MIT](LICENSE). 앱에 들어 있는 고운바탕 글꼴은 [SIL Open Font License](Packages/SimplifyKit/Sources/SimplifyKit/Resources/Fonts/OFL.txt)를 따라요.
