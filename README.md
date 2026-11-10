@@ -24,6 +24,8 @@ Release로 빌드해 `/Applications/Simplify.app`에 설치하고 다시 열어�
 
 개발 빌드도 같은 이유로 `.noindex`로 끝나는 폴더에 만들어요(예: `-derivedDataPath build/dev.noindex`). 그 밖의 폴더에 만든 앱을 실행하면 macOS가 앱으로 등록해서 목록에 하나 더 생겨요.
 
+Debug 빌드에는 위젯을 넣지 않아요. 위젯이 들어 있는 개발 빌드를 실행하면 같은 번들 ID라서 설치된 앱의 위젯을 가로채고, 바탕화면에 놓아 둔 위젯이 사라져요. 위젯 자체를 시험할 때만 `SIMPLIFY_DEBUG_WIDGETS=YES`를 붙여 빌드하고, 끝나면 `scripts/install.sh`로 다시 설치해요.
+
 ## 구조
 
 | 경로 | 내용 |
