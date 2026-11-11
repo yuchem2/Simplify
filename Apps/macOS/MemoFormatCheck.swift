@@ -168,6 +168,11 @@ enum MemoFormatCheck {
             window.close()
             return
         }
+        if only == "find" {
+            await checkFind(memos: memos, model: model, editor: editor, window: window, reset: reset, key: key)
+            window.close()
+            return
+        }
         if only == "perf" {
             await checkPerf(memos: memos, model: model, editor: editor, window: window, reset: reset)
             window.close()
@@ -2826,6 +2831,245 @@ enum MemoFormatCheck {
                                     using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
         var springLoadingHighlight: NSSpringLoadingHighlight { .none }
         func resetSpringLoading() {}
+    }
+
+    // MARK: Find
+
+    /// `SIMPLIFY_MEMO_CHECK=find`: ⌘F in the open memo. How many places and in what order, the chip
+    /// passed over, the marks drawn (in tables, code and quotes too), the room under the box and the
+    /// shown place in sight under it, ⌘G and Return, replacing one and ⌘Z, replacing all and one ⌘Z,
+    /// a replacement in a table cell keeping its cells, another day found again, Esc, ⌘G with the
+    /// box closed, the 찾기 menu, and pictures in the light and dark themes.
+    private static func checkFind(memos: MemoBook, model: AppModel, editor: NSTextView, window: NSWindow,
+                                  reset: (AttributedString, Int?) async -> Void,
+                                  key: (UInt16, String, NSEvent.ModifierFlags) async -> Void) async {
+        let draft = memos.draft
+        let find = draft.find
+        func wait(_ seconds: Double = 0.4) async { try? await Task.sleep(for: .seconds(seconds)) }
+        /// A picture of the window, and with SIMPLIFY_FIND_PAUSE a pause for a real screenshot
+        /// (`screencapture -l <window>`): `cacheDisplay` leaves TextKit 2's drawing of the marks out.
+        let pauses = ProcessInfo.processInfo.environment["SIMPLIFY_FIND_PAUSE"] != nil
+        func picture(_ name: String) async {
+            capture(window, name)
+            guard pauses else { return }
+            log("SHOT  \(window.windowNumber) \(name)")
+            await wait(3)
+        }
+        var letters: String { String(draft.text.characters) }
+        let keptAppearance = NSApp.appearance
+        defer { NSApp.appearance = keptAppearance }
+        NSApp.appearance = NSAppearance(named: .aqua)
+        model.panelMode = .normal
+        model.panelWidth = PanelLayout.normalMin
+        await wait(0.8)
+
+        // The 편집 menu has 찾기 with its five items.
+        if let edit = NSApp.mainMenu?.items.first(where: { $0.submenu?.items.contains { $0.title == "찾기" } == true })?.submenu {
+            log("INFO  편집: \(edit.items.map { $0.isSeparatorItem ? "—" : $0.title })")
+            let items = edit.items.first { $0.title == "찾기" }?.submenu?.items.filter { !$0.isSeparatorItem }.map(\.title) ?? []
+            check(items == ["찾기…", "찾아서 바꾸기…", "다음 찾기", "이전 찾기", "선택 항목으로 찾기"], "편집 › 찾기 has its five items", "\(items)")
+            check(edit.items.filter { $0.title == "찾기" || $0.title == "Find" }.count == 1, "and only one 찾기")
+        } else {
+            log("INFO  menus: \(NSApp.mainMenu?.items.map(\.title) ?? [])")
+            check(false, "편집 › 찾기 is in the menu bar")
+        }
+
+        let todo = memos.todos.add("회의 자료 보내기", to: model.panelPeriod)
+        var text = AttributedString("주간 회의 준비 · 11월 2주\n• 회의실 B 예약 확인\n• 지난 회의 메모 정리\n")
+        if let todo { text += MemoChips.chip(id: todo.id, title: todo.title, isDone: false) }
+        text += AttributedString("\n오후 회의는 4시로\n")
+        var row1 = AttributedString("품목\t회의 시간"), row2 = AttributedString("사과\t1,200")
+        row1[MemoAttributes.Table.self] = "t1"
+        row2[MemoAttributes.Table.self] = "t1"
+        text += row1 + AttributedString("\n") + row2 + AttributedString("\n")
+        var code = AttributedString("let 회의 = 1")
+        code[MemoAttributes.Code.self] = true
+        text += code + AttributedString("\n> 인용 속 회의\n")
+        for number in 1...16 { text += AttributedString("빈 줄 \(number)\n") }
+        text += AttributedString("다음 주 회의 안건 모으기")
+        await reset(text, 0)
+        await wait(0.6)
+        let original = letters
+        let expected = MemoFind.matches(of: "회의", in: draft.text)
+        check(expected.count == 8, "the sample has eight places outside the chip", "\(expected.count)")
+
+        // ⌘F in the memo opens the box, its field focused, the memo's letters under it.
+        await key(3, "f", [.command])
+        await wait()
+        check(find.isOpen && find.focusedField == .find, "⌘F opens the box with its field focused", "\(find.isOpen) \(String(describing: find.focusedField))")
+        check(editor.textContainerInset.height < 1, "the memo is not pushed down", "\(editor.textContainerInset)")
+        let box = find.frameInContent
+        log("INFO  box \(box.integral)")
+        check(abs(box.width - MemoFindBox.width) < 0.5 && abs(box.height - 40) < 0.5, "the box is 248 wide and one row of 40", "\(box.size)")
+        find.query = "회의"
+        await wait()
+        check(find.matches == expected, "every place is found, front to back", "\(find.matches)")
+        check(find.current == 0 && find.countText == "1/8", "the first after the caret is shown, 1/8", find.countText)
+        if let todo, let chip = MemoChips.chips(in: draft.text).first(where: { $0.todo.id == todo.id }) {
+            let chipRange = NSRange(chip.range, in: draft.text)
+            check(!find.matches.contains { NSIntersectionRange($0, chipRange).length > 0 }, "the chip's 회의 is passed over")
+        }
+        find.query = "워크숍"
+        await wait()
+        check(find.foundNothing && find.countText == "없음", "a word not in the memo reads 없음", find.countText)
+        await picture("find-none-light")
+        find.query = "회"
+        await wait()
+        check(find.matches.count == 8, "회 finds 회의 too", "\(find.matches.count)")
+        find.query = "회의"
+        await wait()
+
+        /// The places are drawn by a layer in the memo's text view, under its letters: a grey box a
+        /// line of each place, the shown one's edged. A picture of the window (`cacheDisplay`) leaves
+        /// TextKit 2's letters out, so the drawing itself is seen in the SIMPLIFY_FIND_PAUSE shots.
+        func shownIsEdged(_ what: String) async {
+            find.reveal()
+            await wait(0.5)
+            let places = find.placeFrames(in: editor)
+            let shown = places.filter(\.isShown)
+            check(shown.count >= 1 && places.count >= find.matches.count - 1, "\(what): every place in sight has its box, the shown one edged",
+                  "\(places.count) boxes, \(shown.count) edged")
+        }
+        await shownIsEdged("a plain line")
+        check(editor.subviews.contains { String(describing: type(of: $0)) == "FindMarksView" }, "drawn by a layer in the memo's text view")
+
+        // Return and ⌘G go on, ⇧Return and ⇧⌘G go back, round the ends.
+        await key(36, "\r", [])
+        check(find.current == 1, "Return in the field shows the next", "\(String(describing: find.current))")
+        await key(5, "g", [.command])
+        check(find.current == 2, "⌘G the next again", "\(String(describing: find.current))")
+        await key(5, "g", [.command, .shift])
+        await key(36, "\r", [.shift])
+        check(find.current == 0, "⇧⌘G and ⇧Return go back", "\(String(describing: find.current))")
+        await key(36, "\r", [.shift])
+        check(find.current == 7, "and round to the last", "\(String(describing: find.current))")
+
+        // The last is far down: scrolled into sight, under the box.
+        await wait(0.5)
+        if let frame = find.currentFrame, let scroll = editor.enclosingScrollView {
+            let clip = scroll.contentView
+            let shown = clip.convert(frame, from: editor)
+            check(shown.minY >= clip.bounds.minY + MemoFindState.oneRowCover - 0.5 && shown.maxY <= clip.bounds.maxY + 0.5,
+                  "the last place is scrolled into sight below the box", "\(shown) in \(clip.bounds)")
+        }
+        await picture("find-scrolled-light")
+        // In a table row, code and a quote: the fragments that draw themselves draw the marks too.
+        for (index, what) in [(4, "a table cell"), (5, "inline code's line"), (6, "a quote")] {
+            while find.current != index { find.step(1) }
+            await shownIsEdged(what)
+        }
+        await picture("find-table-light")
+
+        // ⌥⌘F brings out the replace row, its field focused, and more room.
+        await key(3, "f", [.command, .option])
+        await wait()
+        check(find.showsReplaceRow && find.focusedField == .replace, "⌥⌘F brings out the replace row", "\(find.showsReplaceRow) \(String(describing: find.focusedField))")
+        check(abs(find.frameInContent.height - 68) < 0.5, "the box is two rows, 68", "\(find.frameInContent.size)")
+        find.replacement = "미팅"
+        while find.current != 0 { find.step(1) }
+        await wait()
+        find.reveal()
+        await picture("find-replace-light")
+
+        // 바꾸기: the shown place, then the next is shown; ⌘Z puts it back.
+        await key(36, "\r", [])
+        await wait(0.6)
+        check(letters.hasPrefix("주간 미팅 준비") && find.matches.count == 7, "Return in 바꿀 글 replaces the shown place", "\(letters.prefix(12)) \(find.matches.count)")
+        check(find.current == 0 && find.matches.first?.location == expected[1].location + 0, "and the next place is shown", "\(String(describing: find.current)) \(find.matches.first.map(\.location) ?? -1)")
+        editor.undoManager?.undo()
+        await wait(0.6)
+        check(letters == original, "⌘Z puts it back", String(letters.prefix(20)))
+
+        // In a table cell, a tab in the replacement does not split the cell.
+        find.refresh(from: 0)
+        while find.current != 4 { find.step(1) }
+        find.replacement = "회\t의실"
+        find.replaceCurrent()
+        await wait(0.6)
+        let rows = MemoTodoLines.lines(in: draft.text).map { String(draft.text[$0].characters) }.filter { $0.hasPrefix("품목") }
+        check(rows == ["품목\t회의실 시간"], "a replacement in a cell keeps the row's cells", "\(rows)")
+        editor.undoManager?.undo()
+        await wait(0.6)
+        check(letters == original, "⌘Z puts the cell back", String(letters.prefix(20)))
+
+        // 모두 8: every place in one edit, the chip as it was; one ⌘Z puts all back.
+        find.replacement = "미팅"
+        find.refresh(from: 0)
+        await key(36, "\r", [.command, .option])
+        await wait(0.8)
+        let after = letters
+        check(MemoFind.matches(of: "회의", in: draft.text).isEmpty && after.components(separatedBy: "미팅").count - 1 == 8,
+              "⌥⌘Return replaces all eight", "\(after.components(separatedBy: "미팅").count - 1)")
+        check(after.contains("회의 자료 보내기") && MemoChips.chips(in: draft.text).count == 1, "the chip keeps its words")
+        check(find.matches.isEmpty && find.countText == "없음", "and nothing is left to find", find.countText)
+        editor.undoManager?.undo()
+        await wait(0.8)
+        check(letters == original, "one ⌘Z puts all eight back", String(letters.prefix(20)))
+        find.refresh(from: 0)
+        check(find.matches.count == 8, "and they are found again", "\(find.matches.count)")
+
+        // Another day: the box stays open and finds there; back again, here.
+        let today = model.selectedDay
+        model.select(model.calendar.date(byAdding: .day, value: 1, to: today)!)
+        await wait(0.8)
+        check(find.isOpen && find.matches.isEmpty, "on another day the box stays open and finds again there", "\(find.isOpen) \(find.matches.count)")
+        draft.text = AttributedString("회의 둘, 회의 하나")
+        await wait(0.6)
+        check(find.matches.count == 2, "and follows that day's letters", "\(find.matches.count)")
+        draft.text = AttributedString()
+        await wait(0.3)
+        model.select(today)
+        await wait(0.8)
+        check(find.matches.count == 8, "back on the day, its eight", "\(find.matches.count)")
+
+        // Dark pictures: one row, replace row, nothing found.
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        await wait(0.8)
+        find.refresh(from: 0)
+        await wait(0.4)
+        await shownIsEdged("dark theme")
+        await picture("find-replace-dark")
+        find.toggleReplace()
+        await wait(0.4)
+        check(!find.showsReplaceRow && abs(find.frameInContent.height - 40) < 0.5, "⇄ takes the replace row in", "\(find.frameInContent.size)")
+        await picture("find-dark")
+        find.query = "워크숍"
+        await wait(0.4)
+        await picture("find-none-dark")
+        find.query = "회의"
+        NSApp.appearance = NSAppearance(named: .aqua)
+        await wait(0.6)
+        await picture("find-light")
+
+        // Esc: the box goes, the memo takes focus with the shown place picked, the room goes.
+        let shown = find.current.map { find.matches[$0] }
+        find.focus(.find)
+        await wait()
+        await key(53, "\u{1b}", [])
+        await wait(0.5)
+        check(!find.isOpen && window.firstResponder === editor, "Esc closes the box and the memo takes focus", "\(find.isOpen) \(String(describing: window.firstResponder))")
+        check(editor.selectedRange() == shown, "with the shown place picked", "\(editor.selectedRange()) vs \(String(describing: shown))")
+        check(!editor.subviews.contains { String(describing: type(of: $0)) == "FindMarksView" }, "and the marks are gone")
+
+        // ⌘G with the box closed: from the caret, the next place picked.
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        await wait(0.3)
+        await key(5, "g", [.command])
+        check(editor.selectedRange() == expected[0], "⌘G with the box closed picks the next place", "\(editor.selectedRange())")
+        await key(5, "g", [.command])
+        check(editor.selectedRange() == expected[1], "and the one after", "\(editor.selectedRange())")
+        // ⌘E: picked letters become the words looked for.
+        editor.setSelectedRange(NSRange(location: (letters as NSString).range(of: "오후").location, length: 2))
+        await wait(0.3)
+        await key(14, "e", [.command])
+        check(find.query == "오후" && !find.isOpen, "⌘E takes the picked letters, the box stays closed", find.query)
+        await key(3, "f", [.command])
+        await wait()
+        check(find.isOpen && find.query == "오후" && find.matches.count == 1, "⌘F with letters picked looks for them", "\(find.query) \(find.matches.count)")
+        await key(53, "\u{1b}", [])
+        await wait()
+        if let todo { memos.todos.remove(memos.todos.entries(for: model.panelPeriod).first { $0.todoID == todo.id }!) }
+        await wait()
     }
 
     private static func capture(_ window: NSWindow, _ name: String) {

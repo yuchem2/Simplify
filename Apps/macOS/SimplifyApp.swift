@@ -52,6 +52,7 @@ struct SimplifyApp: App {
         .modelContainer(container)
         .commands {
             MemoCommands()
+            MemoFindCommands()
             CommandGroup(replacing: .appSettings) {
                 Button("설정…") { model.isSettingsOpen = true }
                     .keyboardShortcut(",", modifiers: .command)

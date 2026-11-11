@@ -88,6 +88,8 @@ final class MemoDraft {
     /// not, so the frames above are moved by it before a click is judged against them.
     @ObservationIgnored var boxFrame: CGRect = .null
     @ObservationIgnored var contentOffset: (() -> CGPoint?)?
+    /// ⌘F in this memo (`MemoFind.swift`).
+    @ObservationIgnored let find = MemoFindState()
 
     /// A frame from SwiftUI's global coordinates in the window content's (top-left origin).
     func inContent(_ frame: CGRect) -> CGRect {
@@ -914,6 +916,7 @@ struct MemoEditor: View {
         // Under the memo the bar would hang past the end of the scroll content, where clicks do not
         // reach it; the room is made inside the content instead.
         .padding(.bottom, showsBar ? max(0, barY + MemoFormatBar.height - height) : 0)
+        .modifier(MemoFindLayer(draft: draft))
         .focusedValue(\.memoDraft, focused ? draft : nil)
         .onChange(of: focused, initial: true) {
             draft.hasFocus = focused

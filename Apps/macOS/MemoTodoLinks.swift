@@ -835,7 +835,7 @@ struct MemoMenuHost: NSViewRepresentable {
                   let content = window?.contentView else { return false }
             let point = content.convert(event.locationInWindow, from: nil)
             let top = content.isFlipped ? point : CGPoint(x: point.x, y: content.bounds.height - point.y)
-            guard draft.visibleBox.contains(top) else { return false }
+            guard draft.visibleBox.contains(top), !draft.find.frameInContent.contains(top) else { return false }
             if let field = content.hitTest(point) as? NSTextView, field.isFieldEditor { return false }
             return true
         }
