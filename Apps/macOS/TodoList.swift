@@ -9,8 +9,9 @@ import SimplifyKit
 /// A click picks a row and the keys act on it through `TodoKeyHost`: SwiftUI focus on a plain
 /// row does not take the keyboard from the calendar beside it.
 ///
-/// The rows stand at most `listCap` tall (three plain rows) and scroll inside that, so a long list
-/// does not push the memo down; the add row stays under them.
+/// The rows stand at most three rows tall (`cap`: the first three rows as laid out, a row with a
+/// line under its title taller) and scroll inside that, so a long list does not push the memo
+/// down; the add row stays under them.
 struct TodoList: View {
     let period: Period
     let model: AppModel
@@ -26,6 +27,8 @@ struct TodoList: View {
     /// The rows' own scroll, how tall all the rows are, and which ends have rows hidden past them.
     @State private var rowsScroll = ScrollPosition()
     @State private var rowsHeight: CGFloat = 0
+    /// The bottom of the third row, so the cap shows three whole rows however tall they are.
+    @State private var thirdRowBottom: CGFloat = 0
     @State private var hidden = HiddenEnds()
     /// Where the rows are scrolled and each row's place: read to scroll to a row, never drawn.
     @State private var places = RowPlaces()
@@ -40,12 +43,14 @@ struct TodoList: View {
     /// A plain row (no line under its title): its 16 pt box `spaceXxs` down, taller than the item
     /// letters beside it, and `spaceXs` above and under.
     static let rowHeight = 16 + Metrics.spaceXxs + 2 * Metrics.spaceXs
-    /// The rows show three plain rows at most; more scroll inside.
+    /// Three plain rows: the least the cap is, and the snapshot's cap (it lays out no rows to measure).
     static let listCap = 3 * rowHeight
 
     private var todos: TodoBook { memos.todos }
+    /// The rows show their first three whole at most; more scroll inside.
+    private var cap: CGFloat { max(Self.listCap, thirdRowBottom) }
     /// More rows than the list shows at once.
-    private var scrolls: Bool { rowsHeight > Self.listCap + 0.5 }
+    private var scrolls: Bool { rowsHeight > cap + 0.5 }
 
     var body: some View {
         let rows = todos.entries(for: period)
@@ -81,7 +86,7 @@ struct TodoList: View {
         .onChange(of: rowsHeight) { revealPending() }
     }
 
-    /// The rows: as tall as they are up to `listCap`, scrolled inside past it, with a `shade` line
+    /// The rows: as tall as they are up to `cap`, scrolled inside past it, with a `shade` line
     /// at an end that has rows hidden past it. The snapshot draws the top `listCap` cut off.
     @ViewBuilder
     private func rowsArea(_ rows: [TodoEntry]) -> some View {
@@ -95,7 +100,7 @@ struct TodoList: View {
                 // Room at the sides for the rows' fill, which reaches past their edges.
                 rowStack(rows).padding(.horizontal, Metrics.spaceXs)
             }
-            .frame(height: Self.listCap)
+            .frame(height: cap)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in places.offset = offset }
             .onScrollGeometryChange(for: HiddenEnds.self) { geometry in
                 HiddenEnds(above: geometry.contentOffset.y > 0.5,
@@ -125,6 +130,7 @@ struct TodoList: View {
                     } isTargeted: { dropTarget = $0 ? entry.id : (dropTarget == entry.id ? nil : dropTarget) }
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.rowsSpace)) } action: { frame in
                         places.frames[entry.id] = frame
+                        if index == 2 { thirdRowBottom = frame.maxY }
                         if pendingReveal == entry.id { revealPending() }
                     }
                 }
@@ -139,8 +145,8 @@ struct TodoList: View {
         guard scrolls, let frame = places.frames[id] else { return }
         if frame.minY < places.offset {
             rowsScroll.scrollTo(y: max(0, frame.minY))
-        } else if frame.maxY > places.offset + Self.listCap {
-            rowsScroll.scrollTo(y: min(frame.maxY, rowsHeight) - Self.listCap)
+        } else if frame.maxY > places.offset + cap {
+            rowsScroll.scrollTo(y: min(frame.maxY, rowsHeight) - cap)
         }
     }
 

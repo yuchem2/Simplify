@@ -3304,6 +3304,24 @@ enum MemoFormatCheck {
         model.select(period.start)
         await wait(1.0)
 
+        // A row with a line under its title (linked elsewhere) among the first three: the cap grows
+        // so the three still show whole.
+        todos.link(made[0].id, to: nextDay)
+        await wait(1.0)
+        let tallerScroll = Self.scrollViews(in: window.contentView!).first { $0.frame.height > cap + 4 && $0.frame.height < cap + 40 }
+        if let tallerScroll {
+            tallerScroll.contentView.scroll(to: .zero)
+            tallerScroll.reflectScrolledClipView(tallerScroll.contentView)
+            await wait(0.4)
+        }
+        check(tallerScroll != nil && list.map { abs($0.height - tallerScroll!.frame.height) < 0.6 } == true,
+              "a linked row among the first three makes the cap taller than \(Int(cap))",
+              "\(String(describing: tallerScroll?.frame.height)) list \(String(describing: list))")
+        capture(window, "todofold-linked")
+        todos.entries(for: nextDay).filter { $0.todoID == made[0].id }.forEach(todos.remove)
+        await wait(1.0)
+        check(list.map { abs($0.height - cap) < 0.6 } == true, "unlinked, the cap is three plain rows again", "\(String(describing: list))")
+
         // Folding: the rows and the add row go, the memo moves up, the state is remembered.
         let openTop = memoTop
         todos.selectedRow = first
