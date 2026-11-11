@@ -254,7 +254,7 @@ enum MemoListKeys {
     }
 
     /// A code block's lines keep Tab and Return as they are.
-    private static func isCode(at location: Int, in textView: NSTextView) -> Bool {
+    static func isCode(at location: Int, in textView: NSTextView) -> Bool {
         guard let storage = textView.textStorage, storage.length > 0 else { return false }
         let line = (storage.string as NSString).lineRange(for: NSRange(location: min(location, storage.length), length: 0))
         let at = min(line.location, storage.length - 1)

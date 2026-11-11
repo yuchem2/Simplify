@@ -138,6 +138,11 @@ enum MemoFormatCheck {
             window.close()
             return
         }
+        if only == "mdpaste" {
+            await checkMarkdownPaste(draft: draft, editor: editor, window: window, reset: reset, key: key)
+            window.close()
+            return
+        }
         if only == "aabar" {
             await checkAaBar(memos: memos, model: model, editor: editor, window: window, reset: reset, type: type, key: key)
             window.close()
@@ -1336,6 +1341,170 @@ enum MemoFormatCheck {
         check(letters.isEmpty, "a table past 200 rows asks before going in", "\(letters.count) letters")
         check(NSApp.windows.contains { $0 !== window && $0.isVisible && $0 is NSPanel }, "and the question shows, as an ink menu")
         await key(53, "\u{1b}", [])
+    }
+
+    /// `SIMPLIFY_MEMO_CHECK=mdpaste`: Markdown pasted with ⌘V as the memo's formatting, ⌘Z twice
+    /// (its marks, then nothing), 일반 텍스트로 붙여넣기 as typed, left as typed in a code block and
+    /// a table cell, a heading after words starting its own line, a table inside Markdown. The
+    /// clipboard is put back as it was.
+    private static func checkMarkdownPaste(draft: MemoDraft, editor: NSTextView, window: NSWindow,
+                                           reset: (AttributedString, Int?) async -> Void,
+                                           key: (UInt16, String, NSEvent.ModifierFlags) async -> Void) async {
+        let board = NSPasteboard.general
+        let kept: [[(NSPasteboard.PasteboardType, Data)]] = (board.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        }
+        defer {
+            board.clearContents()
+            board.writeObjects(kept.map { types in
+                let item = NSPasteboardItem()
+                for (type, data) in types { item.setData(data, forType: type) }
+                return item
+            })
+        }
+        func wait(_ seconds: Double = 0.4) async { try? await Task.sleep(for: .seconds(seconds)) }
+        var letters: String { String(draft.text.characters) }
+        func put(_ words: String) {
+            board.clearContents()
+            board.setString(words, forType: .string)
+        }
+        func caret(_ location: Int) async {
+            window.makeFirstResponder(editor)
+            editor.setSelectedRange(NSRange(location: location, length: 0))
+            await wait(0.3)
+        }
+        /// The letters carrying `key`, joined by `|`.
+        func marked<K: AttributedStringKey>(_ key: K.Type) -> String where K.Value: Hashable & Sendable {
+            draft.text.runs[key].compactMap { value, range in value == nil ? nil : String(draft.text[range].characters) }.joined(separator: "|")
+        }
+
+        // The memo's first edit is left alone: a new memo's first save takes the undo steps
+        // with it, whatever was pasted (so does a table's), which is not what is checked here.
+        await reset(AttributedString("준비"), nil)
+        editor.insertText("!", replacementRange: editor.selectedRange())
+        await wait(1.5)
+
+        // ⌘V: the memo's formatting, no marks.
+        let answer = """
+        ## 회의 정리
+
+        이번 주 **결론**은 *범위를 줄이고* 마감을 지키는 것. 자세한 건 [문서](https://example.com/doc)를 보세요.
+
+        - 배포는 `화요일`
+          - QA는 ~~월요일~~ 수요일
+        1. 첫째
+        2. 둘째
+
+        > 인용한 말
+
+        - [ ] 남은 일
+        - [x] 끝난 일
+
+        ---
+
+        넓이는 $\\pi r^2$ 이에요.
+
+        ```swift
+        let a = 1
+        ```
+        """
+        await reset(AttributedString(""), nil)
+        put(answer)
+        await key(9, "v", [.command])
+        await wait()
+        let expected = "회의 정리\n\n이번 주 결론은 범위를 줄이고 마감을 지키는 것. 자세한 건 문서를 보세요.\n\n- 배포는 화요일\n\t- QA는 월요일 수요일\n1. 첫째\n2. 둘째\n\n> 인용한 말\n\n- 남은 일\n- 끝난 일\n\n────\n\n넓이는 \\pi r^2 이에요.\n\nlet a = 1"
+        check(letters == expected, "⌘V on Markdown puts in the memo's letters, no marks", letters.debugDescription)
+        check(draft.text.runs.contains { $0[MemoAttributes.Paragraph.self] == .heading && String(draft.text[$0.range].characters) == "회의 정리" },
+              "## is a 머리말 line")
+        check(marked(MemoAttributes.Bold.self) == "결론" && marked(MemoAttributes.Italic.self) == "범위를 줄이고", "bold and italic", marked(MemoAttributes.Bold.self))
+        check(marked(MemoAttributes.InlineCode.self) == "화요일" && marked(MemoAttributes.Code.self) == "let a = 1", "inline code and a code block",
+              marked(MemoAttributes.Code.self))
+        check(marked(MemoAttributes.Strike.self) == "월요일|끝난 일", "strikethrough, and a done ToDo line struck", marked(MemoAttributes.Strike.self))
+        check(draft.text.runs[MemoAttributes.Link.self].compactMap { $0.0 } == ["https://example.com/doc"], "the link keeps its address")
+        check(marked(MemoAttributes.Math.self) == "\\pi r^2", "an inline formula", marked(MemoAttributes.Math.self))
+        check(draft.text.runs.allSatisfy { $0[MemoAttributes.Todo.self] == nil }, "ToDo lines make no chips")
+        check(editor.selectedRange().location == (expected as NSString).length, "the caret ends after the paste", "\(editor.selectedRange())")
+        capture(window, "mdpaste-format")
+
+        // ⌘Z twice: first the words with their marks, then nothing.
+        editor.undoManager?.undo()
+        await wait()
+        check(letters == answer, "the first ⌘Z leaves the Markdown as typed", letters.debugDescription)
+        check(marked(MemoAttributes.Bold.self).isEmpty && marked(MemoAttributes.Paragraph.self).isEmpty, "with no formatting")
+        capture(window, "mdpaste-undo")
+        editor.undoManager?.undo()
+        await wait()
+        check(letters.isEmpty, "the second ⌘Z takes the paste away", letters.debugDescription)
+
+        // 일반 텍스트로 붙여넣기: as typed, one step.
+        await reset(AttributedString(""), nil)
+        put("**굵게** 그대로\n| a | b |\n|---|---|\n| 1 | 2 |")
+        await caret(0)
+        await key(9, "v", [.command, .option, .shift])
+        await wait()
+        check(letters == "**굵게** 그대로\n| a | b |\n|---|---|\n| 1 | 2 |" && marked(MemoAttributes.Bold.self).isEmpty && marked(MemoAttributes.Table.self).isEmpty,
+              "일반 텍스트로 붙여넣기 leaves marks and tables as typed", letters.debugDescription)
+        editor.undoManager?.undo()
+        await wait()
+        check(letters.isEmpty, "and one ⌘Z takes it away", letters.debugDescription)
+
+        // Tab-split words with a sign in them still make a table, as before.
+        put("name\t_id_\nfoo\tbar")
+        if case .pieces? = MemoTableClipboard.read() { check(true, "a tab grid with a sign in it is still a table") } else { check(false, "a tab grid with a sign in it is still a table") }
+        // Rich text with links keeps going to the linked paste.
+        board.clearContents()
+        board.setString("<a href=\"https://a.com\">*글*</a>", forType: .html)
+        board.setString("*글*", forType: .string)
+        check(MemoTableClipboard.read() == nil, "rich text with links is no Markdown paste")
+
+        // Plain words are no Markdown paste.
+        put("그냥 글, snake_case_name, $5")
+        check(MemoTableClipboard.read() == nil, "words without a sure sign are no Markdown paste")
+
+        // In a code block: as typed.
+        var code = AttributedString("let a = 1")
+        code[MemoAttributes.Code.self] = true
+        await reset(code, nil)
+        await caret(("let a = 1" as NSString).length)
+        put(" // **그대로**")
+        // Left to the text view's own paste (done directly: its menu item is only on while this
+        // window is the key one).
+        check(!MemoTableClipboard.paste(into: editor, draft: draft), "in a code block Markdown is no paste of ours")
+        editor.paste(nil)
+        await wait()
+        check(letters == "let a = 1 // **그대로**" && marked(MemoAttributes.Bold.self).isEmpty, "in a code block Markdown stays as typed", letters.debugDescription)
+
+        // In a table cell: as typed.
+        var cells = MemoTablePaste.table([[MemoTablePaste.Cell("가"), MemoTablePaste.Cell("나")], [MemoTablePaste.Cell("다"), MemoTablePaste.Cell("라")]], id: "m1")
+        cells += AttributedString("\n끝")
+        await reset(cells, nil)
+        await caret(("가" as NSString).length)
+        put("**굵**")
+        check(!MemoTableClipboard.paste(into: editor, draft: draft), "in a table cell Markdown is no paste of ours")
+        editor.paste(nil)
+        await wait()
+        check(letters.hasPrefix("가**굵**\t나\n") && marked(MemoAttributes.Bold.self).isEmpty, "in a table cell Markdown stays as typed", letters.debugDescription)
+
+        // A heading after words on the caret's line starts the next line.
+        await reset(AttributedString("앞 글"), nil)
+        put("## 머리말\n본문 **굵게**")
+        await key(9, "v", [.command])
+        await wait()
+        check(letters == "앞 글\n머리말\n본문 굵게", "a heading pasted after words goes on the next line", letters.debugDescription)
+        check(draft.text.runs.contains { $0[MemoAttributes.Paragraph.self] == .heading && String(draft.text[$0.range].characters) == "머리말" }
+              && draft.text.runs.allSatisfy { !($0[MemoAttributes.Paragraph.self] != nil && String(draft.text[$0.range].characters).contains("앞")) },
+              "and only that line is a heading")
+        capture(window, "mdpaste-heading")
+
+        // A table inside Markdown.
+        await reset(AttributedString(""), nil)
+        put("**표**\n\n| 항목 | 값 |\n|---|---|\n| 사과 | **3** |\n\n끝")
+        await key(9, "v", [.command])
+        await wait()
+        let tableIDs = Set(draft.text.runs.compactMap { $0[MemoAttributes.Table.self] })
+        check(letters == "표\n\n항목\t값\n사과\t3\n\n끝" && tableIDs.count == 1, "a table in Markdown is a memo table", letters.debugDescription)
+        check(marked(MemoAttributes.Bold.self) == "표|3", "its cell keeps bold", marked(MemoAttributes.Bold.self))
+        capture(window, "mdpaste-table")
     }
 
     /// `SIMPLIFY_MEMO_CHECK=stripfit`: the pinned toolbar inside the panel at its narrowest and at

@@ -6,8 +6,9 @@ import SimplifyKit
 /// tab-split words (spreadsheets take them as cells), HTML with a `<table>` (the 메모 app, Pages
 /// and the web take a table), and the memo's own letters (`MemoTablePaste.pasteboardType`), which
 /// paste back here whole. Pasting reads, first that fits: the memo's own letters; a table in HTML
-/// or RTF (the 메모 app, Excel, Numbers, Google Sheets, Word, web pages); a Markdown table; lines
-/// split by tabs that form a grid. Anything else pastes as the text view always has.
+/// or RTF (the 메모 app, Excel, Numbers, Google Sheets, Word, web pages); Markdown with a sure sign
+/// of it (`MemoMarkdown`), as the memo's formatting; a Markdown table; lines split by tabs that
+/// form a grid. Anything else pastes as the text view always has.
 @MainActor
 enum MemoTableClipboard {
     static let memoType = NSPasteboard.PasteboardType(MemoTablePaste.pasteboardType)
@@ -43,14 +44,18 @@ enum MemoTableClipboard {
 
     // MARK: Pasting
 
-    /// What the clipboard holds when it is a table paste: the memo's own letters, or pieces read
-    /// from elsewhere. Nil when it is not one.
+    /// What the clipboard holds when it is a table or Markdown paste: the memo's own letters,
+    /// pieces read from elsewhere, or Markdown words and the memo letters they make. Nil when it
+    /// is none of these.
     enum Paste {
         case memo(AttributedString)
         case pieces([MemoTablePaste.Piece])
+        case markdown(words: String, letters: AttributedString)
     }
 
-    static func read(_ board: NSPasteboard = .general) -> Paste? {
+    /// `markdown`: whether Markdown is made into the memo's formatting (not in a code block or a
+    /// table cell, where it stays as typed).
+    static func read(_ board: NSPasteboard = .general, markdown: Bool = true) -> Paste? {
         if let data = board.data(forType: memoType), let text = MemoTablePaste.unclip(data), hasTable(text) {
             return .memo(text)
         }
@@ -65,6 +70,15 @@ enum MemoTableClipboard {
             return .pieces(pieces)
         }
         guard let words = board.string(forType: .string) else { return nil }
+        // Not words that form a tab grid, nor rich text with links, which paste as they did.
+        let linked = board.data(forType: .html).map { contains($0, "href") } == true || board.data(forType: .rtf).map { contains($0, "HYPERLINK") } == true
+        if markdown, !linked, MemoTablePaste.tabGrid(words) == nil, MemoMarkdown.looks(words) {
+            let letters = MemoMarkdown.memoText(words)
+            // Nothing the memo shows differently (the words were all marks it keeps as letters).
+            if letters != AttributedString(words) {
+                return .markdown(words: words, letters: letters)
+            }
+        }
         if let pieces = MemoTablePaste.markdownPieces(words) { return .pieces(pieces) }
         if let rows = MemoTablePaste.tabGrid(words) { return .pieces([.table(rows)]) }
         return nil
@@ -203,13 +217,18 @@ enum MemoTableClipboard {
         return level + (mark.last == "." ? "\(mark) " : "• ") + rest
     }
 
-    /// ⌘V and the right-click menu's 붙여넣기 with a table on the clipboard: in place of the
-    /// selection, or filling the caret's table from its cell. False when the clipboard holds no
-    /// table, so the paste goes on as usual. A very large table asks first.
+    /// ⌘V and the right-click menu's 붙여넣기 with a table or Markdown on the clipboard: in place
+    /// of the selection, or filling the caret's table from its cell. False when the clipboard holds
+    /// neither, so the paste goes on as usual. A very large table asks first.
     static func paste(into textView: NSTextView, draft: MemoDraft) -> Bool {
-        guard !draft.isUnreadable, let paste = read() else { return false }
+        guard let storage = textView.textStorage else { return false }
+        let at = textView.selectedRange().location
+        // In a code block or a table cell, Markdown stays as typed.
+        let markdown = !MemoListKeys.isCode(at: at, in: textView) && MemoLineStyler.table(in: storage, at: at) == nil
+        guard !draft.isUnreadable, let paste = read(markdown: markdown) else { return false }
         let pieces: [MemoTablePaste.Piece]
         let letters: AttributedString
+        var words: String?
         switch paste {
         case .memo(let text):
             letters = text
@@ -217,8 +236,12 @@ enum MemoTableClipboard {
         case .pieces(let found):
             pieces = found
             letters = MemoTablePaste.memoText(found)
+        case .markdown(let typed, let made):
+            words = typed
+            letters = made
+            pieces = tables(in: made)
         }
-        let go = { insert(letters, pieces: pieces, into: textView, draft: draft) }
+        let go = { insert(letters, words: words, into: textView, draft: draft) }
         guard MemoTablePaste.isLarge(pieces), let window = textView.window else {
             go()
             return true
@@ -237,9 +260,29 @@ enum MemoTableClipboard {
         return true
     }
 
+    /// The memo letters' tables as pieces, for their size.
+    private static func tables(in letters: AttributedString) -> [MemoTablePaste.Piece] {
+        var rows: [String: [[MemoTablePaste.Cell]]] = [:]
+        var order: [String] = []
+        for line in MemoTodoLines.lines(in: letters) where !line.isEmpty {
+            guard let id = letters.runs[line.lowerBound][MemoAttributes.Table.self] else { continue }
+            if rows[id] == nil { order.append(id) }
+            rows[id, default: []].append(String(letters[line].characters).components(separatedBy: MemoTables.separator).map { MemoTablePaste.Cell($0) })
+        }
+        return order.compactMap { rows[$0].map { .table($0) } }
+    }
+
+    /// The run is on a whole line's formatting: a table row, a paragraph style or a code block.
+    private static func isWholeLine(_ run: AttributedString.Runs.Run?) -> Bool {
+        guard let run else { return false }
+        return run[MemoAttributes.Table.self] != nil || run[MemoAttributes.Paragraph.self] != nil || run[MemoAttributes.Code.self] == true
+    }
+
     /// The letters in place of the selection, as the text view's own edit (one undo step). In a
-    /// table cell a single table fills the table from that cell instead.
-    private static func insert(_ letters: AttributedString, pieces: [MemoTablePaste.Piece], into textView: NSTextView, draft: MemoDraft) {
+    /// table cell a single table fills the table from that cell instead. Markdown `words` go in
+    /// first as they are and then become the letters, two undo steps: the first ⌘Z leaves the
+    /// words with their marks, the second takes them away.
+    private static func insert(_ letters: AttributedString, words: String?, into textView: NSTextView, draft: MemoDraft) {
         guard let storage = textView.textStorage else { return }
         var selected = textView.selectedRange()
         var movedUnder = false
@@ -254,19 +297,56 @@ enum MemoTableClipboard {
         }
         let string = storage.string as NSString
         let content = MemoLists.lineContent(of: string.lineRange(for: NSRange(location: selected.location, length: 0)), in: string)
-        let startsTable = letters.runs.first?[MemoAttributes.Table.self] != nil
-        let endsTable = letters.runs.last?[MemoAttributes.Table.self] != nil
+        // A table starts on a line of its own, and what follows it on the caret's line goes under
+        // it; from Markdown, a heading or a code block too.
+        let wholeLine: (AttributedString.Runs.Run?) -> Bool = { run in
+            words == nil ? run?[MemoAttributes.Table.self] != nil : isWholeLine(run)
+        }
+        let startsLine = wholeLine(letters.runs.first)
+        let endsLine = wholeLine(letters.runs.last)
         let added = rendered(letters)
-        // A table starts on a line of its own, and what follows it on the caret's line goes under it.
-        if startsTable || movedUnder, selected.location > content.location {
+        if startsLine || movedUnder, selected.location > content.location {
             added.insert(NSAttributedString(string: "\n", attributes: plainAttributes(textView)), at: 0)
         }
-        let breaksAfter = endsTable && NSMaxRange(selected) < NSMaxRange(content)
+        let breaksAfter = endsLine && NSMaxRange(selected) < NSMaxRange(content)
         if breaksAfter { added.append(NSAttributedString(string: "\n", attributes: plainAttributes(textView))) }
-        replace(selected, with: added, in: textView)
-        // The caret after what went in, before the line break added after a table.
-        let caret = selected.location + added.length - (breaksAfter ? 1 : 0)
-        textView.setSelectedRange(NSRange(location: min(caret, (textView.string as NSString).length), length: 0))
+        // The caret after what went in, before the line break added after it.
+        func putIn(_ range: NSRange) {
+            replace(range, with: added, in: textView)
+            let caret = range.location + added.length - (breaksAfter ? 1 : 0)
+            textView.setSelectedRange(NSRange(location: min(caret, (textView.string as NSString).length), length: 0))
+            draft.focusRequest += 1
+        }
+        guard let words else {
+            putIn(selected)
+            return
+        }
+        let typed = NSAttributedString(string: words, attributes: plainAttributes(textView))
+        replace(selected, with: typed, in: textView)
+        textView.setSelectedRange(NSRange(location: min(selected.location + typed.length, (textView.string as NSString).length), length: 0))
+        // On the next turn of the run loop, so the undo manager closes the first step's group.
+        DispatchQueue.main.async {
+            let range = NSRange(location: selected.location, length: typed.length)
+            guard NSMaxRange(range) <= (textView.string as NSString).length,
+                  (textView.string as NSString).substring(with: range) == words else { return }
+            putIn(range)
+        }
+    }
+
+    /// The clipboard's words in place of the selection as they are: no table, no Markdown, no
+    /// formatting from elsewhere (the 서식 menu's 일반 텍스트로 붙여넣기, ⌥⇧⌘V).
+    static func pastePlain(into textView: NSTextView, draft: MemoDraft) {
+        guard !draft.isUnreadable, let words = NSPasteboard.general.string(forType: .string) else { return }
+        let selected = textView.selectedRange()
+        // As typed at the caret: in a code block or a heading, it takes that line's style.
+        // Never a link's, a ToDo chip's or a card's, which stand for one thing each.
+        var attributes = textView.typingAttributes
+        for name in [MemoAttributes.Link.name, MemoAttributes.Todo.name, MemoAttributes.TodoBox.name, MemoAttributes.Attachment.name, "NSLink"] {
+            attributes[NSAttributedString.Key(name)] = nil
+        }
+        if attributes[.font] == nil { attributes = plainAttributes(textView) }
+        replace(selected, with: NSAttributedString(string: words, attributes: attributes), in: textView)
+        textView.setSelectedRange(NSRange(location: min(selected.location + (words as NSString).length, (textView.string as NSString).length), length: 0))
         draft.focusRequest += 1
     }
 

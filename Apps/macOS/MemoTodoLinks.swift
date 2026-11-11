@@ -366,6 +366,10 @@ struct MemoMenuHost: NSViewRepresentable {
                 guard let self, let draft = self.draft, let textView = self.styler.textView else { return false }
                 return MemoTableClipboard.paste(into: textView, draft: draft)
             }
+            draft?.pastePlain = { [weak self] in
+                guard let self, let draft = self.draft, let textView = self.styler.textView else { return }
+                MemoTableClipboard.pastePlain(into: textView, draft: draft)
+            }
             draft?.pasteLink = { [weak self] in
                 guard let self, let draft = self.draft, let textView = self.styler.textView else { return false }
                 return MemoLinkEdit.pasteAddress(into: textView, draft: draft)
@@ -560,6 +564,11 @@ struct MemoMenuHost: NSViewRepresentable {
                 AttachmentShelf.shared.copy(picked.ref)
                 NSPasteboard.general.setString(MemoAttachments.label(picked.ref), forType: .string)
                 draft.rememberCopied(AttributedString(draft.text[picked.range]))
+                return true
+            // 일반 텍스트로 붙여넣기 here, before the 편집 menu's own Paste and Match Style takes the keys.
+            case (Self.keyV, [.command, .option, .shift]):
+                guard !draft.isUnreadable, NSPasteboard.general.string(forType: .string) != nil else { return false }
+                draft.pastePlain?()
                 return true
             case (Self.keyV, [.command]) where ["v", "ㅍ"].contains(event.charactersIgnoringModifiers?.lowercased() ?? ""):
                 guard !draft.isUnreadable else { return false }
@@ -876,6 +885,7 @@ struct MemoMenuHost: NSViewRepresentable {
                 .item("잘라내기", detail: "⌘X", isEnabled: hasSelection) { draft.cutSelection() },
                 .item("복사", detail: "⌘C", isEnabled: hasSelection) { draft.copySelection() },
                 .item("붙여넣기", detail: "⌘V", isEnabled: NSPasteboard.general.string(forType: .string) != nil) { draft.paste() },
+                .item("일반 텍스트로 붙여넣기", detail: "⌥⇧⌘V", isEnabled: NSPasteboard.general.string(forType: .string) != nil) { draft.pastePlain?() },
                 .item("모두 선택", detail: "⌘A", isEnabled: !draft.text.characters.isEmpty) { draft.selectAll() },
                 .divider,
                 .item("굵게", detail: "⌘B", isEnabled: hasSelection) { draft.toggle(MemoAttributes.Bold.self) },

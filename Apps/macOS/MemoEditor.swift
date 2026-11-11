@@ -112,6 +112,9 @@ final class MemoDraft {
     /// Pastes a table on the clipboard into the text view (`MemoTableClipboard.paste`); false when
     /// it holds none. Set by `MemoMenuHost`.
     @ObservationIgnored var pasteTable: (() -> Bool)?
+    /// Pastes the clipboard's words as they are, no table or Markdown made of them
+    /// (`MemoTableClipboard.pastePlain`). Set by `MemoMenuHost`.
+    @ObservationIgnored var pastePlain: (() -> Void)?
     /// Pastes an address over picked letters as their link (`MemoLinkEdit.pasteAddress`), and
     /// linked words with their links (`pasteLinked`); false when the clipboard is not that.
     /// Set by `MemoMenuHost`.
@@ -1180,6 +1183,9 @@ struct MemoCommands: Commands {
                 Button("표 넣기") { draft?.tableAction(.insert) }
                 Button("파일 첨부…") { draft?.askToAttach() }
                     .keyboardShortcut("a", modifiers: [.command, .shift])
+                Button("일반 텍스트로 붙여넣기") { draft?.pastePlain?() }
+                    .keyboardShortcut("v", modifiers: [.command, .option, .shift])
+                    .disabled(draft?.isUnreadable ?? true)
                 Divider()
                 Button("할 일로 만들기…") { draft?.askToMakeTodos() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
