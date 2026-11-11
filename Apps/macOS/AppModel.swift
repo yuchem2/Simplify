@@ -98,6 +98,12 @@ final class AppModel {
         case one, all
     }
 
+    /// The panel's ToDo list folded to its rule (the "할 일" rule's chevron): one setting for
+    /// every day, week and month, not opened again by a ToDo added while folded. Remembered on this Mac.
+    var isTodoFolded = UserDefaults.standard.bool(forKey: "isTodoFolded") {
+        didSet { UserDefaults.standard.set(isTodoFolded, forKey: "isTodoFolded") }
+    }
+
     /// How large event titles are inside day cells (설정 › 일반). Remembered across launches.
     var cellTextSize = CellTextSize(rawValue: UserDefaults.standard.string(forKey: "cellTextSize") ?? "") ?? .medium {
         didSet { UserDefaults.standard.set(cellTextSize.rawValue, forKey: "cellTextSize") }

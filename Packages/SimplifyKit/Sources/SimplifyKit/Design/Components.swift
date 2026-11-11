@@ -835,14 +835,20 @@ public struct MemoMark: View {
 }
 
 /// A section name followed by an ink rule that runs to the trailing edge. `lineWidth` goes up to the
-/// spine's while what is under it has keyboard focus (the memo being written).
+/// spine's while what is under it has keyboard focus (the memo being written). `detail` is a meta
+/// note after the title (a folded list's count), read aloud as `detailLabel`.
 public struct SectionRule<Trailing: View>: View {
     var title: String
+    var detail: String?
+    var detailLabel: String?
     var lineWidth: CGFloat
     var trailing: Trailing
 
-    public init(_ title: String, lineWidth: CGFloat = Metrics.line, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
+    public init(_ title: String, detail: String? = nil, detailLabel: String? = nil, lineWidth: CGFloat = Metrics.line,
+                @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
         self.title = title
+        self.detail = detail
+        self.detailLabel = detailLabel
         self.lineWidth = lineWidth
         self.trailing = trailing()
     }
@@ -852,6 +858,13 @@ public struct SectionRule<Trailing: View>: View {
             Text(title)
                 .textStyle(.section)
                 .accessibilityAddTraits(.isHeader)
+            if let detail {
+                Text(detail)
+                    .textStyle(.meta)
+                    .foregroundStyle(.inkSoft)
+                    .fixedSize()
+                    .accessibilityLabel(detailLabel ?? detail)
+            }
             // The same room for either weight, so the line under it never moves.
             Rectangle().fill(.ink).frame(height: lineWidth).frame(height: Metrics.lineSpine)
             trailing

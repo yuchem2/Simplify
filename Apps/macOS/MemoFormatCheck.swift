@@ -173,6 +173,11 @@ enum MemoFormatCheck {
             window.close()
             return
         }
+        if only == "todofold" {
+            await checkTodoFold(memos: memos, model: model, editor: editor, window: window)
+            window.close()
+            return
+        }
         if only == "perf" {
             await checkPerf(memos: memos, model: model, editor: editor, window: window, reset: reset)
             window.close()
@@ -3070,6 +3075,301 @@ enum MemoFormatCheck {
         await wait()
         if let todo { memos.todos.remove(memos.todos.entries(for: model.panelPeriod).first { $0.todoID == todo.id }!) }
         await wait()
+    }
+
+    /// `SIMPLIFY_MEMO_CHECK=todofold`: the panel's ToDo list three plain rows tall at most, scrolled
+    /// inside past that with the add row under it, the memo in the same place however many ToDos
+    /// there are, a new or picked row scrolled into view, and the rule's chevron folding the list
+    /// (remembered, kept folded when a ToDo comes in, the count on the rule). Pictures light and dark.
+    private static func checkTodoFold(memos: MemoBook, model: AppModel, editor: NSTextView, window: NSWindow) async {
+        func wait(_ seconds: Double = 0.5) async { try? await Task.sleep(for: .seconds(seconds)) }
+        let todos = memos.todos
+        let wasFolded = model.isTodoFolded
+        defer { model.isTodoFolded = wasFolded }
+        model.isTodoFolded = false
+        model.panelMode = .normal
+        await wait(1.0)
+        let period = model.panelPeriod
+        let cap = TodoList.listCap
+        func frame(_ name: String) -> CGRect? { MemoBarFrames.byName[name] }
+        var list: CGRect? { frame("할 일 목록") }
+        /// The memo's top, from the window's top.
+        var memoTop: CGFloat? {
+            guard let box = editor.enclosingScrollView, let content = window.contentView else { return nil }
+            return content.bounds.height - box.convert(box.bounds, to: nil).maxY
+        }
+        /// The rows' own scroll view, the one `listCap` tall.
+        var rowsScroll: NSScrollView? { Self.scrollViews(in: window.contentView!).first { abs($0.frame.height - cap) < 1 } }
+        /// Whether the row of `id` shows whole in the rows' scroll; every row here is a plain one.
+        func rowShows(_ id: UUID) -> (Bool, String) {
+            guard let index = todos.entries(for: period).firstIndex(where: { $0.id == id }) else { return (false, "no row") }
+            guard let scroll = rowsScroll else { return (false, "no rows scroll view") }
+            let offset = scroll.contentView.bounds.origin.y, top = CGFloat(index) * TodoList.rowHeight
+            return (top >= offset - 0.5 && top + TodoList.rowHeight <= offset + cap + 0.5, "row \(index) at \(top), scrolled \(offset)")
+        }
+        /// A real click (down and up) in the middle of a `.global` frame.
+        func click(_ global: CGRect, at point: CGPoint? = nil, count: Int = 1) async {
+            let frame = memos.draft.inContent(global)
+            let content = window.contentView!
+            let top = point.map { CGPoint(x: frame.minX + $0.x, y: frame.minY + $0.y) } ?? CGPoint(x: frame.midX, y: frame.midY)
+            let local = content.convert(content.isFlipped ? top : CGPoint(x: top.x, y: content.bounds.height - top.y), to: nil)
+            for click in 1...count {
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let event = NSEvent.mouseEvent(with: type, location: local, modifierFlags: [],
+                                                      timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                                      context: nil, eventNumber: 0, clickCount: click, pressure: 1) {
+                        NSApp.postEvent(event, atStart: false)
+                    }
+                }
+            }
+            await wait(0.6)
+        }
+        /// Types into the add row's field and presses Return, as a person would.
+        func addFromField(_ title: String) async -> Bool {
+            guard let field = Self.textFields(in: window.contentView!).first(where: { $0.placeholderString == "할 일 추가" }) else { return false }
+            window.makeFirstResponder(field)
+            await wait(0.3)
+            field.currentEditor()?.insertText(title)
+            await wait(0.2)
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: window.windowNumber, context: nil, characters: "\r",
+                                             charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
+                NSApp.postEvent(event, atStart: false)
+            }
+            await wait(1.0)
+            return true
+        }
+        /// Every accessibility label under `element`, for the folded rule's count.
+        func labels(_ element: Any, depth: Int = 0) -> [String] {
+            guard depth < 40, let object = element as? NSAccessibilityProtocol else { return [] }
+            var found: [String] = []
+            if let label = object.accessibilityLabel(), !label.isEmpty { found.append(label) }
+            for child in object.accessibilityChildren() ?? [] { found += labels(child, depth: depth + 1) }
+            return found
+        }
+        func add(_ count: Int, from start: Int) -> [TodoItem] {
+            (start..<(start + count)).compactMap { todos.add("할 일 \($0)", to: period) }
+        }
+
+        // Two rows: as tall as they are, no scroll.
+        var made = add(2, from: 1)
+        await wait()
+        let top2 = memoTop
+        check(list.map { abs($0.height - 2 * TodoList.rowHeight) < 0.6 } == true, "two ToDos stand two rows tall (\(Int(2 * TodoList.rowHeight)))",
+              "\(String(describing: list))")
+        // Three: the cap, still no scroll.
+        made += add(1, from: 3)
+        await wait()
+        let top3 = memoTop
+        check(list.map { abs($0.height - cap) < 0.6 } == true, "three ToDos stand at the cap (\(Int(cap)))", "\(String(describing: list))")
+        check(top2 != nil && top3 != nil && abs(top3! - top2! - TodoList.rowHeight) < 0.6, "the third row moves the memo down one row",
+              "\(String(describing: top2)) → \(String(describing: top3))")
+        // Renaming a row of exactly three: the field is no taller than the row, so the list keeps
+        // its height and does not start scrolling under the caret.
+        if let list {
+            await click(list, at: CGPoint(x: 60, y: TodoList.rowHeight * 1.5), count: 2)
+            await wait(0.4)
+            let editing = window.firstResponder as? NSTextView
+            check(editing != nil && editing!.string == "할 일 2", "a double-click renames the row", "\(String(describing: window.firstResponder))")
+            check(frame("할 일 목록").map { abs($0.height - cap) < 0.6 } == true && rowsScroll == nil,
+                  "renaming one of three keeps the rows at the cap, unscrolled", "\(String(describing: frame("할 일 목록"))) scroll \(rowsScroll != nil)")
+            editing?.insertText("할 일 2 고침", replacementRange: NSRange(location: 0, length: (editing!.string as NSString).length))
+            await wait(0.3)
+            check(window.firstResponder === editing, "and keeps the caret while typing", "\(String(describing: window.firstResponder))")
+            window.makeFirstResponder(editor)
+            await wait(0.6)
+            check(todos.entries(for: period)[1].title == "할 일 2 고침", "leaving the field keeps the new name", todos.entries(for: period)[1].title)
+        }
+        // A fourth from the add row: the rows start scrolling, and the new one is scrolled to.
+        if await addFromField("넷째 할 일"), let fourth = todos.entries(for: period).last, fourth.title == "넷째 할 일" {
+            check(rowsScroll != nil && rowShows(fourth.id).0, "the fourth row, added from the add row, starts the scroll and shows", rowShows(fourth.id).1)
+        } else {
+            check(false, "the add row adds a fourth")
+        }
+        window.makeFirstResponder(editor)
+        await wait(0.3)
+        // Ten: the cap, scrolled inside; the memo stays where three left it.
+        made += add(6, from: 5)
+        await wait()
+        let top10 = memoTop
+        check(list.map { abs($0.height - cap) < 0.6 } == true, "ten ToDos stand at the cap too", "\(String(describing: list))")
+        check(top3 != nil && top10 != nil && abs(top10! - top3!) < 0.6, "and the memo stays where it was with three",
+              "\(String(describing: top3)) → \(String(describing: top10))")
+        if let add = frame("할 일 추가 줄"), let list {
+            check(add.minY >= list.maxY - 0.5 && add.minY - list.maxY < 1, "the add row shows right under the scrolled rows", "add \(add) list \(list)")
+        } else {
+            check(false, "the add row is drawn", "\(MemoBarFrames.byName.keys.filter { $0.hasPrefix("할 일") }.count) frames")
+        }
+        let first = made[0].id, last = made[made.count - 1].id
+        // Scrolled one row down by the fourth's reveal: the second row shows, the tenth is under the cap.
+        check(rowShows(made[1].id).0 && !rowShows(last).0, "the rows above show, the tenth is under the cap", rowShows(made[1].id).1 + " / " + rowShows(last).1)
+
+        // A row added from the add row is scrolled into view.
+        let field = Self.textFields(in: window.contentView!).first { $0.placeholderString == "할 일 추가" }
+        if let field {
+            window.makeFirstResponder(field)
+            await wait(0.3)
+            field.currentEditor()?.insertText("새로 넣은 할 일")
+            await wait(0.2)
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: window.windowNumber, context: nil, characters: "\r",
+                                             charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
+                NSApp.postEvent(event, atStart: false)
+            }
+            await wait(1.0)
+            let added = todos.entries(for: period).first { $0.title == "새로 넣은 할 일" }
+            check(added != nil, "Return in the add row adds a ToDo")
+            if let added { check(rowShows(added.id).0, "the new row is scrolled into view", rowShows(added.id).1) }
+            check(frame("할 일 추가 줄") != nil && window.firstResponder === field.currentEditor(), "the add row stays, with the caret, for the next one",
+                  "\(String(describing: window.firstResponder))")
+        } else {
+            check(false, "the add row has a field")
+        }
+        // Picking the first row (set as a click sets it) scrolls back up to it.
+        window.makeFirstResponder(editor)
+        await wait(0.3)
+        todos.selectedRow = first
+        await wait(0.8)
+        check(rowShows(first).0, "a picked row out of view is scrolled into view", rowShows(first).1)
+        capture(window, "todofold-picked")
+
+        // The ends: scrolled to the middle, both ends have rows past them.
+        let middle = todos.entries(for: period)[4].id
+        todos.selectedRow = nil
+        await wait(0.3)
+        todos.selectedRow = middle
+        await wait(0.8)
+        todos.selectedRow = nil
+        await wait(0.5)
+        for (name, look) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            NSApp.appearance = NSAppearance(named: look)
+            await wait(0.8)
+            capture(window, "todofold-open-\(name)")
+        }
+        NSApp.appearance = nil
+        await wait(0.4)
+
+        // The wheel over the rows scrolls them; at their end it may hand on to the panel. Looked at
+        // with a short window, so the panel has room to scroll.
+        let tall = window.frame
+        window.setFrame(NSRect(x: tall.minX, y: tall.maxY - 640, width: tall.width, height: 640), display: true)
+        await wait(1.0)
+        let scrollViews = Self.scrollViews(in: window.contentView!)
+        let inner = scrollViews.first { view in
+            guard let list else { return false }
+            let height = view.frame.height
+            return abs(height - cap) < 1 && abs(view.convert(view.bounds, to: nil).width - (list.width + 2 * Metrics.spaceXs)) < 1.5
+        }
+        let outer = inner.flatMap { inner in scrollViews.first { $0 !== inner && inner.isDescendant(of: $0) } }
+        if let inner, let outer {
+            func wheel(_ dy: Int32) {
+                guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: dy, wheel2: 0, wheel3: 0),
+                      let event = NSEvent(cgEvent: cg) else { return }
+                inner.scrollWheel(with: event)
+            }
+            outer.contentView.scroll(to: .zero)
+            outer.reflectScrolledClipView(outer.contentView)
+            let before = inner.contentView.bounds.origin.y
+            wheel(-30)
+            await wait(0.5)
+            let after = inner.contentView.bounds.origin.y
+            check(after > before, "the wheel over the rows scrolls them", "\(before) → \(after)")
+            for _ in 0..<20 { wheel(-60) }
+            await wait(0.6)
+            let outerBefore = outer.contentView.bounds.origin.y
+            for _ in 0..<4 { wheel(-60) }
+            await wait(0.8)
+            let outerAfter = outer.contentView.bounds.origin.y
+            log("INFO  at the rows' end the wheel \(outerAfter > outerBefore ? "moves the panel" : "leaves the panel still") (\(outerBefore) → \(outerAfter))")
+            outer.contentView.scroll(to: .zero)
+            outer.reflectScrolledClipView(outer.contentView)
+        } else {
+            log("INFO  could not find the rows' scroll view (\(scrollViews.count) scroll views)")
+        }
+        window.setFrame(tall, display: true)
+        await wait(1.0)
+
+        // Another day's rows open at their top, not where this day's were scrolled.
+        todos.selectedRow = made[made.count - 1].id
+        await wait(0.8)
+        let nextDay = Period(containing: model.calendar.date(byAdding: .day, value: 2, to: period.start)!, scope: .day, calendar: model.calendar)
+        let other = (1...6).compactMap { todos.add("다른 날 \($0)", to: nextDay) }
+        model.select(nextDay.start)
+        await wait(1.0)
+        check(rowsScroll.map { $0.contentView.bounds.origin.y < 0.5 } == true, "another day's rows open at their top",
+              "\(String(describing: rowsScroll?.contentView.bounds.origin.y))")
+        todos.entries(for: nextDay).filter { entry in other.contains { $0.id == entry.todoID } }.forEach(todos.remove)
+        model.select(period.start)
+        await wait(1.0)
+
+        // Folding: the rows and the add row go, the memo moves up, the state is remembered.
+        let openTop = memoTop
+        todos.selectedRow = first
+        await wait(0.4)
+        guard let chevron = frame("할 일 접기") else { return check(false, "the ToDo rule has a chevron") }
+        check(abs(chevron.width - 20) < 0.6 && abs(chevron.height - 20) < 0.6, "the chevron is 20 × 20", "\(chevron)")
+        await click(chevron)
+        check(model.isTodoFolded && UserDefaults.standard.bool(forKey: "isTodoFolded"), "a click on the chevron folds the list, remembered")
+        check(list == nil && frame("할 일 추가 줄") == nil, "folded, the rows and the add row are gone",
+              "\(String(describing: list)) \(String(describing: frame("할 일 추가 줄")))")
+        check(todos.selectedRow == nil, "folding lets the picked row go", "\(String(describing: todos.selectedRow))")
+        check(openTop != nil && memoTop != nil && memoTop! < openTop! - cap, "the memo moves up", "\(String(describing: openTop)) → \(String(describing: memoTop))")
+        let total = todos.entries(for: period).count
+        todos.setDone(made[1].id, true)
+        todos.setDone(made[2].id, true)
+        await wait()
+        var summary = DayPanel.todoSummary(todos.entries(for: period))
+        check(summary?.shown == "\(total) · 완료 2" && summary?.spoken == "할 일 \(total)개, 완료 2개",
+              "the rule's count reads \(total) · 완료 2, said 할 일 \(total)개, 완료 2개", "\(String(describing: summary))")
+        // SwiftUI builds its accessibility tree for an assistive app; without one this may find nothing.
+        let said = labels(window.contentView!)
+        log("INFO  accessibility labels with 할 일: \(said.filter { $0.contains("할 일") }.prefix(8))")
+        // A ToDo coming in while folded (⌘⇧T makes one the same way) leaves the list folded.
+        _ = add(1, from: 50)
+        await wait()
+        summary = DayPanel.todoSummary(todos.entries(for: period))
+        check(model.isTodoFolded && list == nil, "a ToDo added while folded keeps the list folded")
+        check(summary?.shown == "\(total + 1) · 완료 2", "and the count goes up", "\(String(describing: summary))")
+        for (name, look) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            NSApp.appearance = NSAppearance(named: look)
+            await wait(0.8)
+            capture(window, "todofold-folded-\(name)")
+        }
+        NSApp.appearance = nil
+        await wait(0.4)
+        // Another day is folded too (one setting); a day with no ToDos has no count.
+        model.select(model.calendar.date(byAdding: .day, value: 1, to: period.start)!)
+        await wait(0.8)
+        check(model.isTodoFolded && frame("할 일 목록") == nil && DayPanel.todoSummary(todos.entries(for: model.panelPeriod)) == nil,
+              "the next day is folded too, with no count for no ToDos", "\(todos.entries(for: model.panelPeriod).count)")
+        model.select(period.start)
+        await wait(0.8)
+        // Open again: the rows come back at the cap. Clicked where the chevron was first noted, since
+        // a day's chevron going away can leave a stale note of the next day's.
+        await click(chevron)
+        check(!model.isTodoFolded && !UserDefaults.standard.bool(forKey: "isTodoFolded"), "a second click opens it, remembered")
+        check(rowsScroll != nil, "open again, the rows stand at the cap, scrolled inside", "\(String(describing: list))")
+        check(memoTop != nil && openTop != nil && abs(memoTop! - openTop!) < 0.6, "and the memo is back where it was",
+              "\(String(describing: openTop)) → \(String(describing: memoTop))")
+        // The day before the check: none of its ToDos left.
+        todos.entries(for: period).forEach(todos.remove)
+        await wait()
+    }
+
+    private static func textFields(in view: NSView) -> [NSTextField] {
+        var found: [NSTextField] = []
+        if let field = view as? NSTextField, field.isEditable { found.append(field) }
+        for subview in view.subviews { found += textFields(in: subview) }
+        return found
+    }
+
+    private static func scrollViews(in view: NSView) -> [NSScrollView] {
+        var found: [NSScrollView] = []
+        if let scroll = view as? NSScrollView, !scroll.isHiddenOrHasHiddenAncestor { found.append(scroll) }
+        for subview in view.subviews { found += scrollViews(in: subview) }
+        return found
     }
 
     private static func capture(_ window: NSWindow, _ name: String) {

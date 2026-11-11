@@ -8,6 +8,9 @@ import SimplifyKit
 ///
 /// A click picks a row and the keys act on it through `TodoKeyHost`: SwiftUI focus on a plain
 /// row does not take the keyboard from the calendar beside it.
+///
+/// The rows stand at most `listCap` tall (three plain rows) and scroll inside that, so a long list
+/// does not push the memo down; the add row stays under them.
 struct TodoList: View {
     let period: Period
     let model: AppModel
@@ -20,29 +23,34 @@ struct TodoList: View {
     @State private var menuRow: UUID?
     @FocusState private var focus: Field?
     @Environment(\.isRenderingSnapshot) private var isRenderingSnapshot
+    /// The rows' own scroll, how tall all the rows are, and which ends have rows hidden past them.
+    @State private var rowsScroll = ScrollPosition()
+    @State private var rowsHeight: CGFloat = 0
+    @State private var hidden = HiddenEnds()
+    /// Where the rows are scrolled and each row's place: read to scroll to a row, never drawn.
+    @State private var places = RowPlaces()
+    /// A row just added from the add row, scrolled to once it is laid out.
+    @State private var pendingReveal: UUID?
 
     private enum Field: Hashable { case edit, add }
     /// The add row's drop slot.
     private static let endSlot = UUID()
+    private nonisolated static let rowsSpace = "todoRows"
+
+    /// A plain row (no line under its title): its 16 pt box `spaceXxs` down, taller than the item
+    /// letters beside it, and `spaceXs` above and under.
+    static let rowHeight = 16 + Metrics.spaceXxs + 2 * Metrics.spaceXs
+    /// The rows show three plain rows at most; more scroll inside.
+    static let listCap = 3 * rowHeight
 
     private var todos: TodoBook { memos.todos }
+    /// More rows than the list shows at once.
+    private var scrolls: Bool { rowsHeight > Self.listCap + 0.5 }
 
     var body: some View {
         let rows = todos.entries(for: period)
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.element.id) { index, entry in
-                // ImageRenderer cannot draw drag sources, drop targets or menus.
-                if isRenderingSnapshot {
-                    rowContent(entry)
-                } else {
-                    row(entry)
-                    .overlay(alignment: .top) { if dropTarget == entry.id { DropLine() } }
-                    .draggable(entry.id.uuidString)
-                    .dropDestination(for: String.self) { items, _ in
-                        drop(items, at: index, rows: rows)
-                    } isTargeted: { dropTarget = $0 ? entry.id : (dropTarget == entry.id ? nil : dropTarget) }
-                }
-            }
+            rowsArea(rows)
             if isRenderingSnapshot {
                 addRow
             } else {
@@ -61,7 +69,86 @@ struct TodoList: View {
         .onChange(of: period) {
             editing = nil
             todos.selectedRow = nil
+            pendingReveal = nil
+            places.offset = 0
+            rowsScroll.scrollTo(edge: .top)
         }
+        // Rows short enough to stand unscrolled leave no offset behind for the next scroll view.
+        .onChange(of: scrolls) { _, now in if !now { places.offset = 0 } }
+        // A row picked (a click, a rename finished) or being renamed is scrolled into view.
+        .onChange(of: todos.selectedRow) { _, id in if let id { reveal(id) } }
+        .onChange(of: editing) { _, id in if let id { reveal(id) } }
+        .onChange(of: rowsHeight) { revealPending() }
+    }
+
+    /// The rows: as tall as they are up to `listCap`, scrolled inside past it, with a `shade` line
+    /// at an end that has rows hidden past it. The snapshot draws the top `listCap` cut off.
+    @ViewBuilder
+    private func rowsArea(_ rows: [TodoEntry]) -> some View {
+        if isRenderingSnapshot {
+            rowStack(rows)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxHeight: Self.listCap, alignment: .top)
+                .clipped()
+        } else if scrolls {
+            ScrollArea(position: $rowsScroll) {
+                // Room at the sides for the rows' fill, which reaches past their edges.
+                rowStack(rows).padding(.horizontal, Metrics.spaceXs)
+            }
+            .frame(height: Self.listCap)
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in places.offset = offset }
+            .onScrollGeometryChange(for: HiddenEnds.self) { geometry in
+                HiddenEnds(above: geometry.contentOffset.y > 0.5,
+                           below: geometry.contentOffset.y + geometry.containerSize.height < geometry.contentSize.height - 0.5)
+            } action: { _, ends in hidden = ends }
+            .padding(.horizontal, -Metrics.spaceXs)
+            .overlay(alignment: .top) { if hidden.above { EndLine() } }
+            .overlay(alignment: .bottom) { if hidden.below { EndLine() } }
+            .barFrame("할 일 목록")
+        } else {
+            rowStack(rows).barFrame("할 일 목록")
+        }
+    }
+
+    private func rowStack(_ rows: [TodoEntry]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, entry in
+                // ImageRenderer cannot draw drag sources, drop targets or menus.
+                if isRenderingSnapshot {
+                    rowContent(entry)
+                } else {
+                    row(entry)
+                    .overlay(alignment: .top) { if dropTarget == entry.id { DropLine() } }
+                    .draggable(entry.id.uuidString)
+                    .dropDestination(for: String.self) { items, _ in
+                        drop(items, at: index, rows: rows)
+                    } isTargeted: { dropTarget = $0 ? entry.id : (dropTarget == entry.id ? nil : dropTarget) }
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.rowsSpace)) } action: { frame in
+                        places.frames[entry.id] = frame
+                        if pendingReveal == entry.id { revealPending() }
+                    }
+                }
+            }
+        }
+        .coordinateSpace(.named(Self.rowsSpace))
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowsHeight = $0 }
+    }
+
+    /// Scrolls the rows just enough that `id`'s row shows whole; a row in view stays put.
+    private func reveal(_ id: UUID) {
+        guard scrolls, let frame = places.frames[id] else { return }
+        if frame.minY < places.offset {
+            rowsScroll.scrollTo(y: max(0, frame.minY))
+        } else if frame.maxY > places.offset + Self.listCap {
+            rowsScroll.scrollTo(y: min(frame.maxY, rowsHeight) - Self.listCap)
+        }
+    }
+
+    /// The row just added, once it and the rows' height are laid out.
+    private func revealPending() {
+        guard let id = pendingReveal, let frame = places.frames[id], frame.maxY <= rowsHeight + 0.5 else { return }
+        pendingReveal = nil
+        reveal(id)
     }
 
     /// ⌫ deletes the picked row, Return renames it, Space ticks it, Esc lets it go.
@@ -203,6 +290,7 @@ struct TodoList: View {
         }
         .padding(.vertical, Metrics.spaceXs)
         .selectableRow(chosen: false)
+        .barFrame("할 일 추가 줄")
     }
 
     private var addField: some View {
@@ -211,7 +299,8 @@ struct TodoList: View {
                 .textStyle(.item)
                 .focused($focus, equals: .add)
                 .onSubmit {
-                    todos.add(newTitle, to: period)
+                    // The new row comes in last, scrolled into view.
+                    pendingReveal = todos.add(newTitle, to: period)?.id
                     newTitle = ""
                     // Stays in the field for the next one.
                     focus = .add
@@ -253,6 +342,26 @@ struct TodoList: View {
 private struct DropLine: View {
     var body: some View {
         Rectangle().fill(.ink).frame(height: 2).offset(y: -1).allowsHitTesting(false)
+    }
+}
+
+/// Which ends of the scrolled rows have rows past them.
+private struct HiddenEnds: Equatable {
+    var above = false
+    var below = false
+}
+
+/// The rows' scroll offset and each row's frame in the rows' own space. A reference, so the
+/// scroll and the rows' layout write it without drawing the list again.
+private final class RowPlaces {
+    var offset: CGFloat = 0
+    var frames: [UUID: CGRect] = [:]
+}
+
+/// At an end of the scrolled rows with rows hidden past it: a 1 pt `shade` line, no fade.
+private struct EndLine: View {
+    var body: some View {
+        Rectangle().fill(.shade).frame(height: Metrics.line).allowsHitTesting(false)
     }
 }
 

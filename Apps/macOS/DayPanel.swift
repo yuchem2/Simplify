@@ -67,7 +67,9 @@ struct DayPanel: View {
                         VStack(alignment: .leading, spacing: Metrics.spaceM) {
                             // The memo being written thickens its rule to the spine's weight: with
                             // no box around it, that and the caret are its keyboard focus.
-                            SectionRule(section.title, lineWidth: section.kind == .memo && memos.draft.hasFocus ? Metrics.lineSpine : Metrics.line) {
+                            let summary = section.kind == .todos && model.isTodoFolded ? todoSummary(period) : nil
+                            SectionRule(section.title, detail: summary?.shown, detailLabel: summary?.spoken,
+                                        lineWidth: section.kind == .memo && memos.draft.hasFocus ? Metrics.lineSpine : Metrics.line) {
                                 if section.kind == .todos, let action = section.action {
                                     Button(action) {
                                         // Lines typed a moment ago are in the store before the list is read.
@@ -76,6 +78,10 @@ struct DayPanel: View {
                                     }
                                         .buttonStyle(DrawnButtonStyle(.text))
                                         .help("다른 날의 할 일과 메모 속 할 일 줄을 가져와요")
+                                    TodoFoldButton(isFolded: $model.isTodoFolded) {
+                                        // A picked or renamed row is let go; the list it is in goes away.
+                                        memos.todos.selectedRow = nil
+                                    }
                                 } else if section.kind == .memo {
                                     MemoLayoutSwitch(layout: $model.memoLayout, draft: memos.draft)
                                     if model.memoLayout == .all { MemoAddButton(draft: memos.draft) }
@@ -97,7 +103,7 @@ struct DayPanel: View {
                                 // Pinned: the Aa bar as one line of tools under the rule, for whichever memo is written.
                                 if MemoBarPin.shared.isPinned { MemoFormatStrip(draft: memos.draft) }
                                 memoSection(section, period: period)
-                            } else {
+                            } else if !model.isTodoFolded {
                                 TodoList(period: period, model: model, memos: memos)
                             }
                         }
@@ -246,6 +252,18 @@ struct DayPanel: View {
         }
     }
 
+    /// A folded list's count on its rule: `7 · 완료 2`, read as `할 일 7개, 완료 2개`; nothing
+    /// for a period with no ToDos.
+    private func todoSummary(_ period: Period) -> (shown: String, spoken: String)? {
+        Self.todoSummary(memos.todos.entries(for: period))
+    }
+
+    static func todoSummary(_ rows: [TodoEntry]) -> (shown: String, spoken: String)? {
+        guard !rows.isEmpty else { return nil }
+        let done = rows.filter(\.isDone).count
+        return ("\(rows.count) · 완료 \(done)", "할 일 \(rows.count)개, 완료 \(done)개")
+    }
+
     /// `일정 16 · 할 일 4/9`: the month's events, and its ToDos finished out of all.
     private func monthMeta(_ month: Period) -> String {
         var ids = Set<String>()
@@ -283,6 +301,47 @@ struct DayPanel: View {
         case .month:
             [Section(title: "이번 달 할 일", action: "가져오기", empty: "할 일이 없어요.", kind: .todos),
              Section(title: "월간 메모", empty: "이번 달 메모를 적어 보세요.", kind: .memo)]
+        }
+    }
+}
+
+/// The "할 일" rule's chevron, after 가져오기: folds the list (rows and the add row) to its rule
+/// and opens it again. Down while open, right while folded, drawn in a 1.5 pt ink line.
+private struct TodoFoldButton: View {
+    @Binding var isFolded: Bool
+    /// Before folding.
+    let onFold: () -> Void
+
+    var body: some View {
+        let name = isFolded ? "할 일 펼치기" : "할 일 접기"
+        Button {
+            if !isFolded { onFold() }
+            isFolded.toggle()
+        } label: {
+            Chevron(pointsRight: isFolded)
+                .stroke(.ink, style: StrokeStyle(lineWidth: Metrics.lineBox, lineCap: .square))
+                .frame(width: 10, height: 10)
+                .frame(width: 20, height: 20)
+        }
+        .buttonStyle(FormatButtonStyle(isOn: false))
+        .focusable(false)
+        .help(name)
+        .accessibilityLabel(name)
+        .accessibilityValue(isFolded ? "접힘" : "펼침")
+        .barFrame("할 일 접기")
+    }
+
+    /// In a 10 pt square: `M1.5 3.5 5 7 8.5 3.5` pointing down, `M3.5 1.5 7 5 3.5 8.5` pointing right.
+    private struct Chevron: Shape {
+        var pointsRight: Bool
+
+        func path(in rect: CGRect) -> Path {
+            let unit = rect.width / 10
+            let points: [CGPoint] = pointsRight ? [CGPoint(x: 3.5, y: 1.5), CGPoint(x: 7, y: 5), CGPoint(x: 3.5, y: 8.5)]
+                                                : [CGPoint(x: 1.5, y: 3.5), CGPoint(x: 5, y: 7), CGPoint(x: 8.5, y: 3.5)]
+            var path = Path()
+            path.addLines(points.map { CGPoint(x: rect.minX + $0.x * unit, y: rect.minY + $0.y * unit) })
+            return path
         }
     }
 }
