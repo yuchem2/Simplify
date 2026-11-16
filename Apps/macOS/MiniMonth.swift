@@ -17,7 +17,13 @@ struct WideCalendar: View {
         let range = model.panelScope == .day ? nil : model.panelPeriod
         VStack(alignment: .leading, spacing: Metrics.spaceL) {
             MiniMonth(model: model, calendars: calendars, memos: memos)
-            SectionRule(range.map(title) ?? "\(parts.month!)월 \(parts.day!)일 일정")
+            SectionRule(range.map(title) ?? "\(parts.month!)월 \(parts.day!)일 일정") {
+                // On the chosen day, whether the column shows its day, week or month.
+                Button("추가") { model.newEvent(on: model.selectedDay, calendars: calendars) }
+                    .buttonStyle(DrawnButtonStyle(.text))
+                    .disabled(calendars.writableSources.isEmpty)
+                    .help(calendars.writableSources.isEmpty ? "설정에서 Google이나 iCloud를 연결해 주세요" : "이날에 새 일정 (⌘N)")
+            }
                 .padding(.top, Metrics.spaceS)
             ScrollArea {
                 Group {
@@ -45,7 +51,7 @@ struct WideCalendar: View {
 
 /// The small month: date numbers in figures, Sundays and holidays red, today filled with ink, the
 /// chosen day in an ink box, a dot under days with a memo, and the panel's week or month on a
-/// raised ground. A click goes to that day; ‹ › turn the month.
+/// raised ground. A click goes to that day, a double-click starts a new event there; ‹ › turn the month.
 struct MiniMonth: View {
     let model: AppModel
     let calendars: CalendarController
@@ -88,7 +94,7 @@ struct MiniMonth: View {
                 ForEach(grid.weeks, id: \.first) { week in
                     HStack(spacing: 0) {
                         ForEach(week, id: \.self) { day in
-                            MiniDay(day: day, model: model, inMonth: grid.isInMonth(day), isHoliday: calendars.holidayDays.contains(day),
+                            MiniDay(day: day, model: model, calendars: calendars, inMonth: grid.isInMonth(day), isHoliday: calendars.holidayDays.contains(day),
                                     hasMemo: memos.has(Period(containing: day, scope: .day, calendar: model.calendar)),
                                     inRange: range?.contains(day) == true)
                         }
@@ -104,6 +110,7 @@ struct MiniMonth: View {
 private struct MiniDay: View {
     let day: Date
     let model: AppModel
+    let calendars: CalendarController
     let inMonth: Bool
     let isHoliday: Bool
     let hasMemo: Bool
@@ -138,7 +145,10 @@ private struct MiniDay: View {
             .onHover { hovering = $0 }
             // ⌘N and new events point here, as they point at a day cell of the month.
             .eventAnchor(EventAnchor.cell(day))
-            .onTapGesture { if !model.isModalOpen { model.select(day) } }
+            // As on the month's day cells: a double-click makes an event, and the first click
+            // still picks the day at once rather than after the double-click wait.
+            .onTapGesture(count: 2) { model.newEvent(on: day, calendars: calendars) }
+            .simultaneousGesture(TapGesture().onEnded { if !model.isModalOpen { model.select(day) } })
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(label(isToday: isToday))
             .accessibilityAddTraits(isChosen ? [.isButton, .isSelected] : .isButton)

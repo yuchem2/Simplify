@@ -129,8 +129,8 @@ enum Snapshot {
         model.calendarView = view
     }
 
-    /// 반복 종료 in the editor (안 함, 날짜, 횟수, and the two things that stop a save), and the end in
-    /// the details.
+    /// 반복 종료 in the editor (안 함, 날짜, 횟수, and the two things that stop a save), the end in the
+    /// details, and a new event from the wide panel's column.
     private static func renderRepeatEnd(model: AppModel, calendars: CalendarController, memos: MemoBook) {
         let cal = model.calendar
         func both(_ name: String, size: CGSize = CGSize(width: 1260, height: 800)) {
@@ -166,6 +166,17 @@ enum Snapshot {
         editor.fields.endCount = "0"
         both("repeat-edit-count-error")
         model.popover = nil
+
+        // The wide panel's column: 추가 on its rule, and a new event from a small-month day.
+        let kept = model.panelMode
+        model.panelMode = .wide
+        model.newEvent(on: cal.date(byAdding: .day, value: 2, to: model.today)!, calendars: calendars)
+        both("wide-new", size: CGSize(width: 1440, height: 900))
+        model.popover = nil
+        model.panelScope = .week
+        both("wide-week-add", size: CGSize(width: 1440, height: 900))
+        model.panelScope = .day
+        model.panelMode = kept
         model.select(model.today)
     }
 
