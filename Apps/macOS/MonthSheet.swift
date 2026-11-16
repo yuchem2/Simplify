@@ -123,17 +123,12 @@ private struct DayCell: View {
             VStack(alignment: .leading, spacing: 2) {
                 // Numbers start on the same line as the weekday labels; today's is bold under the
                 // cell's ink bar. A pencil after it: the day has a memo.
-                HStack(spacing: Metrics.spaceXs) {
-                    Text("\(number)")
-                        .textStyle(.date)
-                        .fontWeight(isToday ? .bold : .semibold)
-                        .foregroundStyle(numberColor)
-                        .frame(minHeight: 24)
-                    if hasMemo { MemoMark() }
-                    if todoCount > 0 {
-                        Spacer(minLength: 0)
-                        TodoCount(todoCount)
-                    }
+                // The number is never broken over two lines ("1/0"); in a cell too narrow for
+                // number, pencil and ✓N together, the pencil gives way first, then ✓N.
+                ViewThatFits(in: .horizontal) {
+                    dateLine(number, isToday: isToday, memo: hasMemo, todos: todoCount)
+                    if hasMemo && todoCount > 0 { dateLine(number, isToday: isToday, memo: false, todos: todoCount) }
+                    dateLine(number, isToday: isToday, memo: false, todos: 0)
                 }
                 let (shown, hidden) = visibleRows
                 ForEach(Array(shown.enumerated()), id: \.offset) { _, slot in
@@ -260,6 +255,24 @@ private struct DayCell: View {
     private var isWeekend: Bool {
         let weekday = model.calendar.component(.weekday, from: day)
         return weekday == 1 || weekday == 7
+    }
+
+    /// The date line: the number, a pencil when `memo`, and ✓N at the trailing edge when `todos` > 0.
+    private func dateLine(_ number: Int, isToday: Bool, memo: Bool, todos: Int) -> some View {
+        HStack(spacing: Metrics.spaceXs) {
+            Text("\(number)")
+                .textStyle(.date)
+                .fontWeight(isToday ? .bold : .semibold)
+                .foregroundStyle(numberColor)
+                .frame(minHeight: 24)
+                .lineLimit(1)
+                .fixedSize()
+            if memo { MemoMark() }
+            if todos > 0 {
+                Spacer(minLength: 0)
+                TodoCount(todos)
+            }
+        }
     }
 
     private var numberColor: Color {
