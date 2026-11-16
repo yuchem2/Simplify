@@ -7,7 +7,7 @@ extension GoogleCalendarAPI {
     public func createEvent(_ draft: EventDraft, id: String, in remote: RemoteCalendar.Reference, calendar: Calendar) async throws {
         var body = Self.body(draft, start: draft.start, end: draft.end, calendar: calendar, clearing: false)
         body["id"] = id
-        if let rule = draft.repeatRule.rrule { body["recurrence"] = [rule] }
+        if let rule = draft.rrule(calendar: calendar) { body["recurrence"] = [rule] }
         try await insertEvent(calendarID: remote.remoteID, body)
     }
 
@@ -15,7 +15,7 @@ extension GoogleCalendarAPI {
         let calendarID = remote.remoteID
         guard event.isSeriesMember else {
             var body = Self.body(draft, start: draft.start, end: draft.end, calendar: calendar, clearing: true)
-            if let rule = draft.repeatRule.rrule { body["recurrence"] = [rule] }
+            if let rule = draft.rrule(calendar: calendar) { body["recurrence"] = [rule] }
             return try await patchEvent(calendarID: calendarID, eventID: event.remoteID, body)
         }
         switch scope {
@@ -35,8 +35,13 @@ extension GoogleCalendarAPI {
             // The new part first: should the second request fail, occurrences show twice rather than not at all.
             var body = Self.body(draft, start: draft.start, end: draft.end, calendar: calendar, clearing: false)
             body["id"] = EventDraft.splitID(series: master.id, at: split)
-            if draft.changesRule(of: event) {
-                if let rule = draft.repeatRule.rrule { body["recurrence"] = [rule] }
+            if draft.changesPreset(of: event) {
+                // The new rule's COUNT is still the series' whole: the part before the split keeps its share.
+                let before = Self.occurrences(of: master, before: split, calendar: calendar, zone: remote.timeZone)
+                if let rule = draft.repeatRule.rrule { body["recurrence"] = [draft.ending(rule, calendar: calendar, before: before)] }
+            } else if draft.changesEnd(of: event, calendar: calendar) {
+                let before = Self.occurrences(of: master, before: split, calendar: calendar, zone: remote.timeZone)
+                body["recurrence"] = (master.recurrence ?? []).map { $0.uppercased().hasPrefix("RRULE") ? draft.ending($0, calendar: calendar, before: before) : $0 }
             } else {
                 body["recurrence"] = Self.following(master, from: split, calendar: calendar, zone: remote.timeZone)
             }
@@ -92,12 +97,15 @@ extension GoogleCalendarAPI {
     }
 
     /// The patch for a whole series: moved as the draft moved its occurrence, with a new rule
-    /// only when the person picked another preset.
+    /// only when the person picked another preset, or the stored one ending elsewhere.
     static func seriesBody(_ master: GoogleEvent, event: EventSnapshot, draft: EventDraft, calendar: Calendar, zone: String?) -> [String: Any] {
         let span = draft.seriesSpan(masterDay: firstDay(of: master, draft: draft, calendar: calendar, zone: zone), calendar: calendar)
         var body = body(draft, start: span.start, end: span.end, calendar: calendar, clearing: true)
-        if draft.changesRule(of: event) {
-            body["recurrence"] = draft.repeatRule.rrule.map { [$0] } ?? []
+        if draft.changesPreset(of: event) {
+            body["recurrence"] = draft.rrule(calendar: calendar).map { [$0] } ?? []
+        } else if draft.changesEnd(of: event, calendar: calendar) {
+            // Skipped days (EXDATE) and the rule's shape stay; only COUNT or UNTIL changes.
+            body["recurrence"] = (master.recurrence ?? []).map { $0.uppercased().hasPrefix("RRULE") ? draft.ending($0, calendar: calendar) : $0 }
         }
         return body
     }
@@ -126,16 +134,22 @@ extension GoogleCalendarAPI {
     /// The series' recurrence lines for a new series starting at `split`, with a COUNT cut down
     /// to the occurrences left.
     static func following(_ master: GoogleEvent, from split: OccurrenceKey, calendar: Calendar, zone: String?) -> [String] {
+        let before = occurrences(of: master, before: split, calendar: calendar, zone: zone)
+        return (master.recurrence ?? []).map { line in
+            guard line.uppercased().hasPrefix("RRULE"), let count = RuleText.count(in: line) else { return line }
+            return RuleText.rrule(line, count: max(1, count - before))
+        }
+    }
+
+    /// How many occurrences the series' rule makes before `split`.
+    static func occurrences(of master: GoogleEvent, before split: OccurrenceKey, calendar: Calendar, zone: String?) -> Int {
         let snapshot = master.snapshot(sourceID: "", calendar: calendar, defaultZone: zone)
         var zoned = snapshot.isAllDay ? DayKey.utc : calendar
         if !snapshot.isAllDay, let id = snapshot.timeZone, let tz = TimeZone(identifier: id) { zoned.timeZone = tz }
         let first = snapshot.startDay.flatMap { DayKey.date($0, calendar: DayKey.utc) } ?? snapshot.start
         let splitDate = split.day.flatMap { DayKey.date($0, calendar: DayKey.utc) } ?? split.date
-        return (master.recurrence ?? []).map { line in
-            guard line.uppercased().hasPrefix("RRULE"), let count = RuleText.count(in: line), let first,
-                  let before = RuleText.occurrences(of: line, start: first, before: splitDate, calendar: zoned) else { return line }
-            return RuleText.rrule(line, count: max(1, count - before))
-        }
+        guard let first, let line = master.recurrence?.first(where: { $0.uppercased().hasPrefix("RRULE") }) else { return 0 }
+        return RuleText.occurrences(of: line, start: first, before: splitDate, calendar: zoned) ?? 0
     }
 
     /// The instance id Google gives one occurrence: `<series>_20261105T010000Z`, or

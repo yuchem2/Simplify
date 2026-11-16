@@ -63,6 +63,7 @@ enum Snapshot {
                    name: "icloud-dark", appearance: .darkAqua, scheme: .dark)
             model.isSettingsOpen = false
             renderEventPopovers(model: model, calendars: shown, memos: memos)
+            renderRepeatEnd(model: model, calendars: shown, memos: memos)
             renderMemos(model: model, calendars: shown)
             renderPanelModes(model: model, calendars: shown)
             renderTodos(model: model, calendars: shown)
@@ -126,6 +127,46 @@ enum Snapshot {
         light("weekview-new")
         model.popover = nil
         model.calendarView = view
+    }
+
+    /// 반복 종료 in the editor (안 함, 날짜, 횟수, and the two things that stop a save), and the end in
+    /// the details.
+    private static func renderRepeatEnd(model: AppModel, calendars: CalendarController, memos: MemoBook) {
+        let cal = model.calendar
+        func both(_ name: String, size: CGSize = CGSize(width: 1260, height: 800)) {
+            render(MainView(model: model, calendars: calendars, memos: memos), name: name, appearance: .aqua, scheme: .light, size: size)
+            render(MainView(model: model, calendars: calendars, memos: memos), name: name + "-dark", appearance: .darkAqua, scheme: .dark, size: size)
+        }
+        func first(_ title: String) -> (EventOccurrence, Date)? {
+            let days = Period(containing: model.today, scope: .week, calendar: cal).days
+            for day in days {
+                if let o = calendars.slots[day]?.first(where: { $0.occurrence.title == title })?.occurrence { return (o, day) }
+            }
+            return nil
+        }
+        model.select(model.today)
+        for (title, name) in [("영어 회화", "repeat-detail-count"), ("수영 강습", "repeat-detail-until")] {
+            guard let (o, day) = first(title) else { continue }
+            model.openEvent(o, day: day, anchor: EventAnchor.row(o.id, day: day, in: .month), calendars: calendars)
+            both(name)
+            model.popover = nil
+        }
+        guard let (standup, _) = first("주간 스탠드업") else { return }
+        model.edit(standup, calendars: calendars)
+        guard case .editor(let editor)? = model.popover?.content else { return }
+        both("repeat-edit-never")
+        editor.setEndKind(.date)
+        both("repeat-edit-date")
+        editor.setEndKind(.count)
+        both("repeat-edit-count")
+        editor.setEndKind(.date)
+        editor.fields.endDay = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: editor.fields.start))!
+        both("repeat-edit-date-error")
+        editor.setEndKind(.count)
+        editor.fields.endCount = "0"
+        both("repeat-edit-count-error")
+        model.popover = nil
+        model.select(model.today)
     }
 
     /// The memo box with formatting, the week and month memos, and the notice when the diary
@@ -680,6 +721,9 @@ enum Snapshot {
         }
         timed(work, "standup", "주간 스탠드업", at(-21, 9, 30), minutes: 30, rule: "RRULE:FREQ=WEEKLY;BYDAY=MO")
         timed(work, "review", "디자인 리뷰", at(0, 14))
+        // Series that end: after ten times, and on a day a month off.
+        timed(personal, "english", "영어 회화", at(-14, 7), rule: "RRULE:FREQ=WEEKLY;COUNT=10")
+        timed(fitness, "swim", "수영 강습", at(-13, 7), rule: "RRULE:FREQ=WEEKLY;UNTIL=" + key(30).replacingOccurrences(of: "-", with: ""))
         // Long enough to wrap in the day panel, where the mark has to stay on the first line.
         timed(work, "offsite", "2027년 상반기 제품 로드맵과 팀별 목표를 맞추는 전사 워크숍 사전 회의", at(0, 16))
         timed(fitness, "pilates", "필라테스", at(0, 19, 30), rule: "RRULE:FREQ=WEEKLY;BYDAY=MO,TH")

@@ -147,6 +147,38 @@ enum WriteCheck {
             await delete(left, .allOccurrences, "모든 일정 지우기")
         }
         check(occurrences(weekly).isEmpty, "모든 일정 지우기: 반복이 모두 사라져요")
+
+        // 3. A weekly series that ends: after 3 times, then (the end alone changed) on a date.
+        let ending = "S4B 종료 \(stamp)"
+        let counted = EventEditorModel(newOn: monday, sourceID: source.id, calendar: cal)
+        counted.fields.title = ending
+        counted.setStart(cal.date(bySettingHour: 9, minute: 0, second: 0, of: monday)!)
+        counted.fields.repeatChoice = .weekly
+        counted.setEndKind(.count)
+        counted.fields.endCount = "3"
+        check(counted.lastCounted.map { cal.isDate($0, inSameDayAs: cal.date(byAdding: .day, value: 14, to: monday)!) } == true,
+              "횟수 3회: 마지막 날 미리보기가 2주 뒤예요")
+        guard await save(counted, .allOccurrences, "매주 3회 새 일정") else { return }
+        var ends = occurrences(ending)
+        let stored = ends.first.flatMap { calendars.event(id: $0.eventID) }
+        check(ends.count == 3, "횟수 3회: 세 주에만 보여요 (\(ends.count)개)")
+        check(stored.map { RepeatEnd(of: $0, calendar: cal) } == .count(3), "다시 읽은 규칙이 COUNT=3이에요")
+
+        if let second = ends.dropFirst().first, let edit = editor(second) {
+            check(edit.fields.endKind == .count && edit.fields.endCount == "3", "편집기에서 횟수 3회로 읽혀요")
+            edit.setEndKind(.date)
+            edit.fields.endDay = cal.date(byAdding: .day, value: 7, to: cal.startOfDay(for: monday))!
+            check(edit.changesOnlyEnd, "종료만 바꾸면 범위를 묻지 않아요")
+            _ = await save(edit, .allOccurrences, "종료를 날짜로 바꾸기")
+        }
+        ends = occurrences(ending)
+        let dated = ends.first.flatMap { calendars.event(id: $0.eventID) }
+        check(ends.count == 2, "종료 날짜: 두 주에만 보여요 (\(ends.count)개)")
+        check(dated.map { RepeatEnd(of: $0, calendar: cal) } == .until(cal.date(byAdding: .day, value: 7, to: cal.startOfDay(for: monday))!),
+              "다시 읽은 규칙이 그날까지예요")
+        if let first = ends.first { await delete(first, .allOccurrences, "종료 있는 반복 지우기") }
+        check(occurrences(ending).isEmpty, "종료 있는 반복이 모두 사라져요")
+
         check(calendars.unsentWrites.isEmpty, "보내기 대기가 남지 않아요")
     }
 }

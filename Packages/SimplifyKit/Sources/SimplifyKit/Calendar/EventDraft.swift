@@ -21,6 +21,57 @@ public enum RepeatPreset: String, Sendable, CaseIterable, Codable {
     var rrule: String? {
         self == .none ? nil : "RRULE:FREQ=" + rawValue.uppercased()
     }
+
+    /// The preset `recurrence` is shaped like: every period on `start`'s own day, however it ends
+    /// (COUNT and UNTIL are the series' end, not its shape). Nil for a richer rule ("격주 월·수").
+    public static func matching(_ recurrence: Recurrence, start: Date, calendar: Calendar) -> RepeatPreset? {
+        guard recurrence.interval == 1,
+              recurrence.byMonth.isEmpty || recurrence.byMonth == [calendar.component(.month, from: start)],
+              recurrence.bySetPosition.isEmpty else { return nil }
+        let weekday = calendar.component(.weekday, from: start)
+        let monthDay = calendar.component(.day, from: start)
+        let onDay = recurrence.byMonthDay.isEmpty || recurrence.byMonthDay == [monthDay]
+        switch recurrence.frequency {
+        case .daily: return recurrence.byWeekday.isEmpty && recurrence.byMonthDay.isEmpty ? .daily : nil
+        case .weekly:
+            return recurrence.byWeekday.isEmpty || recurrence.byWeekday == [Recurrence.WeekdayRule(weekday: weekday)] ? .weekly : nil
+        case .monthly: return recurrence.byWeekday.isEmpty && onDay ? .monthly : nil
+        case .yearly: return recurrence.byWeekday.isEmpty && onDay ? .yearly : nil
+        }
+    }
+}
+
+/// When a repeating event stops: never, after a day, or after so many occurrences.
+public enum RepeatEnd: Sendable, Hashable, Codable {
+    case never
+    /// The last day an occurrence may fall on: that day's midnight in the person's calendar.
+    case until(Date)
+    /// How many occurrences the whole series has, counted from its first (RRULE `COUNT`).
+    case count(Int)
+
+    public static let counts = 1...999
+
+    /// How a stored rule ends. A timed UNTIL reads as the day it falls on in the series' zone
+    /// (`timeZone`, else the person's), where the editor wrote it; an all-day one as the date
+    /// written (rule dates of all-day series are read in UTC). The day is kept as that date's
+    /// midnight in the person's calendar.
+    public init(_ recurrence: Recurrence?, isAllDay: Bool, timeZone: String? = nil, calendar: Calendar) {
+        if let count = recurrence?.count {
+            self = .count(count)
+        } else if let until = recurrence?.until {
+            var zoned = isAllDay ? DayKey.utc : calendar
+            if !isAllDay, let id = timeZone, let zone = TimeZone(identifier: id) { zoned.timeZone = zone }
+            let day = zoned.dateComponents([.year, .month, .day], from: until)
+            self = .until(calendar.date(from: day)!)
+        } else {
+            self = .never
+        }
+    }
+
+    /// How `event`'s rule ends.
+    public init(of event: EventSnapshot, calendar: Calendar) {
+        self.init(event.recurrence, isAllDay: event.isAllDay, timeZone: event.timeZone, calendar: calendar)
+    }
 }
 
 /// What the editor sends: a new event, or the new values for one being changed.
@@ -36,13 +87,15 @@ public struct EventDraft: Sendable, Equatable, Codable {
     public var location: String?
     public var notes: String?
     public var repeatRule: RepeatPreset
+    /// When the rule stops. Only written when the rule is (a new preset, or a series whose end changed).
+    public var repeatEnd: RepeatEnd
     /// Where the occurrence the editor was opened on started, as it was shown. Changing every
     /// occurrence moves the series by the difference (in days, plus the new time of day) rather
     /// than to this occurrence's date. Nil for a new event.
     public var occurrenceStart: Date?
 
     public init(title: String, isAllDay: Bool, start: Date, end: Date, timeZone: String? = nil, location: String? = nil,
-                notes: String? = nil, repeatRule: RepeatPreset = .none, occurrenceStart: Date? = nil) {
+                notes: String? = nil, repeatRule: RepeatPreset = .none, repeatEnd: RepeatEnd = .never, occurrenceStart: Date? = nil) {
         self.title = title
         self.isAllDay = isAllDay
         self.start = start
@@ -51,6 +104,7 @@ public struct EventDraft: Sendable, Equatable, Codable {
         self.location = location
         self.notes = notes
         self.repeatRule = repeatRule
+        self.repeatEnd = repeatEnd
         self.occurrenceStart = occurrenceStart
     }
 
@@ -63,6 +117,7 @@ public struct EventDraft: Sendable, Equatable, Codable {
         notes = event.notes
         // A changed occurrence cannot carry a rule of its own.
         repeatRule = event.recurringEventID == nil ? RepeatPreset(event.recurrence) : .none
+        repeatEnd = event.recurringEventID == nil ? RepeatEnd(of: event, calendar: calendar) : .never
         if event.isAllDay {
             start = calendar.startOfDay(for: occurrenceStart)
             let first = event.startDay.flatMap { DayKey.date($0, calendar: DayKey.utc) }
@@ -123,8 +178,73 @@ public struct EventDraft: Sendable, Equatable, Codable {
 
     /// Whether saving `self` over `event` should replace the series' rule: only when the person
     /// picked another preset, so a rule richer than the presets survives an unrelated change.
-    func changesRule(of event: EventSnapshot) -> Bool {
+    func changesPreset(of event: EventSnapshot) -> Bool {
         event.recurringEventID == nil && repeatRule != RepeatPreset(event.recurrence)
+    }
+
+    /// Whether the series keeps its preset but stops somewhere else: only its COUNT or UNTIL is
+    /// rewritten, so its shape, skipped days and changed occurrences stay.
+    func changesEnd(of event: EventSnapshot, calendar: Calendar) -> Bool {
+        event.recurringEventID == nil && repeatRule != .none && !changesPreset(of: event)
+            && repeatEnd != RepeatEnd(of: event, calendar: calendar)
+    }
+
+    /// Whether saving writes a rule other than the stored one.
+    func changesRule(of event: EventSnapshot, calendar: Calendar) -> Bool {
+        changesPreset(of: event) || changesEnd(of: event, calendar: calendar)
+    }
+
+    /// The preset's rule with the draft's end, or nil for no repeat.
+    func rrule(calendar: Calendar) -> String? {
+        repeatRule.rrule.map { ending($0, calendar: calendar) }
+    }
+
+    /// `line` (the preset's rule or a stored one) ending where the draft says. A COUNT counts
+    /// from the series' first occurrence, so the part after a split gets the `before` it left behind.
+    func ending(_ line: String, calendar: Calendar, before: Int = 0) -> String {
+        switch repeatEnd {
+        case .never: RuleText.rrule(line)
+        case .until(let day): RuleText.rrule(line, until: until(day, calendar: calendar))
+        case .count(let count): RuleText.rrule(line, count: max(1, count - before))
+        }
+    }
+
+    /// `20261216` for an all-day series; for a timed one the last second of that day in the
+    /// draft's zone, in UTC (`20261216T145959Z`), as RFC 5545 asks of a zoned DTSTART.
+    func until(_ day: Date, calendar: Calendar) -> String {
+        var parts = calendar.dateComponents([.year, .month, .day], from: day)
+        if isAllDay { return String(format: "%04d%02d%02d", parts.year!, parts.month!, parts.day!) }
+        parts.hour = 23
+        parts.minute = 59
+        parts.second = 59
+        return ICalendarWriter.utcStamp(zoned(calendar).date(from: parts)!)
+    }
+
+    /// The rule as the engine reads it once written: rule dates of all-day series in UTC, timed
+    /// ones in the draft's zone.
+    func recurrence(calendar: Calendar) -> Recurrence? {
+        rrule(calendar: calendar).flatMap { Recurrence(rrule: $0, calendar: isAllDay ? DayKey.utc : zoned(calendar)) }
+    }
+}
+
+extension EventDraft {
+    private enum CodingKeys: String, CodingKey {
+        case title, isAllDay, start, end, timeZone, location, notes, repeatRule, repeatEnd, occurrenceStart
+    }
+
+    /// Drafts kept in the unsent queue before the end existed have none: they repeat forever.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = try c.decode(String.self, forKey: .title)
+        isAllDay = try c.decode(Bool.self, forKey: .isAllDay)
+        start = try c.decode(Date.self, forKey: .start)
+        end = try c.decode(Date.self, forKey: .end)
+        timeZone = try c.decodeIfPresent(String.self, forKey: .timeZone)
+        location = try c.decodeIfPresent(String.self, forKey: .location)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes)
+        repeatRule = try c.decode(RepeatPreset.self, forKey: .repeatRule)
+        repeatEnd = try c.decodeIfPresent(RepeatEnd.self, forKey: .repeatEnd) ?? .never
+        occurrenceStart = try c.decodeIfPresent(Date.self, forKey: .occurrenceStart)
     }
 }
 

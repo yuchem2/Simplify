@@ -80,7 +80,14 @@ enum PendingOverlay {
                 end(&snapshots[index], before: key, calendar: calendar)
                 // The id the provider gives the new part, so it can be changed again before a sync.
                 var following = snapshot(of: draft, remoteID: EventDraft.splitID(series: series, at: key), in: write.calendar, calendar: calendar)
-                if !draft.changesRule(of: event) { following.recurrence = master.recurrence.map { remaining($0, of: master, from: key, calendar: calendar) } }
+                let before = master.recurrence.map { occurrences(of: $0, master: master, before: key, calendar: calendar) } ?? 0
+                if draft.changesPreset(of: event) {
+                    // A picked COUNT is the whole series': the part before the split keeps its share.
+                    if let line = draft.repeatRule.rrule { following.recurrence = recurrence(draft.ending(line, calendar: calendar, before: before), draft: draft, calendar: calendar) }
+                } else {
+                    following.recurrence = master.recurrence.map { remaining($0, of: master, from: key, calendar: calendar) }
+                    if draft.changesEnd(of: event, calendar: calendar) { ended(&following.recurrence, by: draft, before: before, calendar: calendar) }
+                }
                 following.exceptionDates = master.exceptionDates.filter { !isBefore($0, key, allDay: master.isAllDay) }
                 // Changed occurrences from the split on now belong to the new part.
                 for i in snapshots.indices where isException(snapshots[i], source, series) && !isBefore(snapshots[i], key) {
@@ -121,7 +128,7 @@ enum PendingOverlay {
     static func snapshot(of draft: EventDraft, remoteID: String, in reference: RemoteCalendar.Reference, calendar: Calendar) -> EventSnapshot {
         var event = EventSnapshot(id: reference.sourceID + ":" + remoteID, sourceID: reference.sourceID, remoteID: remoteID, title: "", isAllDay: draft.isAllDay)
         fill(&event, with: draft, start: draft.start, end: draft.end, calendar: calendar)
-        event.recurrence = recurrence(draft.repeatRule)
+        event.recurrence = draft.recurrence(calendar: calendar)
         // CalDAV events live in `<collection>/<uid>.ics`.
         if let url = URL(string: reference.remoteID), url.scheme?.hasPrefix("http") == true {
             event.resourceHref = CalDAVClient.normalize(url.appending(path: remoteID + ".ics").path(percentEncoded: false))
@@ -137,12 +144,14 @@ enum PendingOverlay {
         let span = draft.seriesSpan(masterDay: draft.zoned(calendar).dateComponents([.year, .month, .day], from: oldFirst), calendar: calendar)
         fill(&master, with: draft, start: span.start, end: span.end, calendar: calendar)
         let isSeries = master.recurrence != nil || master.recurrenceUnsupported
-        if isSeries ? draft.changesRule(of: event) : draft.repeatRule != .none {
-            master.recurrence = recurrence(draft.repeatRule)
+        if isSeries ? draft.changesPreset(of: event) : draft.repeatRule != .none {
+            master.recurrence = draft.recurrence(calendar: calendar)
             master.recurrenceUnsupported = false
             master.exceptionDates = []
             snapshots.removeAll { isException($0, source, series) }
         } else if isSeries {
+            // A new end keeps the rule's shape, its skipped days and changed occurrences.
+            if draft.changesEnd(of: event, calendar: calendar) { ended(&master.recurrence, by: draft, before: 0, calendar: calendar) }
             // Skipped and changed occurrences move with the series.
             let zoned = draft.zoned(calendar)
             func moved(_ date: Date) -> Date {
@@ -188,14 +197,17 @@ enum PendingOverlay {
         }
     }
 
-    private static func recurrence(_ preset: RepeatPreset) -> Recurrence? {
-        switch preset {
-        case .none: nil
-        case .daily: Recurrence(frequency: .daily)
-        case .weekly: Recurrence(frequency: .weekly)
-        case .monthly: Recurrence(frequency: .monthly)
-        case .yearly: Recurrence(frequency: .yearly)
-        }
+    /// A rule line read as the provider will: all-day rule dates in UTC, timed ones in the draft's zone.
+    private static func recurrence(_ line: String, draft: EventDraft, calendar: Calendar) -> Recurrence? {
+        Recurrence(rrule: line, calendar: draft.isAllDay ? DayKey.utc : draft.zoned(calendar))
+    }
+
+    /// The draft's end on a stored rule, its shape left as it was: the draft writes its end into a
+    /// bare rule line, which reads back with the same UNTIL or COUNT the provider will get.
+    private static func ended(_ rule: inout Recurrence?, by draft: EventDraft, before: Int, calendar: Calendar) {
+        guard let end = recurrence(draft.ending("RRULE:FREQ=DAILY", calendar: calendar, before: before), draft: draft, calendar: calendar) else { return }
+        rule?.until = end.until
+        rule?.count = end.count
     }
 
     private static func exception(of series: String, at key: OccurrenceKey, in reference: RemoteCalendar.Reference, pending: UUID) -> EventSnapshot {
@@ -220,15 +232,18 @@ enum PendingOverlay {
     /// The rule for the part of a series from `key` on: a COUNT cut down to what is left.
     private static func remaining(_ rule: Recurrence, of master: EventSnapshot, from key: OccurrenceKey, calendar: Calendar) -> Recurrence {
         guard let count = rule.count else { return rule }
+        var rule = rule
+        rule.count = max(1, count - occurrences(of: rule, master: master, before: key, calendar: calendar))
+        return rule
+    }
+
+    /// How many occurrences `rule` makes before `key`.
+    private static func occurrences(of rule: Recurrence, master: EventSnapshot, before key: OccurrenceKey, calendar: Calendar) -> Int {
         var zoned = calendar
         if let id = master.timeZone, let tz = TimeZone(identifier: id), !master.isAllDay { zoned.timeZone = tz }
         let start = first(of: master, calendar: calendar)
-        let before = key.date > start
-            ? RecurrenceExpander.occurrences(of: rule, start: start, calendar: zoned, in: DateInterval(start: start, end: key.date)).filter { $0 < key.date }.count
-            : 0
-        var rule = rule
-        rule.count = max(1, count - before)
-        return rule
+        guard key.date > start else { return 0 }
+        return RecurrenceExpander.occurrences(of: rule, start: start, calendar: zoned, in: DateInterval(start: start, end: key.date)).filter { $0 < key.date }.count
     }
 
     private static func masterIndex(_ snapshots: [EventSnapshot], _ source: String, _ series: String) -> Int? {

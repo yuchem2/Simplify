@@ -115,10 +115,10 @@ struct EventDraftTests {
         #expect(draft.notes == "안건 정리")
         // Every other Thursday shows as weekly, and is kept unless another preset is picked.
         #expect(draft.repeatRule == .weekly)
-        #expect(!draft.changesRule(of: master))
+        #expect(!draft.changesRule(of: master, calendar: seoul))
         var daily = draft
         daily.repeatRule = .daily
-        #expect(daily.changesRule(of: master))
+        #expect(daily.changesRule(of: master, calendar: seoul))
         #expect(draft.occurrenceStart == kst(11, 12, 9))
     }
 
@@ -140,7 +140,7 @@ struct EventDraftTests {
         event.originalStart = kst(10, 15, 9)
         let draft = EventDraft(editing: event, occurrenceStart: kst(10, 15, 9), calendar: seoul)
         #expect(draft.repeatRule == .none)
-        #expect(!draft.changesRule(of: event))
+        #expect(!draft.changesRule(of: event, calendar: seoul))
     }
 
     /// Changing every occurrence moves the series' first day by as many days as the occurrence moved.

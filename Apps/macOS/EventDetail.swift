@@ -27,7 +27,7 @@ struct EventDetailView: View {
             VStack(alignment: .leading, spacing: Metrics.spaceS) {
                 fact("clock", EventText.when(occurrence, isReminder: source?.isReminderList == true, calendar: model.calendar))
                 if let repeats = event.flatMap({ EventText.repeats($0, start: occurrence.start, calendar: model.calendar) }) {
-                    fact("repeat", repeats)
+                    fact("repeat", repeats.text, soft: repeats.end)
                 }
                 if let source {
                     fact("calendar", source.name, soft: providerLabel(source))
@@ -145,12 +145,25 @@ enum EventText {
         return "\(day(start, calendar: calendar)) \(time(start, calendar: calendar)) – \(day(occurrence.end, calendar: calendar)) \(time(occurrence.end, calendar: calendar))"
     }
 
-    /// `매주 수요일`, `반복 (사용자 지정)`, or nil for an event that does not repeat.
-    static func repeats(_ event: EventSnapshot, start: Date, calendar: Calendar) -> String? {
-        if event.recurringEventID != nil { return "반복 일정 중 이날만 바뀐 일정" }
-        if event.recurrenceUnsupported { return "반복 (사용자 지정)" }
+    /// `매주 (수요일)` with where it ends (`12월 16일까지`, `10회`), `반복 (사용자 지정)`, or nil for
+    /// an event that does not repeat.
+    static func repeats(_ event: EventSnapshot, start: Date, calendar: Calendar) -> (text: String, end: String?)? {
+        if event.recurringEventID != nil { return ("반복 일정 중 이날만 바뀐 일정", nil) }
+        if event.recurrenceUnsupported { return ("반복 (사용자 지정)", nil) }
         guard let recurrence = event.recurrence else { return nil }
         let choice = EventEditorModel.RepeatChoice(recurrence, start: start, calendar: calendar)
-        return choice == .custom ? "반복 (사용자 지정)" : choice.label(start: start, calendar: calendar)
+        if choice == .custom { return ("반복 (사용자 지정)", nil) }
+        let end: String? = switch RepeatEnd(of: event, calendar: calendar) {
+        case .never: nil
+        case .until(let day): endDay(day, calendar: calendar) + "까지"
+        case .count(let count): "\(count)회"
+        }
+        return (choice.label(start: start, calendar: calendar), end)
+    }
+
+    /// `12월 16일`, with the year when it is more than about ten months off.
+    static func endDay(_ date: Date, calendar: Calendar) -> String {
+        let near = abs(date.timeIntervalSinceNow) < 300 * 86_400
+        return DateText.string(date, near ? "M월 d일" : "yyyy년 M월 d일", timeZone: calendar.timeZone)
     }
 }

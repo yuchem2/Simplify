@@ -8,23 +8,18 @@ import SimplifyKit
 final class EventEditorModel {
     enum RepeatChoice: Hashable, CaseIterable {
         case none, daily, weekly, monthly, yearly
-        /// A rule the presets do not cover (every other week, an end date …); kept as it is unless changed.
+        /// A rule the presets do not cover (every other week, on two weekdays …); kept as it is unless changed.
         case custom
 
-        /// The preset `recurrence` matches when it repeats every period, forever, on `start`'s own day.
+        /// The preset `recurrence` matches when it repeats every period on `start`'s own day. How it
+        /// ends (a count, a date) is the 반복 종료 row's, not the preset's.
         init(_ recurrence: Recurrence, start: Date, calendar: Calendar) {
-            guard recurrence.interval == 1, recurrence.count == nil, recurrence.until == nil,
-                  recurrence.byMonth.isEmpty || recurrence.byMonth == [calendar.component(.month, from: start)],
-                  recurrence.bySetPosition.isEmpty else { self = .custom; return }
-            let weekday = calendar.component(.weekday, from: start)
-            let monthDay = calendar.component(.day, from: start)
-            let onDay = recurrence.byMonthDay.isEmpty || recurrence.byMonthDay == [monthDay]
-            switch recurrence.frequency {
-            case .daily: self = recurrence.byWeekday.isEmpty && recurrence.byMonthDay.isEmpty ? .daily : .custom
-            case .weekly:
-                self = recurrence.byWeekday.isEmpty || recurrence.byWeekday == [Recurrence.WeekdayRule(weekday: weekday)] ? .weekly : .custom
-            case .monthly: self = recurrence.byWeekday.isEmpty && onDay ? .monthly : .custom
-            case .yearly: self = recurrence.byWeekday.isEmpty && onDay ? .yearly : .custom
+            switch RepeatPreset.matching(recurrence, start: start, calendar: calendar) {
+            case .daily?: self = .daily
+            case .weekly?: self = .weekly
+            case .monthly?: self = .monthly
+            case .yearly?: self = .yearly
+            case .none?, nil: self = .custom
             }
         }
 
@@ -66,6 +61,19 @@ final class EventEditorModel {
         case conflict
     }
 
+    /// How the 반복 종료 row reads: 안 함, 날짜, 횟수.
+    enum EndKind: Hashable, CaseIterable {
+        case never, date, count
+
+        var label: String {
+            switch self {
+            case .never: "안 함"
+            case .date: "날짜"
+            case .count: "횟수"
+            }
+        }
+    }
+
     struct Fields: Equatable {
         var title = ""
         var isAllDay = false
@@ -73,9 +81,26 @@ final class EventEditorModel {
         /// Exclusive: an all-day event ends at midnight after its last day.
         var end: Date
         var repeatChoice = RepeatChoice.none
+        var endKind = EndKind.never
+        /// The last day it may repeat on (midnight); used when `endKind` is `.date`.
+        var endDay: Date
+        /// What the count box holds, as typed; used when `endKind` is `.count`.
+        var endCount = "10"
         var sourceID: String
         var location = ""
         var notes = ""
+
+        /// The fields with the end values the row does not show set aside, so picking 날짜 and
+        /// going back to 안 함 is no change.
+        var compared: Fields {
+            var fields = self
+            let shows = repeatChoice.preset.map { $0 != .none } ?? false
+            if !shows { fields.endKind = .never }
+            if fields.endKind != .date { fields.endDay = .distantPast }
+            // As a number: "010" is the 10 it was.
+            fields.endCount = fields.endKind == .count ? Int(fields.endCount.trimmingCharacters(in: .whitespaces)).map(String.init) ?? fields.endCount : ""
+            return fields
+        }
     }
 
     /// The occurrence being edited; nil for a new event.
@@ -94,11 +119,21 @@ final class EventEditorModel {
         self.calendar = calendar
         // Providers show an untitled event as "(제목 없음)"; it must not be saved back as its title.
         var fields = Fields(title: occurrence.title == "(제목 없음)" ? "" : occurrence.title, isAllDay: occurrence.isAllDay, start: occurrence.start, end: occurrence.end,
+                            endDay: Self.monthLater(occurrence.start, calendar: calendar),
                             sourceID: occurrence.sourceID, location: occurrence.location ?? "", notes: event.notes ?? "")
         if event.recurrenceUnsupported {
             fields.repeatChoice = .custom
         } else if let recurrence = event.recurrence {
             fields.repeatChoice = RepeatChoice(recurrence, start: occurrence.start, calendar: calendar)
+            switch RepeatEnd(of: event, calendar: calendar) {
+            case .never: break
+            case .until(let day):
+                fields.endKind = .date
+                fields.endDay = day
+            case .count(let count):
+                fields.endKind = .count
+                fields.endCount = String(count)
+            }
         }
         initial = fields
         self.fields = fields
@@ -111,25 +146,109 @@ final class EventEditorModel {
         self.calendar = calendar
         let hour = min(calendar.component(.hour, from: now) + 1, 23)
         let start = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: day)!
-        let fields = Fields(start: start, end: start.addingTimeInterval(3600), sourceID: sourceID)
+        let fields = Fields(start: start, end: start.addingTimeInterval(3600), endDay: Self.monthLater(start, calendar: calendar), sourceID: sourceID)
         initial = fields
         self.fields = fields
     }
 
     var isNew: Bool { occurrence == nil }
-    var isDirty: Bool { fields != initial }
+    var isDirty: Bool { fields.compared != initial.compared }
 
     /// Part of a series, so a change asks how far it reaches.
     var isRepeating: Bool { event.map(Self.isRepeating) ?? false }
     /// A changed occurrence of a series has no rule of its own, so its repeat row is hidden.
     var showsRepeat: Bool { event?.recurringEventID == nil }
-    var repeatChanged: Bool { fields.repeatChoice != initial.repeatChoice }
+    /// 반복 종료 shows under a preset; a custom rule is kept as it is, end and all.
+    var showsEnd: Bool { showsRepeat && fields.repeatChoice.preset.map { $0 != .none } == true }
+    var repeatChanged: Bool { fields.repeatChoice != initial.repeatChoice || endChanged }
+    private var endChanged: Bool {
+        let now = fields.compared, before = initial.compared
+        return (now.endKind, now.endDay, now.endCount) != (before.endKind, before.endDay, before.endCount)
+    }
+
+    /// Only where the series stops changed: that goes to the whole series without asking how far.
+    var changesOnlyEnd: Bool {
+        guard !isNew, endChanged, fields.repeatChoice == initial.repeatChoice else { return false }
+        var rest = fields
+        rest.endKind = initial.endKind
+        rest.endDay = initial.endDay
+        rest.endCount = initial.endCount
+        return rest.compared == initial.compared
+    }
+
+    /// The end the row says, or nil while the count box holds something other than 1–999.
+    var repeatEnd: RepeatEnd? {
+        switch fields.endKind {
+        case .never: return .never
+        case .date: return .until(calendar.startOfDay(for: fields.endDay))
+        case .count:
+            guard let count = Int(fields.endCount.trimmingCharacters(in: .whitespaces)), RepeatEnd.counts.contains(count) else { return nil }
+            return .count(count)
+        }
+    }
+
+    /// Why the 반복 종료 row stops a save.
+    var endProblem: String? {
+        guard showsEnd else { return nil }
+        switch fields.endKind {
+        case .never: return nil
+        case .date:
+            return calendar.startOfDay(for: fields.endDay) < calendar.startOfDay(for: fields.start) ? "반복 종료일이 시작보다 빨라요." : nil
+        case .count:
+            return repeatEnd == nil ? "반복 횟수는 1–999회로 적어 주세요." : nil
+        }
+    }
 
     /// Why 저장 is off, when it is for a reason the person can fix.
     var problem: String? {
         if fields.end <= fields.start { return "끝이 시작보다 빨라요." }
+        if let endProblem { return endProblem }
         if fields.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "제목을 적으면 저장할 수 있어요." }
         return nil
+    }
+
+    // MARK: Repeat end
+
+    /// 날짜 starts a month after the start, 횟수 at 10, unless the series already ended that way.
+    func setEndKind(_ kind: EndKind) {
+        guard kind != fields.endKind else { return }
+        if kind == .date, initial.endKind != .date { fields.endDay = Self.monthLater(fields.start, calendar: calendar) }
+        if kind == .count, initial.endKind != .count { fields.endCount = "10" }
+        if kind == initial.endKind {
+            fields.endDay = initial.endDay
+            fields.endCount = initial.endCount
+        }
+        fields.endKind = kind
+    }
+
+    /// The day the last occurrence falls on, for the count picked: counted from the series' first
+    /// occurrence (moved as far as this one was), as COUNT is.
+    var lastCounted: Date? {
+        guard fields.endKind == .count, case .count(let count)? = repeatEnd, let preset = fields.repeatChoice.preset,
+              let frequency = Self.frequency(preset) else { return nil }
+        var first = fields.start
+        if let event, let occurrence, event.recurringEventID == nil {
+            let seriesStart = event.startDay.flatMap { DayKey.date($0, calendar: calendar) } ?? event.start ?? occurrence.start
+            let moved = calendar.dateComponents([.day], from: calendar.startOfDay(for: occurrence.start), to: calendar.startOfDay(for: fields.start)).day ?? 0
+            first = calendar.date(byAdding: .day, value: moved, to: seriesStart) ?? fields.start
+        }
+        var rule = Recurrence(frequency: frequency)
+        rule.count = count
+        return RecurrenceExpander.occurrences(of: rule, start: first, calendar: calendar, in: DateInterval(start: first, end: .distantFuture)).last
+    }
+
+    private static func frequency(_ preset: RepeatPreset) -> Recurrence.Frequency? {
+        switch preset {
+        case .none: nil
+        case .daily: .daily
+        case .weekly: .weekly
+        case .monthly: .monthly
+        case .yearly: .yearly
+        }
+    }
+
+    static func monthLater(_ start: Date, calendar: Calendar) -> Date {
+        calendar.date(byAdding: .month, value: 1, to: calendar.startOfDay(for: start))!
     }
 
     var canSave: Bool { problem == nil && phase != .saving && phase != .refreshing && !isGone && (isNew || isDirty) }
@@ -156,6 +275,7 @@ final class EventEditorModel {
         // "사용자 지정" leaves the rule alone: the engine keeps a rule whose preset did not change.
         if let preset = fields.repeatChoice.preset, showsRepeat {
             draft.repeatRule = preset
+            draft.repeatEnd = showsEnd ? repeatEnd ?? .never : .never
         }
         return draft
     }
@@ -243,9 +363,10 @@ struct EventEditorView: View {
     @Bindable var editor: EventEditorModel
     @FocusState private var focus: Field?
     @State private var isRepeatOpen = false
+    @State private var isEndOpen = false
     @State private var isCalendarOpen = false
 
-    private enum Field: Hashable { case title, location, notes }
+    private enum Field: Hashable { case title, count, location, notes }
 
     private var locked: Bool { editor.phase == .saving || editor.phase == .refreshing }
 
@@ -276,6 +397,17 @@ struct EventEditorView: View {
                 }
                 if editor.showsRepeat {
                     row("반복") { repeatMenu }
+                }
+                if editor.showsEnd {
+                    row("반복 종료") { repeatEndRow }
+                    if let problem = editor.endProblem {
+                        Text(problem)
+                            .textStyle(.small)
+                            .padding(.horizontal, Metrics.spaceM)
+                            .padding(.vertical, Metrics.spaceXs)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.errorTint)
+                    }
                 }
                 row("캘린더") { calendarMenu }
                 row("장소") {
@@ -310,7 +442,7 @@ struct EventEditorView: View {
             Text(label)
                 .textStyle(.section)
                 .foregroundStyle(.inkSoft)
-                .frame(width: 44, alignment: .leading)
+                .frame(width: 52, alignment: .leading)
                 .padding(.top, top ? Metrics.spaceS : 0)
             HStack(spacing: Metrics.spaceS) { content() }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -337,6 +469,43 @@ struct EventEditorView: View {
                 .item(choice.label(start: start, calendar: editor.calendar), checked: editor.fields.repeatChoice == choice) {
                     editor.fields.repeatChoice = choice
                 }
+            }
+        }
+    }
+
+    /// 안 함 / 날짜 / 횟수, then the day or the count. A count shows the day it reaches.
+    @ViewBuilder private var repeatEndRow: some View {
+        Button { isEndOpen = true } label: {
+            MenuLabel(text: editor.fields.endKind.label, isOpen: isEndOpen)
+        }
+        .buttonStyle(FocusOnlyStyle())
+        .fixedSize()
+        .inkMenu(isPresented: $isEndOpen) {
+            EventEditorModel.EndKind.allCases.map { kind in
+                .item(kind.label, checked: editor.fields.endKind == kind) { editor.setEndKind(kind) }
+            }
+        }
+        switch editor.fields.endKind {
+        case .never:
+            EmptyView()
+        case .date:
+            DayField(day: editor.fields.endDay, calendar: editor.calendar, today: model.today, holidays: calendars.holidayDays,
+                     error: editor.endProblem != nil) { editor.fields.endDay = $0 }
+        case .count:
+            // Typed as it is; anything but 1–999 stops the save and says why.
+            TextField("", text: $editor.fields.endCount)
+                .multilineTextAlignment(.trailing)
+                .monospacedDigit()
+                .focused($focus, equals: .count)
+                .drawnField(.box, focused: focus == .count, error: editor.endProblem != nil)
+                .frame(width: 52)
+                .accessibilityLabel("반복 횟수")
+            Text("회").foregroundStyle(.inkSoft)
+            if let last = editor.lastCounted {
+                Text("· \(EventText.endDay(last, calendar: editor.calendar))까지")
+                    .textStyle(.small)
+                    .foregroundStyle(.inkSoft)
+                    .lineLimit(1)
             }
         }
     }
@@ -397,7 +566,7 @@ struct EventEditorView: View {
                 }
                 .textStyle(.cell)
                 .foregroundStyle(.inkSoft)
-            } else if editor.phase != .conflict, let problem = editor.problem, editor.isNew || editor.isDirty {
+            } else if editor.phase != .conflict, let problem = editor.problem, problem != editor.endProblem, editor.isNew || editor.isDirty {
                 Text(problem).textStyle(.cell).foregroundStyle(.inkSoft).lineLimit(1)
             }
             if editor.phase == .conflict {
@@ -419,7 +588,8 @@ struct EventEditorView: View {
 
     private func save() {
         guard editor.canSave else { return }
-        if !editor.isNew, editor.isRepeating {
+        // A new end alone is the whole series' (an end on one occurrence means nothing).
+        if !editor.isNew, editor.isRepeating, !editor.changesOnlyEnd {
             model.popover?.question = .saveScope
         } else {
             EventActions.save(editor, scope: .allOccurrences, model: model, calendars: calendars)
@@ -673,6 +843,7 @@ private struct DayField: View {
     let calendar: Calendar
     let today: Date
     let holidays: Set<Date>
+    var error = false
     let onPick: (Date) -> Void
     @State private var isPicking = false
 
@@ -680,7 +851,7 @@ private struct DayField: View {
         Button { isPicking = true } label: {
             Text(EventText.day(day, calendar: calendar))
                 .monospacedDigit()
-                .drawnField(.box, focused: false, active: isPicking)
+                .drawnField(.box, focused: false, error: error, active: isPicking)
                 .contentShape(Rectangle())
         }
         // The box draws itself; the button adds the focus ring.

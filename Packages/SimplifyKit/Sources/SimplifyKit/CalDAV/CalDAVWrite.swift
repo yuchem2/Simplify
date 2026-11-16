@@ -11,7 +11,7 @@ extension CalDAVProvider {
         var resource = ICSResource(calendar: ICSResource.newCalendar(), person: calendar, defaultZone: remote.timeZone)
         var event = ICalendar.Component(name: "VEVENT", properties: [ICalendar.Property(name: "UID", params: [:], value: id)])
         resource.apply(draft, start: draft.start, end: draft.end, to: &event)
-        if let rule = draft.repeatRule.rrule { event.set("RRULE", ICSResource.rrule(rule)) }
+        if let rule = draft.rrule(calendar: calendar) { event.set("RRULE", ICSResource.rrule(rule)) }
         resource.calendar.children.append(event)
         resource.defineZone(of: draft)
         do {
@@ -33,12 +33,14 @@ extension CalDAVProvider {
         case .thisAndFollowing(let originalStart):
             let key = OccurrenceKey(event: event, originalStart: originalStart, calendar: calendar)
             let newUID = EventDraft.splitID(series: uid, at: key)
+            // A COUNT the person picks is the whole series'; the part before the split keeps its share.
+            let before = resource.occurrences(uid, before: key)
             guard var tail = try resource.split(uid, at: key, newUID: newUID),
                   let collection = URL(string: remote.remoteID) else {
                 try resource.editAll(uid, event: event, draft: draft)
                 break
             }
-            try tail.editAll(newUID, event: event, draft: draft)
+            try tail.editAll(newUID, event: event, draft: draft, before: before)
             tail.defineZone(of: draft)
             // The new part first: should the second write fail, occurrences show twice rather than not at all.
             let tailURL = collection.appending(path: newUID + ".ics")
@@ -122,8 +124,9 @@ struct ICSResource {
     // MARK: - Edits
 
     /// Changes the series (or single event) as a whole. Changed occurrences and EXDATEs move with
-    /// it; a new rule drops them, as they belonged to the old one.
-    mutating func editAll(_ uid: String, event: EventSnapshot, draft: EventDraft) throws {
+    /// it; a new rule drops them, as they belonged to the old one. A new end keeps them. `before`
+    /// is how many occurrences an earlier part of a split series kept, for a COUNT the person picked.
+    mutating func editAll(_ uid: String, event: EventSnapshot, draft: EventDraft, before: Int = 0) throws {
         guard let index = masterIndex(uid), let oldStart = calendar.children[index].first("DTSTART").flatMap(moment) else {
             throw CalendarSyncError.invalidResponse
         }
@@ -131,11 +134,11 @@ struct ICSResource {
         let span = draft.seriesSpan(masterDay: day(of: oldStart, in: draft.zoned(person)), calendar: person)
         apply(draft, start: span.start, end: span.end, to: &master)
         let isSeries = !master.all("RRULE").isEmpty || !master.all("RDATE").isEmpty
-        let changesRule = isSeries ? draft.changesRule(of: event) : draft.repeatRule != .none
+        let changesRule = isSeries ? draft.changesPreset(of: event) : draft.repeatRule != .none
 
         if changesRule {
             ["RRULE", "RDATE", "EXDATE"].forEach { master.remove($0) }
-            if let rule = draft.repeatRule.rrule { master.set("RRULE", Self.rrule(rule)) }
+            if let rule = draft.repeatRule.rrule { master.set("RRULE", Self.rrule(draft.ending(rule, calendar: person, before: before))) }
             calendar.children[index] = master
             let reader = self
             calendar.children.removeAll { reader.isOverride($0, of: uid) }
@@ -163,6 +166,9 @@ struct ICSResource {
         master.properties += exdates
         if oldStart.isDay != draft.isAllDay {
             master.set("RRULE", master.first("RRULE").map { retyped(rule: $0, allDay: draft.isAllDay, zone: draft.zoned(person)) })
+        }
+        if draft.changesEnd(of: event, calendar: person) {
+            master.set("RRULE", master.first("RRULE").map { Self.rrule(draft.ending($0.value, calendar: person, before: before)) })
         }
         calendar.children[index] = master
         for i in calendar.children.indices where isOverride(calendar.children[i], of: uid) {
@@ -238,15 +244,8 @@ struct ICSResource {
             first.set("DTEND", like(start.isDay ? startProperty : end, "DTEND", start.isDay ? dayKeyed(endKey) : endKey))
         }
         if let rule = first.first("RRULE"), let count = RuleText.count(in: rule.value) {
-            var zoned = start.isDay ? DayKey.utc : floating.calendar
-            if case .instant(let date, let zone) = start {
-                if let zone, let tz = TimeZone(identifier: zone) { zoned.timeZone = tz }
-                let before = RuleText.occurrences(of: rule.value, start: date, before: key.date, calendar: zoned) ?? 0
-                first.set("RRULE", Self.rrule(RuleText.rrule(rule.value, count: max(1, count - before))))
-            } else if case .day(_, let date) = start, let splitDay = DayKey.date(dayKeyed(key).day!, calendar: DayKey.utc) {
-                let before = RuleText.occurrences(of: rule.value, start: date, before: splitDay, calendar: zoned) ?? 0
-                first.set("RRULE", Self.rrule(RuleText.rrule(rule.value, count: max(1, count - before))))
-            }
+            let before = occurrences(of: master, before: key)
+            first.set("RRULE", Self.rrule(RuleText.rrule(rule.value, count: max(1, count - before))))
         }
         keepExdates(&first) { !reader.isBefore($0, key) }
         tail.calendar.children[index] = first
@@ -257,6 +256,24 @@ struct ICSResource {
         // Other events the resource may hold stay with the original.
         tail.calendar.children.removeAll { $0.name == "VEVENT" && $0.first("UID")?.value != newUID }
         return tail
+    }
+
+    /// How many occurrences the series' rule makes before the occurrence `key`.
+    func occurrences(_ uid: String, before key: OccurrenceKey) -> Int {
+        masterIndex(uid).map { occurrences(of: calendar.children[$0], before: key) } ?? 0
+    }
+
+    private func occurrences(of master: Component, before key: OccurrenceKey) -> Int {
+        guard let rule = master.first("RRULE"), let start = master.first("DTSTART").flatMap(moment) else { return 0 }
+        var zoned = start.isDay ? DayKey.utc : floating.calendar
+        switch start {
+        case .instant(let date, let zone):
+            if let zone, let tz = TimeZone(identifier: zone) { zoned.timeZone = tz }
+            return RuleText.occurrences(of: rule.value, start: date, before: key.date, calendar: zoned) ?? 0
+        case .day(_, let date):
+            guard let splitDay = DayKey.date(dayKeyed(key).day!, calendar: DayKey.utc) else { return 0 }
+            return RuleText.occurrences(of: rule.value, start: date, before: splitDay, calendar: zoned) ?? 0
+        }
     }
 
     /// Writes the draft's title, place, notes and times into one VEVENT.
