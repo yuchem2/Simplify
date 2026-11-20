@@ -615,7 +615,10 @@ struct EventEditorView: View {
 /// Saving and deleting, shared by the editor and the questions over it.
 @MainActor
 enum EventActions {
-    static func save(_ editor: EventEditorModel, scope: CalendarController.WriteScope, model: AppModel, calendars: CalendarController) {
+    /// `failureAnchor`: a save with no popover of its own (an event dragged to another day) opens
+    /// the editor there when it fails, so the failure shows and the save can be tried again.
+    static func save(_ editor: EventEditorModel, scope: CalendarController.WriteScope, model: AppModel, calendars: CalendarController,
+                     failureAnchor: String? = nil) {
         model.popover?.question = nil
         editor.phase = .saving
         Task {
@@ -631,10 +634,19 @@ enum EventActions {
                 if case .editor(let shown)? = model.popover?.content, shown === editor { model.popover = nil }
             } catch CalendarSyncError.conflict {
                 editor.phase = .conflict
+                showFailure(of: editor, at: failureAnchor, model: model)
             } catch {
                 editor.phase = .failed(error.eventWriteMessage)
+                showFailure(of: editor, at: failureAnchor, model: model)
             }
         }
+    }
+
+    /// Opens the failed editor at `anchor` when nothing else is open; otherwise the event just
+    /// stays on its own day.
+    private static func showFailure(of editor: EventEditorModel, at anchor: String?, model: AppModel) {
+        guard let anchor, !model.isModalOpen else { return }
+        model.popover = EventPopoverState(content: .editor(editor), anchor: anchor)
     }
 }
 
@@ -670,7 +682,8 @@ struct EventQuestionView: View {
             }
             HStack(spacing: Metrics.spaceM) {
                 Spacer()
-                Button(cancelTitle) { model.popover?.question = nil }
+                // A dragged event's question: cancelling leaves the event on its own day.
+                Button(cancelTitle) { if state.cancelClosesPopover { model.popover = nil } else { model.popover?.question = nil } }
                     .buttonStyle(DrawnButtonStyle())
                     .keyboardShortcut(.cancelAction)
                     .disabled(isDeleting)

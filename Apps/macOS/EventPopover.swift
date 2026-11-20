@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import SimplifyKit
 
 /// What the event popover shows and where it hangs.
@@ -22,6 +23,15 @@ struct EventPopoverState {
     var question: Question?
     /// A delete is on its way; the popover stays until it is done.
     var isBusy = false
+    /// The editor holds an event dragged to another day; until it is saved, cancelling its
+    /// question leaves the event where it was instead of showing the editor.
+    var isMove = false
+
+    /// Cancelling the question closes the popover: a dragged event's scope, asked before any save.
+    @MainActor var cancelClosesPopover: Bool {
+        guard isMove, case .editor(let editor) = content else { return false }
+        return editor.phase == .editing
+    }
 
     /// The event the popover is about, if it is one already on the calendar.
     var occurrence: EventOccurrence? {
@@ -86,6 +96,70 @@ extension View {
     }
 }
 
+// MARK: - Dragging to another day
+
+extension View {
+    /// Lets the event row be dragged to another day, when its calendar can be written; the row
+    /// itself shows under the pointer. `day` is the day this row is drawn on.
+    func movesEvent(_ occurrence: EventOccurrence, day: Date, calendars: CalendarController) -> some View {
+        modifier(EventDragSource(item: EventDragItem(occurrenceID: occurrence.id, day: day), isOn: calendars.isWritable(occurrence.sourceID)))
+    }
+
+    /// Takes an event row dropped here and moves the event to `day`. `isTargeted` is on while one hovers over it.
+    func takesEvent(on day: Date, isTargeted: Binding<Bool>, model: AppModel, calendars: CalendarController) -> some View {
+        modifier(EventDropTarget(day: day, isTargeted: isTargeted, model: model, calendars: calendars))
+    }
+}
+
+extension UTType {
+    /// The app's own type for a dragged event row (declared in Info.plist), so text views, other
+    /// apps and the ToDo list do not take it.
+    static let simplifyEventDrag = UTType(exportedAs: "dev.yoom.simplify.event-drag", conformingTo: .data)
+}
+
+extension EventDragItem: Transferable {
+    public static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .simplifyEventDrag)
+    }
+}
+
+private struct EventDragSource: ViewModifier {
+    let item: EventDragItem
+    let isOn: Bool
+    @Environment(\.isRenderingSnapshot) private var isRenderingSnapshot
+
+    func body(content: Content) -> some View {
+        // ImageRenderer cannot draw drag sources.
+        if isOn, !isRenderingSnapshot {
+            content.draggable(item)
+        } else {
+            content
+        }
+    }
+}
+
+private struct EventDropTarget: ViewModifier {
+    let day: Date
+    @Binding var isTargeted: Bool
+    let model: AppModel
+    let calendars: CalendarController
+    @Environment(\.isRenderingSnapshot) private var isRenderingSnapshot
+
+    func body(content: Content) -> some View {
+        if isRenderingSnapshot {
+            content
+        } else {
+            content.dropDestination(for: EventDragItem.self) { items, _ in
+                guard let item = items.first else { return false }
+                return model.moveEvent(item, to: day, calendars: calendars)
+            } isTargeted: { on in
+                // Only an event row lights the day; a ToDo or text dragged over leaves it as it is.
+                isTargeted = on && !model.isModalOpen
+            }
+        }
+    }
+}
+
 // MARK: - Opening and closing
 
 extension AppModel {
@@ -115,6 +189,33 @@ extension AppModel {
         select(day)
         let editor = EventEditorModel(newOn: selectedDay, sourceID: sourceID, calendar: calendar)
         popover = EventPopoverState(content: .editor(editor), anchor: EventAnchor.cell(selectedDay))
+    }
+
+    /// An event row dropped on `day`: the event moves by as many days as lie between the day its
+    /// row was picked up on and `day`, keeping its times. A repeating one first asks how far the
+    /// change reaches, beside the day it was dropped on; a failed save opens the editor there.
+    /// False when nothing moves: the same day, an event gone or in a calendar it cannot be written to.
+    @discardableResult
+    func moveEvent(_ item: EventDragItem, to day: Date, calendars: CalendarController) -> Bool {
+        guard !isModalOpen else { return false }
+        let days = EventMove.days(from: item.day, to: day, calendar: calendar)
+        guard days != 0,
+              let occurrence = calendars.slots[item.day]?.first(where: { $0.occurrence.id == item.occurrenceID })?.occurrence,
+              calendars.isWritable(occurrence.sourceID), let event = calendars.event(id: occurrence.eventID) else { return false }
+        let editor = EventEditorModel(editing: occurrence, event: event, calendar: calendar)
+        let moved = EventMove.shift(start: occurrence.start, end: occurrence.end, byDays: days, calendar: calendar)
+        editor.fields.start = moved.start
+        editor.fields.end = moved.end
+        let anchor = EventAnchor.cell(calendar.startOfDay(for: day))
+        if editor.endProblem != nil {
+            // Past the day the series ends: the editor says why, as it would for the same change made there.
+            popover = EventPopoverState(content: .editor(editor), anchor: anchor)
+        } else if editor.isRepeating {
+            popover = EventPopoverState(content: .editor(editor), anchor: anchor, question: .saveScope, isMove: true)
+        } else {
+            EventActions.save(editor, scope: .allOccurrences, model: self, calendars: calendars, failureAnchor: anchor)
+        }
+        return true
     }
 
     /// Return on the month or week: the picked event's details.
@@ -156,7 +257,9 @@ extension AppModel {
     /// Esc, or a click outside: an editor with changes asks first.
     func requestClosePopover() {
         guard var state = popover, !state.isBusy else { return }
-        if state.question != nil {
+        if state.question != nil, state.cancelClosesPopover {
+            popover = nil
+        } else if state.question != nil {
             state.question = nil
             popover = state
         } else if case .editor(let editor) = state.content, editor.isDirty, editor.phase != .saving, editor.phase != .refreshing {

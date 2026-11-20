@@ -463,6 +463,7 @@ struct DayEvents: View {
         }
         .padding(.vertical, Metrics.spaceXs)
         .pickedEvent(slot.occurrence, day: day, place: .panel, model: model, calendars: calendars)
+        .movesEvent(slot.occurrence, day: day, calendars: calendars)
         .accessibilityElement(children: .combine)
     }
 }

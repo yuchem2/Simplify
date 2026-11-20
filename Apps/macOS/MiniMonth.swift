@@ -117,6 +117,8 @@ private struct MiniDay: View {
     /// In the week or month the panel shows.
     let inRange: Bool
     @State private var hovering = false
+    /// An event row is dragged over the day.
+    @State private var dropping = false
 
     var body: some View {
         let isToday = model.isToday(day)
@@ -130,7 +132,13 @@ private struct MiniDay: View {
             .foregroundStyle(color)
             .frame(maxWidth: .infinity)
             .frame(height: MiniMonth.cellHeight)
-            .background(isToday ? Tokens.selection : hovering ? Color.hover : inRange ? Color.raised : Color.clear)
+            .background(isToday ? Tokens.selection : hovering || dropping ? Color.hover : inRange ? Color.raised : Color.clear)
+            // An event dragged over the day: the pointer's ground, outlined in ink.
+            .overlay {
+                if dropping {
+                    Rectangle().strokeBorder(isToday ? Color.onInk : Color.ink, lineWidth: Metrics.line)
+                }
+            }
             .overlay {
                 if isChosen {
                     Rectangle().inset(by: Metrics.spaceXxs).strokeBorder(isToday ? Color.onInk : Color.ink, lineWidth: Metrics.lineBox)
@@ -149,6 +157,7 @@ private struct MiniDay: View {
             // still picks the day at once rather than after the double-click wait.
             .onTapGesture(count: 2) { model.newEvent(on: day, calendars: calendars) }
             .simultaneousGesture(TapGesture().onEnded { if !model.isModalOpen { model.select(day) } })
+            .takesEvent(on: day, isTargeted: $dropping, model: model, calendars: calendars)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(label(isToday: isToday))
             .accessibilityAddTraits(isChosen ? [.isButton, .isSelected] : .isButton)

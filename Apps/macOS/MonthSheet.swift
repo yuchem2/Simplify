@@ -114,6 +114,8 @@ private struct DayCell: View {
     let marksOnly: Bool
     let onSelect: () -> Void
     @State private var hovering = false
+    /// An event row is dragged over the day.
+    @State private var dropping = false
 
     var body: some View {
         let isToday = model.isToday(day)
@@ -150,9 +152,11 @@ private struct DayCell: View {
             .padding(MonthSheet.dateInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             // The chosen day: ink sides that meet the week rules above and below. The pointer: a
-            // hairline box in shade.
+            // hairline box in shade; in ink while an event is dragged over the day.
             .background {
-                if model.isSelected(day) {
+                if dropping {
+                    Rectangle().inset(by: Metrics.spaceXs).strokeBorder(.ink, lineWidth: Metrics.line)
+                } else if model.isSelected(day) {
                     ChosenSides().stroke(.ink, lineWidth: Metrics.line)
                 } else if hovering {
                     Rectangle().inset(by: Metrics.spaceXs).strokeBorder(.shade, lineWidth: Metrics.line)
@@ -171,6 +175,7 @@ private struct DayCell: View {
         // A double-click on the empty part of a day starts a new event there.
         .onTapGesture(count: 2) { model.newEvent(on: day, calendars: calendars) }
         .simultaneousGesture(TapGesture().onEnded(onSelect))
+        .takesEvent(on: day, isTargeted: $dropping, model: model, calendars: calendars)
         .eventAnchor(EventAnchor.cell(day))
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isButton)
@@ -195,6 +200,7 @@ private struct DayCell: View {
                 .opacity(inMonth ? 1 : Metrics.opacityOutOfMonth)
                 .eventAnchor(anchor)
                 .opensEvent(slot.occurrence, day: day, anchor: anchor, model: model, calendars: calendars)
+                .movesEvent(slot.occurrence, day: day, calendars: calendars)
         } else {
             // A row kept for a band that runs on other days of the week.
             Color.clear.frame(height: textSize.rowHeight - 2)
@@ -217,6 +223,7 @@ private struct DayCell: View {
                     .opacity(inMonth ? 1 : Metrics.opacityOutOfMonth)
                     .eventAnchor(anchor)
                     .opensEvent(slot.occurrence, day: day, anchor: anchor, model: model, calendars: calendars)
+                    .movesEvent(slot.occurrence, day: day, calendars: calendars)
                     .accessibilityLabel(slot.occurrence.title)
             }
         }

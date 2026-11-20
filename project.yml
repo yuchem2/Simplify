@@ -54,6 +54,11 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: dev.yoom.simplify.day
             CFBundleURLSchemes: [simplify]
+        # An event row dragged to another day (EventDragItem); only the app's own days take it.
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: dev.yoom.simplify.event-drag
+            UTTypeDescription: Simplify 일정
+            UTTypeConformsTo: [public.data]
     entitlements:
       path: Apps/macOS/Simplify.entitlements
       properties:
