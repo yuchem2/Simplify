@@ -117,7 +117,7 @@ extension UTType {
     static let simplifyEventDrag = UTType(exportedAs: "dev.yoom.simplify.event-drag", conformingTo: .data)
 }
 
-extension EventDragItem: Transferable {
+extension EventDragItem: @retroactive Transferable {
     public static var transferRepresentation: some TransferRepresentation {
         CodableRepresentation(contentType: .simplifyEventDrag)
     }
